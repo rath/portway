@@ -9,6 +9,11 @@ version may contain breaking changes.
 
 ### Added
 
+- Without `--config`, the CLI looks for `./portway.toml` in the working
+  directory, then under the runtime data directory (`$XDG_CONFIG_HOME/portway`
+  or `~/.config/portway`), before falling back to built-in defaults. A bare
+  `portway --tui` now attaches to the config the daemon is actually using.
+
 - `portway-core`, an embeddable library for forwarding HTTP requests with
   zstd or gzip request compression, negotiated per destination.
 - Dictionary compression of append-only request bodies: the previous confirmed

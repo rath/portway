@@ -23,12 +23,15 @@ The standalone binary chooses its configuration in this order:
 
 1. If supplied, read exactly `--config PATH`. A missing file is an error.
 2. Otherwise, try `portway.toml` in the **current working directory**.
-3. If that file does not exist, use defaults and explicit command-line settings.
-   Serving still requires a destination, such as `--upstream URL`.
+3. If that file does not exist, try `portway.toml` under the runtime data
+   directory — `$XDG_CONFIG_HOME/portway` when that variable is absolute, or
+   `~/.config/portway`. A file there is the same one the daemon writes its
+   database beside, so a bare `portway --tui` attaches to it by default.
+4. If neither exists, use defaults and explicit command-line settings. Serving
+   still requires a destination, such as `--upstream URL`.
 
-It does not search the executable's directory or `~/.config/portway` for TOML.
-The latter is normally the runtime data directory, which is a separate concept.
-A stable absolute path avoids dependence on the directory you launch from:
+The data directory's TOML is read no matter which directory the process is
+launched from. A stable absolute path skips the search entirely:
 
 ```sh
 portway --config "$HOME/.config/portway/portway.toml" --daemon

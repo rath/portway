@@ -36,20 +36,40 @@ impl Default for Config {
         }
     }
 }
+/// First existing candidate, or `None` when none of them is there. Pure, so
+/// the search order is testable without a filesystem the test did not make.
+fn default_config_path(candidates: &[PathBuf]) -> Option<PathBuf> {
+    candidates
+        .iter()
+        .find(|p| !p.as_os_str().is_empty() && p.is_file())
+        .cloned()
+}
+
 impl Config {
     pub fn load(args: &Args) -> Result<Self, String> {
-        let path = args
-            .config
-            .clone()
-            .unwrap_or_else(|| PathBuf::from("portway.toml"));
-        let mut config = match std::fs::read_to_string(&path) {
-            Ok(text) => {
-                toml::from_str::<Self>(&text).map_err(|e| format!("{}: {e}", path.display()))?
-            }
-            Err(e) if args.config.is_none() && e.kind() == std::io::ErrorKind::NotFound => {
+        // An explicit --config wins outright. Without one, look in the current
+        // directory first (project-local settings), then under the data dir
+        // ($XDG_CONFIG_HOME/portway or ~/.config/portway) so a bare
+        // `portway --tui` still finds the same file the daemon is writing
+        // beside its database. Only when neither exists do we fall back to
+        // the built-in default.
+        let path = match &args.config {
+            Some(path) => Some(path.clone()),
+            None => default_config_path(&[
+                PathBuf::from("portway.toml"),
+                crate::store::data_dir(None)
+                    .map(|dir| dir.join("portway.toml"))
+                    .unwrap_or_default(),
+            ]),
+        };
+        let mut config = match path.as_deref().map(std::fs::read_to_string) {
+            Some(Ok(text)) => toml::from_str::<Self>(&text)
+                .map_err(|e| format!("{}: {e}", path.as_ref().unwrap().display()))?,
+            Some(Err(e)) if args.config.is_none() && e.kind() == std::io::ErrorKind::NotFound => {
                 Self::default()
             }
-            Err(e) => return Err(format!("{}: {e}", path.display())),
+            Some(Err(e)) => return Err(format!("{}: {e}", path.as_ref().unwrap().display())),
+            None => Self::default(),
         };
         if let Some(url) = &args.upstream {
             config.upstream = Some(url.clone());
@@ -167,5 +187,40 @@ mod tests {
     fn an_explicit_missing_file_is_an_error() {
         let args = Args::parse_from(["portway", "--config", "/no-such-portway-config.toml"]);
         assert!(Config::load(&args).is_err());
+    }
+
+    #[test]
+    fn the_search_order_prefers_earlier_candidates() {
+        let base = std::env::temp_dir().join(format!("portway-search-{}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        let first = base.join("first.toml");
+        let second = base.join("second.toml");
+        assert_eq!(default_config_path(&[first.clone(), second.clone()]), None);
+        std::fs::write(&second, "").unwrap();
+        assert_eq!(
+            default_config_path(&[first.clone(), second.clone()]),
+            Some(second.clone())
+        );
+        std::fs::write(&first, "").unwrap();
+        assert_eq!(
+            default_config_path(&[first.clone(), second.clone()]),
+            Some(first.clone())
+        );
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn a_candidate_with_an_empty_path_is_skipped() {
+        // data_dir errors yield an empty PathBuf as a placeholder; it must
+        // not shadow an earlier real file.
+        let base = std::env::temp_dir().join(format!("portway-empty-{}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        let real = base.join("real.toml");
+        std::fs::write(&real, "").unwrap();
+        assert_eq!(
+            default_config_path(&[PathBuf::new(), real.clone()]),
+            Some(real)
+        );
+        std::fs::remove_dir_all(&base).unwrap();
     }
 }

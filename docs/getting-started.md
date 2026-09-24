@@ -174,13 +174,12 @@ with `portway --stop`. Use [operations](operations.md) for custom runtime
 directories, configuration restarts, logs, and dashboard keys.
 
 To keep your TOML at `~/.config/portway/portway.toml` instead, move or create it
-there yourself and pass its path explicitly:
+there yourself. A bare invocation finds it after `./portway.toml`:
 
 ```sh
-portway --config "$HOME/.config/portway/portway.toml" --daemon
+portway --daemon
+portway --config "$HOME/.config/portway/portway.toml" --daemon  # or be explicit
 ```
-
-The standalone binary does not automatically load that location.
 
 ## Add a compression receiver
 
