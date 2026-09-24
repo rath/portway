@@ -47,16 +47,20 @@ async fn origin() -> Origin {
                 } else {
                     200
                 };
+                let broken = parts.uri.path().ends_with("/broken-gzip");
                 sink.lock().unwrap().push(Seen {
                     method: parts.method,
                     uri: parts.uri.to_string(),
                     headers: parts.headers,
                     body: body.clone(),
                 });
-                Response::builder()
+                let mut response = Response::builder()
                     .status(status)
-                    .body(OutBody::fixed(body))
-                    .unwrap()
+                    .header("etag", "\"example\"");
+                if broken {
+                    response = response.header("content-encoding", "gzip");
+                }
+                response.body(OutBody::fixed(body)).unwrap()
             }
         },
     ));
@@ -283,4 +287,81 @@ async fn malformed_configuration_oversized_bodies_and_unsupported_tunnels_fail_e
         501
     );
     assert!(origin.seen.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_decoder_failure_does_not_return_the_connection_to_the_pool() {
+    let origin = origin().await;
+    let router = Router::single(&config(), &origin.url, None).unwrap();
+    let reply = router
+        .clone()
+        .handle(
+            Request::builder()
+                .method("POST")
+                .uri("/broken-gzip")
+                .body(Full::new(Bytes::from_static(b"not a gzip frame")))
+                .unwrap(),
+        )
+        .await;
+    assert!(reply.into_body().collect().await.is_err());
+    assert_eq!(router.models()[0].1.view().idle_conns, 0);
+    assert_eq!(
+        send(&router, "POST", "/healthy", &[], Bytes::from_static(b"ok"))
+            .await
+            .1,
+        b"ok"[..]
+    );
+}
+#[tokio::test]
+async fn response_transformation_updates_encoding_vary_and_validators() {
+    let origin = origin().await;
+    let router = Router::single(&config(), &origin.url, None).unwrap();
+    let data = Bytes::from("repeat ".repeat(100));
+    let request = Request::builder()
+        .method("POST")
+        .uri("/data")
+        .header("accept-encoding", "gzip")
+        .body(Full::new(data.clone()))
+        .unwrap();
+    let response = router.clone().handle(request).await;
+    assert_eq!(response.headers()["content-encoding"], "gzip");
+    assert!(!response.headers().contains_key("etag"));
+    assert!(
+        response
+            .headers()
+            .get_all("vary")
+            .iter()
+            .any(|v| v == "Accept-Encoding")
+    );
+    let wire = response.into_body().collect().await.unwrap().to_bytes();
+    use std::io::Read;
+    let mut decoded = Vec::new();
+    flate2::read::GzDecoder::new(&wire[..])
+        .read_to_end(&mut decoded)
+        .unwrap();
+    assert_eq!(decoded, data);
+    let request = Request::builder()
+        .method("HEAD")
+        .uri("/head")
+        .header("accept-encoding", "gzip")
+        .body(Full::new(Bytes::new()))
+        .unwrap();
+    let response = router.clone().handle(request).await;
+    assert_eq!(response.headers()["etag"], "\"example\"");
+    assert_ne!(
+        response
+            .headers()
+            .get("content-encoding")
+            .and_then(|v| v.to_str().ok()),
+        Some("gzip")
+    );
+    assert!(
+        response
+            .into_body()
+            .collect()
+            .await
+            .unwrap()
+            .to_bytes()
+            .is_empty()
+    );
 }

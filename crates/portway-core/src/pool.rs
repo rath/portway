@@ -170,6 +170,11 @@ impl Upstream {
             (true, 443) | (false, 80) => host.clone(),
             _ => format!("{host}:{port}"),
         };
+        let host = host
+            .strip_prefix('[')
+            .and_then(|h| h.strip_suffix(']'))
+            .unwrap_or(&host)
+            .to_owned();
         Ok(Upstream {
             telemetry,
             base_path: uri.path().trim_end_matches('/').to_owned(),
@@ -363,5 +368,21 @@ impl Lease {
         if let Some(conn) = self.conn.take() {
             self.upstream.put(conn);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn ipv6_keeps_brackets_in_http_authorities_but_not_dns_or_tls_names() {
+        let upstream = Upstream::new("https://[::1]:8443/api", None).unwrap();
+        assert_eq!(upstream.host, "::1");
+        assert_eq!(upstream.authority, "[::1]:8443");
+        assert_eq!(upstream.port, 8443);
+        assert_eq!(upstream.base_path, "/api");
+        assert!(upstream.tls.is_some());
+        let standard = Upstream::new("http://[::1]/", None).unwrap();
+        assert_eq!(standard.authority, "[::1]");
     }
 }

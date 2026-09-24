@@ -170,7 +170,9 @@ impl RelayBody {
 
     fn finish(&mut self) {
         // Only a body read to completion leaves the connection reusable.
-        if let Some(lease) = self.lease.as_mut() {
+        if self.log.as_ref().is_some_and(|log| log.complete)
+            && let Some(lease) = self.lease.as_mut()
+        {
             lease.release();
         }
         self.upstream = None;
