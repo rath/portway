@@ -1,8 +1,8 @@
 use bytes::Bytes;
-use http::{HeaderMap, Method, Request, Response};
+use http::{HeaderMap, Method, Request, Response, StatusCode};
 use http_body_util::{BodyExt, Full};
 use portway_core::{
-    CodingPreference, Event, ForwarderConfig, Receiver, ReceiverConfig, Router, Telemetry,
+    CodingPreference, Event, ForwarderConfig, Receiver, ReceiverConfig, Router, Telemetry, dict,
     relay::OutBody, server,
 };
 use std::sync::{Arc, Mutex};
@@ -202,6 +202,150 @@ async fn real_sidecar_restores_dcz_and_does_not_retry_application_errors() {
         assert!(!seen.headers.contains_key("x-dict-store"));
     }
     task.abort();
+}
+
+#[tokio::test]
+async fn a_dictionary_miss_then_a_zstd_refusal_retries_as_identity() {
+    assert_three_attempt_fallback(StatusCode::PRECONDITION_FAILED).await;
+}
+
+#[tokio::test]
+async fn a_dcz_refusal_then_a_zstd_refusal_retries_as_identity() {
+    assert_three_attempt_fallback(StatusCode::UNSUPPORTED_MEDIA_TYPE).await;
+}
+
+/// Exercise both refusal checks on one request, over real TCP. The first upload
+/// seeds an acknowledged base; only the second upload takes the three-step ladder.
+async fn assert_three_attempt_fallback(dcz_status: StatusCode) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let sink = seen.clone();
+    let task = tokio::spawn(server::serve_with(
+        listener,
+        Arc::default(),
+        move |request| {
+            let sink = sink.clone();
+            async move {
+                if request.uri().path() == "/__portway/capabilities" {
+                    return Response::builder()
+                        .header("x-request-dictionary", "dcz")
+                        .body(OutBody::fixed(Bytes::from_static(
+                            br#"{"request_encodings":["zstd"]}"#,
+                        )))
+                        .unwrap();
+                }
+                let (parts, body) = request.into_parts();
+                let body = portway_core::body::collect_raw(body, 2 << 20)
+                    .await
+                    .unwrap();
+                let mut calls = sink.lock().unwrap();
+                calls.push(Seen {
+                    method: parts.method,
+                    uri: parts.uri.to_string(),
+                    headers: parts.headers,
+                    body: body.clone(),
+                });
+                let response = match calls.len() {
+                    1 => {
+                        let decoded = zstd::bulk::decompress(&body, 2 << 20).unwrap();
+                        Response::builder()
+                            .header("x-dict-stored", dict::hex(&dict::sha256(&decoded)))
+                    }
+                    2 => {
+                        let response = Response::builder()
+                            .status(dcz_status)
+                            .header("x-portway-decode-error", "1");
+                        if dcz_status == StatusCode::PRECONDITION_FAILED {
+                            response.header("x-dict-miss", "1")
+                        } else {
+                            response
+                        }
+                    }
+                    3 => Response::builder()
+                        .status(StatusCode::UNSUPPORTED_MEDIA_TYPE)
+                        .header("x-portway-decode-error", "1"),
+                    4 => Response::builder(),
+                    _ => panic!("unexpected extra encoding attempt"),
+                };
+                response.body(OutBody::fixed(body)).unwrap()
+            }
+        },
+    ));
+    let upstream = Origin { url, seen, task };
+    let sender = Router::single(&ForwarderConfig::default(), &upstream.url, None).unwrap();
+    let seed = Bytes::from("a compressible conversation body ".repeat(2048));
+    let next = Bytes::from([seed.as_ref(), b"one more turn"].concat());
+    let headers = [
+        ("authorization", "Bearer test"),
+        ("content-type", "text/plain"),
+    ];
+
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        sender.negotiate_all().await;
+        assert_eq!(
+            send(
+                &sender,
+                "POST",
+                "/chat?stream=false",
+                &headers,
+                seed.clone()
+            )
+            .await
+            .0,
+            StatusCode::OK,
+        );
+        let response = send(
+            &sender,
+            "POST",
+            "/chat?stream=false",
+            &headers,
+            next.clone(),
+        )
+        .await;
+        assert_eq!(response, (StatusCode::OK, next.clone()));
+    })
+    .await
+    .expect("both fallback attempts must complete without reusing an unread refusal connection");
+
+    let calls = upstream.seen.lock().unwrap();
+    let codings: Vec<_> = calls
+        .iter()
+        .map(|call| {
+            call.headers
+                .get("content-encoding")
+                .map(|value| value.to_str().unwrap())
+                .unwrap_or("identity")
+        })
+        .collect();
+    assert_eq!(codings, ["zstd", "dcz", "zstd", "identity"]);
+    for call in calls.iter() {
+        assert_eq!(call.method, Method::POST);
+        assert_eq!(call.uri, "/chat?stream=false");
+        assert_eq!(call.headers["authorization"], "Bearer test");
+        assert_eq!(call.headers["content-type"], "text/plain");
+    }
+    assert_eq!(calls[0].headers["x-dict-store"], "1");
+    assert_eq!(calls[1].body[..8], dict::DCZ_MAGIC);
+    assert_eq!(calls[1].body[8..40], dict::sha256(&seed));
+    assert_eq!(
+        zstd::bulk::decompress(&calls[2].body, 2 << 20).unwrap(),
+        next
+    );
+    assert!(!calls[3].headers.contains_key("content-encoding"));
+    assert!(!calls[3].headers.contains_key("x-dict-store"));
+    assert_eq!(calls[3].body, next);
+
+    let stats = sender.models()[0].1.snapshot();
+    assert_eq!(stats["requests"], 2, "retries are not new logical requests");
+    assert_eq!(stats["dict_hits"], 0);
+    assert_eq!(
+        stats["dict_misses"],
+        u64::from(dcz_status == StatusCode::PRECONDITION_FAILED)
+    );
+    assert_eq!(stats["retried_identity"], 1);
+    assert_eq!(stats["coding"], serde_json::Value::Null);
+    assert_eq!(stats["dict"], false);
 }
 
 #[tokio::test]
