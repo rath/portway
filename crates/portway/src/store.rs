@@ -11,7 +11,8 @@
 //! never written, the same invariant the log line has.
 
 use std::fs;
-use std::os::unix::fs::DirBuilderExt;
+use std::io;
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -215,6 +216,7 @@ pub fn open_existing(db: &Path) -> Result<Option<Connection>, String> {
 }
 
 fn open_create(db: &Path) -> Result<Connection, String> {
+    restrict(db).map_err(|err| format!("{}: {err}", db.display()))?;
     let mut connection = Connection::open_with_flags(
         db,
         OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE,
@@ -261,6 +263,34 @@ fn open_create(db: &Path) -> Result<Connection, String> {
             .map_err(|err| format!("{}: {err}", db.display()))?;
     }
     Ok(connection)
+}
+
+/// Owner-only access for the database and any WAL sidecars already on disk.
+///
+/// `ensure_dir` only tightens a directory it creates, and `--data-dir` may name
+/// one that is already open to the group or the world. The file is created 0600
+/// before SQLite sees it, so it is never readable under the umask's mode even
+/// briefly; an existing file is narrowed in place. SQLite gives the `-wal` and
+/// `-shm` files it creates the database file's mode, so only sidecars left by
+/// an earlier build need the second step.
+fn restrict(db: &Path) -> io::Result<()> {
+    fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .open(db)?;
+    let owner_only = fs::Permissions::from_mode(0o600);
+    fs::set_permissions(db, owner_only.clone())?;
+    for suffix in ["-wal", "-shm"] {
+        let mut sidecar = db.as_os_str().to_owned();
+        sidecar.push(suffix);
+        match fs::set_permissions(&sidecar, owner_only.clone()) {
+            Err(err) if err.kind() != io::ErrorKind::NotFound => return Err(err),
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 fn schema_version(connection: &Connection) -> Result<i64, String> {
@@ -622,6 +652,44 @@ mod tests {
                 .unwrap();
             assert_eq!(count, 0, "{table} kept rows past the window");
         }
+    }
+
+    /// A `--data-dir` the user made keeps its own mode, so the database has to
+    /// narrow itself: when it is new, and when an earlier build left it (and its
+    /// sidecars, held open here by a reader across the restart) readable.
+    #[test]
+    fn the_database_is_owner_only_in_a_directory_portway_did_not_create() {
+        let dir = dir("mode");
+        fs::create_dir_all(&dir).unwrap();
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
+        let path = |suffix: &str| dir.join(format!("{DB_FILE}{suffix}"));
+        let mode = |suffix: &str| fs::metadata(path(suffix)).unwrap().permissions().mode() & 0o777;
+        let files = ["", "-wal", "-shm"];
+
+        let store = spawn(&dir, 0).unwrap();
+        for suffix in files {
+            assert_eq!(mode(suffix), 0o600, "new {DB_FILE}{suffix}");
+        }
+
+        let reader = Connection::open(path("")).unwrap();
+        let _: i64 = reader
+            .query_row("SELECT count(*) FROM requests", [], |row| row.get(0))
+            .unwrap();
+        store.shutdown();
+        for suffix in files {
+            fs::set_permissions(path(suffix), fs::Permissions::from_mode(0o644)).unwrap();
+        }
+
+        let store = spawn(&dir, 0).unwrap();
+        for suffix in files {
+            assert_eq!(
+                mode(suffix),
+                0o600,
+                "existing {DB_FILE}{suffix} stayed readable"
+            );
+        }
+        store.shutdown();
+        drop(reader);
     }
 
     #[test]
