@@ -8,6 +8,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.97"
 license = "MIT"
+authors = ["Jang-Ho Hwang <rath@xrath.com>"]
 
 [profile.dev]
 opt-level = 1

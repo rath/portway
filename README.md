@@ -285,3 +285,5 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow and
 reporting. Changes are listed in [CHANGELOG.md](CHANGELOG.md).
 
 Licensed under [MIT](LICENSE).
+
+Written by Jang-Ho Hwang &lt;rath@xrath.com&gt;.
