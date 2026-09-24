@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  # Superseded pull request runs are cancelled; every commit on main finishes.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+
+jobs:
+  check:
+    name: check (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    # A cold cache builds bundled SQLite, zstd and aws-lc for two feature sets.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Toolchain versions
+        run: |
+          rustc --version
+          cargo --version
+          cmake --version | head -n 1
+      - name: scripts/check.sh
+        run: bash scripts/check.sh
+
+  msrv:
+    name: msrv
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.97"
+      - uses: Swatinem/rust-cache@v2
+      - name: Toolchain matches rust-version in Cargo.toml
+        run: |
+          want="$(sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml)"
+          have="$(rustc --version | awk '{print $2}')"
+          case "$have" in
+            "$want" | "$want".*) echo "rustc $have satisfies rust-version $want" ;;
+            *) echo "rustc $have does not match rust-version $want; update this workflow" >&2; exit 1 ;;
+          esac
+      - name: Build every target and feature
+        run: cargo build --locked --workspace --all-targets --all-features
+
+  bench-smoke:
+    name: bench smoke test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build portway
+        run: cargo build --locked -p portway
+      - name: Run scripts/bench.py
+        run: |
+          python3 --version
+          python3 scripts/bench.py --portway target/debug/portway --turns 3
