@@ -523,7 +523,7 @@ impl http_body::Body for DelayedFull {
     }
 }
 
-/// The upstream half of `docs/request-dictionary.md`: the inflated body and the
+/// The upstream half of `docs/protocol.md`: the inflated body and the
 /// hash it was stored under, or the refusal.
 fn dict_reply(
     reply: Reply,

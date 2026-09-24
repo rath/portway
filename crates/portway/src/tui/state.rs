@@ -1,7 +1,7 @@
 //! Everything the dashboard shows, with no terminal in sight.
 //!
 //! Fed by two sources: the telemetry channel (one entry per request or log
-//! record) and a 250ms sample — of the per-model counters `/__forwarder/stats`
+//! record) and a 250ms sample — of the per-model counters `/__portway/stats`
 //! serves when this process owns the forwarder, or of another forwarder's
 //! window when it does not. Cumulative totals come from the counters rather
 //! than from summing events, so the HUD and the JSON can never disagree; a

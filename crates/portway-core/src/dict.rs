@@ -5,7 +5,7 @@
 //! The upstream keeps what it was asked to keep (`X-Dict-Store`) under the body's
 //! SHA-256 and says so (`X-Dict-Stored`); the next request names that hash in
 //! the RFC 9842 `dcz` header. Nothing here identifies a user or a session:
-//! the hash is the address. Protocol: `docs/request-dictionary.md`.
+//! the hash is the address. Protocol: `docs/protocol.md`.
 
 use std::collections::VecDeque;
 use std::sync::Mutex;

@@ -148,7 +148,7 @@ impl Drop for InFlight {
     }
 }
 
-/// One model's counters, read together. The JSON at `/__forwarder/stats` and
+/// One model's counters, read together. The JSON at `/__portway/stats` and
 /// the dashboard's model table render from this, so they cannot drift.
 #[derive(Debug, Clone, Default)]
 pub struct StatsView {
