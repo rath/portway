@@ -1,0 +1,10 @@
+# Replace the example origin with your HTTP service or compression receiver.
+upstream = "https://api.example.com"
+host = "127.0.0.1"
+port = 8787
+
+[compression]
+coding = "auto"
+dict = "auto"
+level = 11
+min_bytes = 1024

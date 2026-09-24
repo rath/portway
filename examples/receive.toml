@@ -1,0 +1,13 @@
+# Run: portway receive --config examples/receive.toml
+# Place your TLS/authentication gateway in front of this loopback listener.
+upstream = "http://127.0.0.1:8000"
+host = "127.0.0.1"
+port = 8788
+
+[receiver]
+dictionary_bytes = 268435456
+dictionary_ttl_seconds = 3600
+min_dictionary_bytes = 32768
+max_dictionary_bytes = 33554432
+max_body_bytes = 268435456
+max_window_bytes = 134217728

@@ -1,0 +1,17 @@
+host = "127.0.0.1"
+port = 8787
+
+[models]
+model-a = "https://first.example.com"
+model-b = "https://second.example.com"
+
+[compression]
+coding = "auto"
+dict = "auto"
+level = 11
+
+# Illustrative estimates supplied by the user, not a provider price list.
+[prices.model-a]
+input = 1.0
+output = 2.0
+cache_read = 0.1
