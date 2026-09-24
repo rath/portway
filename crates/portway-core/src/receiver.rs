@@ -16,7 +16,6 @@ use std::{
 };
 
 pub const ERROR_HEADER: &str = "x-portway-decode-error";
-const MAGIC: [u8; 8] = [0x5e, 0x2a, 0x4d, 0x18, 0x20, 0, 0, 0];
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
@@ -34,9 +33,9 @@ impl Default for ReceiverConfig {
             dictionary_bytes: 256 << 20,
             dictionary_ttl_seconds: 3600,
             min_dictionary_bytes: 32 << 10,
-            max_dictionary_bytes: 32 << 20,
+            max_dictionary_bytes: dict::MAX_BASE_BYTES,
             max_body_bytes: 256 << 20,
-            max_window_bytes: 128 << 20,
+            max_window_bytes: dict::MAX_WINDOW_BYTES,
         }
     }
 }
@@ -53,11 +52,12 @@ impl ReceiverConfig {
             );
         }
         if !self.max_window_bytes.is_power_of_two()
-            || !(1024..=128 << 20).contains(&self.max_window_bytes)
+            || !(1024..=dict::MAX_WINDOW_BYTES).contains(&self.max_window_bytes)
         {
-            return Err(
-                "max_window_bytes must be a power of two between 1024 and 134217728".into(),
-            );
+            return Err(format!(
+                "max_window_bytes must be a power of two between 1024 and {}",
+                dict::MAX_WINDOW_BYTES
+            ));
         }
         Ok(())
     }
@@ -321,7 +321,7 @@ impl Receiver {
             "gzip" | "x-gzip" => inflate_gzip(&raw, self.config.max_body_bytes)?,
             "zstd" => inflate_zstd(&raw, None, &self.config)?,
             "dcz" => {
-                if raw.len() < 40 || raw[..8] != MAGIC {
+                if raw.len() < 40 || raw[..8] != dict::DCZ_MAGIC {
                     return Err(reject(400, "invalid dcz header"));
                 }
                 let hash: Hash = raw[8..40].try_into().expect("32 byte hash");

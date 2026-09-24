@@ -187,6 +187,9 @@ async fn a_415_is_retried_identity_once_and_turns_encoding_off() {
     assert_eq!(mine["retried_identity"], 1);
     assert_eq!(mine["coding"], serde_json::Value::Null);
     assert_eq!(mine["encoded_requests"], 0);
+    assert_eq!(mine["identity_reason"], "encoding_refused");
+    assert!((1..=600).contains(&mine["identity_backoff_secs"].as_u64().unwrap()));
+    assert_eq!(mine["last_probe_ok"], true);
 }
 
 #[tokio::test]
@@ -648,7 +651,7 @@ async fn a_rolled_back_upstream_loses_dictionaries_but_keeps_zstd() {
     assert!(!calls[2].has("x-dict-store"));
     assert_eq!(calls[2].inflated, conversation(2));
 
-    // Off for good: no more dcz, no more store requests, zstd untouched.
+    // During backoff: no more dcz or store requests, zstd untouched.
     fwd.post("/v1/chat/completions", conversation(3)).await;
     assert_eq!(up.last().header("content-encoding"), Some("zstd"));
     assert!(!up.last().has("x-dict-store"));
@@ -657,6 +660,9 @@ async fn a_rolled_back_upstream_loses_dictionaries_but_keeps_zstd() {
     assert_eq!(mine["dict"], false);
     assert_eq!(mine["coding"], "zstd");
     assert_eq!(mine["retried_identity"], 0);
+    assert_eq!(mine["identity_reason"], serde_json::Value::Null);
+    assert_eq!(mine["dict_backoff_reason"], "dictionary_refused");
+    assert!((1..=600).contains(&mine["dict_backoff_secs"].as_u64().unwrap()));
 }
 
 #[tokio::test]
@@ -675,6 +681,12 @@ async fn a_upstream_that_stored_other_bytes_is_never_used_as_a_dictionary() {
     let stats = fwd.get("/__portway/stats").await.json();
     assert_eq!(stats["models"][DICT_MODEL]["dict"], false);
     assert_eq!(stats["models"][DICT_MODEL]["dict_hits"], 0);
+    assert_eq!(stats["models"][DICT_MODEL]["coding"], "zstd");
+    assert_eq!(stats["models"][DICT_MODEL]["dict_hash_mismatches"], 1);
+    assert_eq!(
+        stats["models"][DICT_MODEL]["dict_backoff_reason"],
+        "hash_mismatch"
+    );
 }
 
 #[tokio::test]

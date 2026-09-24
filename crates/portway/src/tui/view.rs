@@ -11,7 +11,7 @@ use ratatui::widgets::{Block, Cell, Clear, Padding, Paragraph, Row, Sparkline, T
 
 use http::Method;
 
-use crate::forwarder::Coding;
+use crate::forwarder::{Coding, CompressionIssue, StatsView};
 use crate::logfmt::{self, Level, human, human_time};
 use crate::telemetry::RequestRecord;
 use crate::tui::chart::TwoToneBars;
@@ -393,12 +393,50 @@ fn coding_span(coding: Coding, dict: bool) -> Span<'static> {
 /// Below this the table sheds columns rather than letting every one of them
 /// shrink until the model names are unreadable.
 const ROOMY_TABLE: u16 = 100;
+const STATUS_TABLE: u16 = 136;
+
+fn compression_status(view: &StatsView) -> String {
+    let issue = if view.coding == Coding::None {
+        view.identity_reason
+            .map(|reason| (reason, view.identity_backoff_secs))
+    } else if !view.dict {
+        view.dict_backoff_reason
+            .map(|reason| (reason, view.dict_backoff_secs))
+    } else {
+        None
+    };
+    let Some((reason, seconds)) = issue else {
+        return if view.last_probe_ok == Some(false) {
+            "probe failed; coding kept".into()
+        } else {
+            String::new()
+        };
+    };
+    let label = match reason {
+        CompressionIssue::NotNegotiated => return "not negotiated".into(),
+        CompressionIssue::ConfiguredOff => return "compression off in config".into(),
+        CompressionIssue::ProbeFailed => return "probe failed".into(),
+        CompressionIssue::NoSupportedCoding => return "no supported coding".into(),
+        CompressionIssue::EncodingRefused => "415 backoff",
+        CompressionIssue::DictionaryRefused => "dcz 415 backoff",
+        CompressionIssue::HashMismatch => "dcz hash mismatch",
+    };
+    if seconds > 0 {
+        format!("{label}; {seconds}s")
+    } else {
+        format!("{label}; probe due")
+    }
+}
 
 fn models_table(state: &State, width: u16) -> Table<'_> {
     let roomy = width >= ROOMY_TABLE;
+    let show_status = width >= STATUS_TABLE;
     let mut names = vec!["model", "coding", "reqs", "live", "raw", "wire", "saved"];
     if roomy {
         names.extend(["down", "idle", "err", "abort"]);
+    }
+    if show_status {
+        names.push("compression status");
     }
     let header = Row::new(names).style(Style::default().fg(DIM));
 
@@ -443,6 +481,12 @@ fn models_table(state: &State, width: u16) -> Table<'_> {
                 )),
             ]);
         }
+        if show_status {
+            cells.push(Cell::from(Span::styled(
+                compression_status(view),
+                Style::default().fg(TIME),
+            )));
+        }
         Row::new(cells)
     });
 
@@ -462,6 +506,9 @@ fn models_table(state: &State, width: u16) -> Table<'_> {
             Constraint::Length(4),
             Constraint::Length(5),
         ]);
+    }
+    if show_status {
+        widths.push(Constraint::Length(30));
     }
     Table::new(rows, widths)
         .header(header)
@@ -1634,6 +1681,44 @@ mod tests {
         // keeps the single-size row every other test asserts.
         let plain = screen(140, 44, &populated());
         assert!(!plain.contains("agent"), "{plain}");
+    }
+
+    #[test]
+    fn compression_diagnostics_fit_without_hiding_the_coding() {
+        let mut state = populated();
+        state.models.push(crate::tui::state::ModelRow {
+            name: "model-alpha".into(),
+            view: StatsView::default(),
+        });
+        let view = &mut state.models[0].view;
+        view.coding = Coding::Zstd;
+        view.dict = false;
+        view.dict_backoff_reason = Some(CompressionIssue::HashMismatch);
+        view.dict_backoff_secs = 600;
+        let wide = screen(STATUS_TABLE, 44, &state);
+        assert!(wide.contains("compression status"), "{wide}");
+        assert!(wide.contains("dcz hash mismatch; 600s"), "{wide}");
+        assert!(wide.contains("zstd"), "{wide}");
+
+        state.models[0].view.dict_backoff_secs = 0;
+        let expired = screen(STATUS_TABLE, 44, &state);
+        assert!(
+            expired.contains("dcz hash mismatch; probe due"),
+            "{expired}"
+        );
+        let narrow = screen(78, 44, &state);
+        assert!(!narrow.contains("compression status"), "{narrow}");
+        assert!(table_header(&narrow).ends_with("saved"), "{narrow}");
+
+        state.models[0].view = StatsView::default();
+        let historical = screen(STATUS_TABLE, 44, &state);
+        assert!(!historical.contains("probe failed"), "{historical}");
+        assert!(!historical.contains("backoff"), "{historical}");
+        state.models[0].view.identity_reason = Some(CompressionIssue::EncodingRefused);
+        state.models[0].view.identity_backoff_secs = 420;
+        let identity = screen(STATUS_TABLE, 44, &state);
+        assert!(identity.contains("identity"), "{identity}");
+        assert!(identity.contains("415 backoff; 420s"), "{identity}");
     }
 
     #[test]

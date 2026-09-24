@@ -183,8 +183,25 @@ Useful fields include:
 | `body_bytes`, `wire_bytes`, `saved_bytes` | Original body size, sent body size, and savings counters |
 | `dict` | Whether dictionary support is enabled for the route |
 | `dict_hits`, `dict_misses` | Dictionary reuse and misses reported during forwarding |
+| `identity_reason` | Why request compression is off: `not_negotiated`, `configured_off`, `probe_failed`, `no_supported_coding`, or `encoding_refused`; `null` when compression is enabled |
+| `identity_backoff_secs` | Remaining backoff after a marked encoding 415, rounded up to seconds |
+| `dict_backoff_reason`, `dict_backoff_secs` | Dictionary suspension cause (`dictionary_refused`, `hash_mismatch`, or `encoding_refused`) and remaining backoff; the cause clears when DCZ is enabled again |
+| `last_probe_ok`, `probe_failures` | Result of the last capability probe (`null` before probing) and cumulative failed probes; a failed background probe preserves the last negotiated coding |
+| `dict_hash_mismatches` | Cumulative storage acknowledgements whose hash differs from the sent body |
 | `in_flight` | Active relays; useful when choosing a restart time |
 | `upstream_errors`, `client_aborts` | Upstream failures and clients that disconnected |
+
+Refusal backoffs last 600 seconds. A zero remaining time means the backoff has
+expired, not that compression has recovered: requests trigger background probes,
+and a successful capability advertisement must enable the coding again. A
+dictionary-only refusal or hash mismatch keeps ordinary zstd compression enabled.
+The backoff cause remains available while waiting for recovery. An unmarked
+application or gateway 415 does not trigger a backoff.
+
+At terminal widths of at least 136 columns, the live TUI's model table includes a
+`compression status` column showing the cause and remaining backoff, or `probe due`
+after expiry. An attached viewer reconstructs historical requests and does not
+have these live diagnostics; use the serving instance's stats endpoint instead.
 
 A negotiated codec alone does not mean every request will be compressed. Small
 bodies below `min_bytes`, already encoded bodies, and bodies that do not shrink

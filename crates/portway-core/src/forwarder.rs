@@ -106,6 +106,47 @@ impl Coding {
     }
 }
 
+/// Why compression is unavailable. Backoff expiry permits a later successful
+/// capability probe to restore it; it does not itself change the route's state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum CompressionIssue {
+    NotNegotiated = 1,
+    ConfiguredOff = 2,
+    ProbeFailed = 3,
+    NoSupportedCoding = 4,
+    EncodingRefused = 5,
+    DictionaryRefused = 6,
+    HashMismatch = 7,
+}
+
+impl CompressionIssue {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::NotNegotiated => "not_negotiated",
+            Self::ConfiguredOff => "configured_off",
+            Self::ProbeFailed => "probe_failed",
+            Self::NoSupportedCoding => "no_supported_coding",
+            Self::EncodingRefused => "encoding_refused",
+            Self::DictionaryRefused => "dictionary_refused",
+            Self::HashMismatch => "hash_mismatch",
+        }
+    }
+
+    fn from_u8(value: u8) -> Option<Self> {
+        match value {
+            1 => Some(Self::NotNegotiated),
+            2 => Some(Self::ConfiguredOff),
+            3 => Some(Self::ProbeFailed),
+            4 => Some(Self::NoSupportedCoding),
+            5 => Some(Self::EncodingRefused),
+            6 => Some(Self::DictionaryRefused),
+            7 => Some(Self::HashMismatch),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct Stats {
     pub requests: AtomicU64,
@@ -126,6 +167,8 @@ pub struct Stats {
     /// not (dictionary gone: resent as plain zstd).
     pub dict_hits: AtomicU64,
     pub dict_misses: AtomicU64,
+    pub dict_hash_mismatches: AtomicU64,
+    pub probe_failures: AtomicU64,
     pub client_aborts: AtomicU64,
     pub upstream_errors: AtomicU64,
 }
@@ -164,11 +207,21 @@ pub struct StatsView {
     pub retried_identity: u64,
     pub dict_hits: u64,
     pub dict_misses: u64,
+    pub dict_hash_mismatches: u64,
+    pub probe_failures: u64,
     pub client_aborts: u64,
     pub upstream_errors: u64,
     pub coding: Coding,
     /// Whether previous-body dictionaries are in use toward this upstream.
     pub dict: bool,
+    pub identity_reason: Option<CompressionIssue>,
+    /// Seconds remaining in the refusal backoff, rounded up. Zero does not
+    /// imply recovery: the next successful capability probe decides that.
+    pub identity_backoff_secs: u64,
+    pub dict_backoff_reason: Option<CompressionIssue>,
+    pub dict_backoff_secs: u64,
+    /// None before a probe, or when observing historical request records.
+    pub last_probe_ok: Option<bool>,
     /// Warm connections parked in this model's pool.
     pub idle_conns: usize,
 }
@@ -206,6 +259,10 @@ pub struct Forwarder {
     /// When a 415-refused coding, and dictionaries, may be trusted again.
     encoding_refused_until: AtomicU64,
     dict_refused_until: AtomicU64,
+    identity_reason: AtomicU8,
+    dict_backoff_reason: AtomicU8,
+    /// 0: not probed, 1: succeeded, 2: failed.
+    last_probe: AtomicU8,
 }
 
 /// What the upstream's /health says it takes.
@@ -256,6 +313,13 @@ impl Forwarder {
             probing: AtomicBool::new(false),
             encoding_refused_until: AtomicU64::new(0),
             dict_refused_until: AtomicU64::new(0),
+            identity_reason: AtomicU8::new(if args.coding == CodingPreference::Off {
+                CompressionIssue::ConfiguredOff as u8
+            } else {
+                CompressionIssue::NotNegotiated as u8
+            }),
+            dict_backoff_reason: AtomicU8::new(0),
+            last_probe: AtomicU8::new(0),
         }
     }
 
@@ -273,7 +337,9 @@ impl Forwarder {
         if self.want == CodingPreference::Off {
             return;
         }
-        let advertised = match self.probe_health().await {
+        let probed = self.probe_health().await;
+        self.note_probe(probed.is_ok());
+        let advertised = match probed {
             Ok(advertised) => advertised,
             Err(err) => {
                 self.telemetry
@@ -283,6 +349,14 @@ impl Forwarder {
         };
         self.probed_at.store(self.now(), Ordering::Relaxed);
         self.apply(&advertised, true);
+    }
+
+    fn note_probe(&self, ok: bool) {
+        self.last_probe
+            .store(if ok { 1 } else { 2 }, Ordering::Relaxed);
+        if !ok {
+            self.stats.probe_failures.fetch_add(1, Ordering::Relaxed);
+        }
     }
 
     /// Whether the negotiation should be re-read before the next request.
@@ -308,6 +382,7 @@ impl Forwarder {
             // Cleared first, so an error that lands mid-probe is not swallowed.
             this.stale.store(false, Ordering::Relaxed);
             let probed = this.probe_health().await;
+            this.note_probe(probed.is_ok());
             // Recorded either way: an unreachable upstream must not be re-probed on
             // every single request.
             this.probed_at.store(this.now(), Ordering::Relaxed);
@@ -354,6 +429,21 @@ impl Forwarder {
             && now >= self.dict_refused_until.load(Ordering::Relaxed);
 
         let before = (self.coding(), self.dict.load(Ordering::Relaxed));
+        let reason = if coding != Coding::None {
+            0
+        } else if self.want == CodingPreference::Off {
+            CompressionIssue::ConfiguredOff as u8
+        } else if now < self.encoding_refused_until.load(Ordering::Relaxed) {
+            CompressionIssue::EncodingRefused as u8
+        } else if self.last_probe.load(Ordering::Relaxed) == 2 {
+            CompressionIssue::ProbeFailed as u8
+        } else {
+            CompressionIssue::NoSupportedCoding as u8
+        };
+        self.identity_reason.store(reason, Ordering::Relaxed);
+        if dict {
+            self.dict_backoff_reason.store(0, Ordering::Relaxed);
+        }
         self.coding.store(coding as u8, Ordering::Relaxed);
         self.dict.store(dict, Ordering::Relaxed);
         if !dict {
@@ -530,7 +620,9 @@ impl Forwarder {
 
     /// Stop using dictionaries toward this upstream. A later /health may turn them
     /// back on, but not before the refusal backoff is over.
-    fn dict_off(&self) {
+    fn dict_off(&self, reason: CompressionIssue) {
+        self.dict_backoff_reason
+            .store(reason as u8, Ordering::Relaxed);
         self.dict.store(false, Ordering::Relaxed);
         self.ring.clear();
         self.dict_refused_until.store(
@@ -739,7 +831,7 @@ impl Forwarder {
                     // The upstream behind the URL no longer takes dcz (rollback).
                     self.telemetry
                         .warn("415 for dcz: resending zstd, dictionaries OFF");
-                    self.dict_off();
+                    self.dict_off(CompressionIssue::DictionaryRefused);
                     hash = None;
                     headers.remove(dict::STORE_HEADER);
                 }
@@ -791,11 +883,13 @@ impl Forwarder {
                 coding.name().unwrap_or("identity")
             ));
             self.coding.store(Coding::None as u8, Ordering::Relaxed);
+            self.identity_reason
+                .store(CompressionIssue::EncodingRefused as u8, Ordering::Relaxed);
             self.encoding_refused_until.store(
                 self.now() + REFUSAL_BACKOFF.as_millis() as u64,
                 Ordering::Relaxed,
             );
-            self.dict_off();
+            self.dict_off(CompressionIssue::EncodingRefused);
             self.mark_stale();
             self.stats.retried_identity.fetch_add(1, Ordering::Relaxed);
             coding = Coding::None;
@@ -981,16 +1075,28 @@ impl Forwarder {
         };
         if stored.trim().eq_ignore_ascii_case(&dict::hex(&hash)) {
             self.ring.confirm_scoped(hash, body.clone(), scope);
-        } else if self.dict.load(Ordering::Relaxed) {
-            self.telemetry.warn(&format!(
-                "{}: the upstream stored a different body than was sent: dictionaries OFF",
-                self.model
-            ));
-            self.dict_off();
+        } else {
+            self.stats
+                .dict_hash_mismatches
+                .fetch_add(1, Ordering::Relaxed);
+            if self.dict.load(Ordering::Relaxed) {
+                self.telemetry.warn(&format!(
+                    "{}: the upstream stored a different body than was sent: dictionaries OFF",
+                    self.model
+                ));
+                self.dict_off(CompressionIssue::HashMismatch);
+            }
         }
     }
 
     pub fn view(&self) -> StatsView {
+        let now = self.now();
+        let remaining = |until: &AtomicU64| {
+            until
+                .load(Ordering::Relaxed)
+                .saturating_sub(now)
+                .div_ceil(1000)
+        };
         StatsView {
             requests: self.stats.requests.load(Ordering::Relaxed),
             encoded_requests: self.stats.encoded_requests.load(Ordering::Relaxed),
@@ -1004,10 +1110,25 @@ impl Forwarder {
             retried_identity: self.stats.retried_identity.load(Ordering::Relaxed),
             dict_hits: self.stats.dict_hits.load(Ordering::Relaxed),
             dict_misses: self.stats.dict_misses.load(Ordering::Relaxed),
+            dict_hash_mismatches: self.stats.dict_hash_mismatches.load(Ordering::Relaxed),
+            probe_failures: self.stats.probe_failures.load(Ordering::Relaxed),
             client_aborts: self.stats.client_aborts.load(Ordering::Relaxed),
             upstream_errors: self.stats.upstream_errors.load(Ordering::Relaxed),
             coding: self.coding(),
             dict: self.dict.load(Ordering::Relaxed),
+            identity_reason: CompressionIssue::from_u8(
+                self.identity_reason.load(Ordering::Relaxed),
+            ),
+            identity_backoff_secs: remaining(&self.encoding_refused_until),
+            dict_backoff_reason: CompressionIssue::from_u8(
+                self.dict_backoff_reason.load(Ordering::Relaxed),
+            ),
+            dict_backoff_secs: remaining(&self.dict_refused_until),
+            last_probe_ok: match self.last_probe.load(Ordering::Relaxed) {
+                1 => Some(true),
+                2 => Some(false),
+                _ => None,
+            },
             idle_conns: self.upstream.idle_count(),
         }
     }
@@ -1028,6 +1149,13 @@ impl Forwarder {
             "dict": view.dict,
             "dict_hits": view.dict_hits,
             "dict_misses": view.dict_misses,
+            "dict_hash_mismatches": view.dict_hash_mismatches,
+            "probe_failures": view.probe_failures,
+            "identity_reason": view.identity_reason.map(CompressionIssue::name),
+            "identity_backoff_secs": view.identity_backoff_secs,
+            "dict_backoff_reason": view.dict_backoff_reason.map(CompressionIssue::name),
+            "dict_backoff_secs": view.dict_backoff_secs,
+            "last_probe_ok": view.last_probe_ok,
             "client_aborts": view.client_aborts,
             "upstream_errors": view.upstream_errors,
             "coding": view.coding.name(),
@@ -1206,7 +1334,7 @@ mod tests {
 
     #[test]
     fn a_415_holds_a_coding_down_even_while_health_still_advertises_it() {
-        let fwd = forwarder(&ForwarderConfig::default());
+        let mut fwd = forwarder(&ForwarderConfig::default());
         fwd.apply(&advertised(&["zstd"], true), true);
         assert_eq!(fwd.coding(), Coding::Zstd);
 
@@ -1216,17 +1344,71 @@ mod tests {
             fwd.now() + REFUSAL_BACKOFF.as_millis() as u64,
             Ordering::Relaxed,
         );
-        fwd.dict_off();
+        fwd.dict_off(CompressionIssue::EncodingRefused);
         fwd.apply(&advertised(&["zstd"], true), false);
         assert_eq!(fwd.coding(), Coding::None, "advertisement does not win yet");
         assert!(!fwd.dict.load(Ordering::Relaxed));
+        assert_eq!(fwd.snapshot()["identity_reason"], "encoding_refused");
+        assert_eq!(fwd.view().identity_backoff_secs, 600);
 
-        // Once the backoff is over the upstream gets another chance on its own.
-        fwd.encoding_refused_until.store(0, Ordering::Relaxed);
-        fwd.dict_refused_until.store(0, Ordering::Relaxed);
+        // Time passing alone does not recover compression or erase the cause.
+        backdate(&mut fwd, REFUSAL_BACKOFF.as_millis() as u64 + 1);
+        assert_eq!(fwd.view().identity_backoff_secs, 0);
+        assert_eq!(fwd.snapshot()["identity_reason"], "encoding_refused");
+        assert_eq!(fwd.coding(), Coding::None);
         assert!(fwd.apply(&advertised(&["zstd"], true), false));
         assert_eq!(fwd.coding(), Coding::Zstd);
         assert!(fwd.dict.load(Ordering::Relaxed));
+        assert_eq!(fwd.view().identity_reason, None);
+        assert_eq!(fwd.view().dict_backoff_reason, None);
+    }
+
+    #[tokio::test]
+    async fn diagnostics_distinguish_disabled_failed_and_unsupported_probes() {
+        let disabled = forwarder(&ForwarderConfig {
+            coding: CodingPreference::Off,
+            ..ForwarderConfig::default()
+        });
+        disabled.negotiate().await;
+        assert_eq!(disabled.snapshot()["identity_reason"], "configured_off");
+        assert_eq!(disabled.view().last_probe_ok, None);
+        assert_eq!(disabled.view().probe_failures, 0);
+
+        let fwd = forwarder(&ForwarderConfig::default());
+        assert_eq!(fwd.snapshot()["identity_reason"], "not_negotiated");
+        fwd.negotiate().await;
+        assert_eq!(fwd.snapshot()["identity_reason"], "probe_failed");
+        assert_eq!(fwd.view().last_probe_ok, Some(false));
+        assert_eq!(fwd.view().probe_failures, 1);
+
+        fwd.note_probe(true);
+        fwd.apply(&advertised(&[], false), false);
+        assert_eq!(fwd.snapshot()["identity_reason"], "no_supported_coding");
+        assert_eq!(fwd.view().last_probe_ok, Some(true));
+        assert_eq!(fwd.view().probe_failures, 1);
+    }
+
+    #[test]
+    fn hash_mismatch_diagnostics_survive_expiry_and_count_recurrences() {
+        let mut fwd = forwarder(&ForwarderConfig::default());
+        let body = Bytes::from_static(b"a confirmed request body");
+        let mut response = HeaderMap::new();
+        response.insert(dict::STORED_HEADER, HeaderValue::from_static("wrong hash"));
+        fwd.apply(&advertised(&["zstd"], true), true);
+        for count in 1..=2 {
+            fwd.note_stored(&response, dict::sha256(&body), &body, Default::default());
+            assert_eq!(fwd.view().dict_hash_mismatches, count);
+            assert_eq!(fwd.coding(), Coding::Zstd);
+            assert_eq!(fwd.view().identity_reason, None);
+            assert_eq!(fwd.snapshot()["dict_backoff_reason"], "hash_mismatch");
+            assert_eq!(fwd.view().dict_backoff_secs, 600);
+            backdate(&mut fwd, REFUSAL_BACKOFF.as_millis() as u64 + 1);
+            assert_eq!(fwd.view().dict_backoff_secs, 0);
+            assert_eq!(fwd.snapshot()["dict_backoff_reason"], "hash_mismatch");
+            fwd.apply(&advertised(&["zstd"], true), false);
+            assert!(fwd.view().dict);
+            assert_eq!(fwd.view().dict_backoff_reason, None);
+        }
     }
 
     #[test]
@@ -1252,5 +1434,8 @@ mod tests {
         });
         assert_eq!(fwd.coding(), Coding::Zstd);
         assert!(fwd.dict.load(Ordering::Relaxed));
+        assert_eq!(fwd.view().identity_reason, None);
+        assert_eq!(fwd.view().last_probe_ok, Some(false));
+        assert_eq!(fwd.view().probe_failures, 1);
     }
 }

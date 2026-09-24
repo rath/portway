@@ -9,6 +9,12 @@ version may contain breaking changes.
 
 ### Added
 
+- Compression diagnostics in route statistics and the wide live TUI: refusal
+  and dictionary suspension causes, remaining backoff, probe results, and
+  cumulative probe failures and dictionary hash mismatches.
+- Shared DCZ framing and default dictionary limits for embedded senders and
+  receivers in `portway_core::dict`.
+
 - Without `--config`, the CLI looks for `./portway.toml` in the working
   directory, then under the runtime data directory (`$XDG_CONFIG_HOME/portway`
   or `~/.config/portway`), before falling back to built-in defaults. A bare
