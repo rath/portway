@@ -1,0 +1,26 @@
+[package]
+name = "portway-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Embeddable compression-first HTTP forwarding and receiving"
+
+[dependencies]
+bytes = "1.12.1"
+flate2 = { version = "1.1.10", default-features = false, features = ["zlib-rs"] }
+http = "1.5.0"
+http-body = "1.1.0"
+http-body-util = "0.1.5"
+hyper = { version = "1.11.1", features = ["http1", "client", "server"] }
+hyper-util = { version = "0.1.20", features = ["tokio"] }
+libc = "0.2.189"
+rustls = "0.23.45"
+serde_json = "1.0.151"
+sha2 = "0.11.0"
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "net", "io-util", "time", "macros", "sync"] }
+tokio-rustls = "0.26.5"
+webpki-roots = "1.0.9"
+zstd = "0.14.0"
+
+serde = { version = "1", features = ["derive"] }
