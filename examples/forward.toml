@@ -1,10 +1,28 @@
-# Replace the example origin with your HTTP service or compression receiver.
+# Single destination: forward arbitrary HTTP paths and finite request bodies.
+# Copy to portway.toml, replace the URL, then run:
+#   portway --config ./portway.toml
+# See docs/getting-started.md for a complete client request.
+
+# The client's path is appended. For a client calling /v1/chat/completions,
+# this becomes https://api.example.com/v1/chat/completions.
+# Do not add /v1 here if the client's path already includes it.
 upstream = "https://api.example.com"
 host = "127.0.0.1"
 port = 8787
 
+# API keys belong in client request headers, not in this file.
+# There is no environment-variable substitution or api_key option.
+
+# Optional: these are already the defaults. Unsupported services get identity.
 [compression]
 coding = "auto"
 dict = "auto"
 level = 11
 min_bytes = 1024
+
+# Optional estimates for the TUI, in USD per million tokens.
+# The recorded route is "upstream" in this mode, regardless of JSON model name.
+# [prices.upstream]
+# input = 1.0
+# output = 2.0
+# cache_read = 0.1

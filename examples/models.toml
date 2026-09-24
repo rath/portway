@@ -1,17 +1,37 @@
+# Several model destinations. Copy to portway.toml and replace names and URLs.
+# Run: portway --config ./portway.toml
+# List configured names: curl http://127.0.0.1:8787/v1/models
+# Root settings must appear before any [table]. Do not also set upstream.
 host = "127.0.0.1"
 port = 8787
 
+# Exact JSON "model" names accepted by each upstream; no alias rewriting.
+# Quote keys, especially names containing dots or slashes.
+# Add new entries HERE, before [compression], then restart Portway.
 [models]
-model-a = "https://first.example.com"
-model-b = "https://second.example.com"
+"model-a" = "https://first.example.com"
+"model-b.1" = "https://second.example.com"
+"team/model-c" = "https://second.example.com"
+
+# Client credentials are forwarded unchanged to the chosen destination.
+# Supply that destination's key from your client; no api_key setting exists.
 
 [compression]
 coding = "auto"
 dict = "auto"
 level = 11
+min_bytes = 1024
 
-# Illustrative estimates supplied by the user, not a provider price list.
-[prices.model-a]
+# Optional TUI estimates, in USD per million tokens. Illustrative only.
+# All three fields are required if you include a price entry.
+[prices."model-a"]
 input = 1.0
 output = 2.0
 cache_read = 0.1
+
+# For a dotted or slash-containing name, quote it in the table header too.
+# Unlisted models remain unpriced.
+# [prices."model-b.1"]
+# input = 1.0
+# output = 2.0
+# cache_read = 0.1

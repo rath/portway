@@ -1,13 +1,24 @@
-# Run: portway receive --config examples/receive.toml
-# Place your TLS/authentication gateway in front of this loopback listener.
+# Decode compressed requests in front of an existing HTTP application.
+# Run: portway receive --config examples/receive.toml --data-dir ./receiver-data
+# The "receive" argument selects the mode; [receiver] alone does not.
+# This mode requires one upstream, not a [models] table.
+
+# The local application receives ordinary, restored HTTP requests.
 upstream = "http://127.0.0.1:8000"
 host = "127.0.0.1"
 port = 8788
 
+# Place a TLS/authentication gateway in front of this loopback listener.
+# Authenticate application requests before they reach the receiver.
+# Allow GET /__portway/capabilities without a key for sender discovery.
+# Point the sending Portway at that gateway's public URL.
+# See docs/authentication.md for preserving caller identity across the gateway.
+
+# Optional: all values below are defaults, in bytes except the TTL.
 [receiver]
-dictionary_bytes = 268435456
-dictionary_ttl_seconds = 3600
-min_dictionary_bytes = 32768
-max_dictionary_bytes = 33554432
-max_body_bytes = 268435456
-max_window_bytes = 134217728
+dictionary_bytes = 268435456       # 256MiB total memory; 0 disables dictionaries
+dictionary_ttl_seconds = 3600      # Idle lifetime; dictionaries are memory-only
+min_dictionary_bytes = 32768       # Requests below 32KiB cannot seed a dictionary
+max_dictionary_bytes = 33554432    # 32MiB per dictionary
+max_body_bytes = 268435456         # 256MiB limit for encoded and decoded bodies
+max_window_bytes = 134217728       # 128MiB zstd window limit
