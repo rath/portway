@@ -1,0 +1,37 @@
+[package]
+name = "portway"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "A compression-first HTTP forwarder"
+
+[features]
+default = []
+tui = ["dep:ratatui"]
+
+[dependencies]
+portway-core = { path = "../portway-core", version = "0.1.0" }
+serde = { version = "1", features = ["derive"] }
+toml = "0.9"
+clap = { version = "4.6.7", features = ["derive"] }
+http = "1.5.0"
+libc = "0.2.189"
+ratatui = { optional = true, version = "0.30.2", default-features = false, features = ["crossterm", "layout-cache"] }
+# No `cache` feature (statement caching is not used here) and no wasm backend;
+# `bundled` compiles the SQLite C sources once into target/.
+rusqlite = { version = "0.40.2", default-features = false, features = ["bundled"] }
+serde_json = "1.0.151"
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "net", "io-util", "time", "macros", "sync", "signal"] }
+
+
+[dev-dependencies]
+regex = "1.13.1"
+bytes = "1.12.1"
+flate2 = { version = "1.1.10", default-features = false, features = ["zlib-rs"] }
+http-body = "1.1.0"
+http-body-util = "0.1.5"
+hyper = { version = "1.11.1", features = ["http1", "client", "server"] }
+hyper-util = { version = "0.1.20", features = ["tokio"] }
+sha2 = "0.11.0"
+zstd = "0.14.0"
