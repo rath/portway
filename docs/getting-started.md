@@ -186,7 +186,9 @@ The standalone binary does not automatically load that location.
 
 Forwarding works even when your upstream does not understand compressed requests.
 To gain zstd/gzip and dictionary compression, the receiving side must advertise
-and decode them. If you control the service, Portway can supply that layer:
+and decode them. Hosted provider APIs do not, as the
+[FAQ](faq.md#does-portway-compress-requests-to-a-hosted-provider-api) explains.
+If you control the service, Portway can supply that layer:
 
 ```text
 Client → local Portway → HTTPS/authentication gateway → Portway receive → application

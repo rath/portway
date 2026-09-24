@@ -162,6 +162,11 @@ forwarded requests and are not recorded as such.
 
 ## Check compression
 
+To confirm that your build compresses at all, independent of your network and
+gateway, run `python3 scripts/bench.py` from the checkout. It starts a local
+sender, receiver, and origin and exits nonzero if dictionaries are not used;
+see [measure it yourself](../README.md#measure-it-yourself).
+
 Inspect sender statistics after sending application requests:
 
 ```sh

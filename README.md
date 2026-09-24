@@ -1,25 +1,99 @@
 # Portway
 
-**A compression-first HTTP forwarder.**
+**Send only what changed.** Portway is an HTTP forwarder for LLM agents whose
+context grows with every turn. With a Portway receiver on the other side, each
+request travels as a small delta against the one before it.
 
-Portway compresses request bodies with zstd or gzip, reuses upstream connections,
-and relays streaming responses. With a cooperating receiver, DCZ compresses a
-request against a previously acknowledged body, making repeated context cheap
-to send. No provider, model endpoint, credential, or price is built in.
+## Why
 
-The workspace contains `portway-core`, an embeddable Rust library, and `portway`,
-a CLI with recording, daemon control, reports, and an optional terminal dashboard.
+A coding agent resends its whole conversation on every turn: the system
+prompt, every earlier message, and every tool result. Turn N is turn N-1 plus
+a few kilobytes, yet the entire body is uploaded again. Across a session the
+upload volume grows with the square of the number of turns, and a slow or
+metered link pays for it on every request.
+
+Portway keeps the last request body that the receiver confirmed it stored and
+compresses the next request against it. What crosses the network is the new
+part, zstd-compressed, plus a 40-byte header naming the previous body.
+
+## Measured
+
+[`scripts/bench.py`](scripts/bench.py) sends one synthetic, append-only chat
+conversation through the real binaries three ways. Each turn appends 4 KiB.
+The table shows bytes on the wire per turn, after the first turn, for
+`python3 scripts/bench.py --turns 20 --context-kb N`:
+
+| Context at turn 1 | Uncompressed | zstd only | zstd + previous turn | Saved per turn | Saved over 20 turns |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 128 KiB | 175,405 | 41,962 | 1,104 | 99.4% | 98.5% |
+| 256 KiB | 306,503 | 69,608 | 1,058 | 99.7% | 98.7% |
+| 512 KiB | 570,438 | 122,089 | 1,034 | 99.8% | 98.8% |
+| 1 MiB | 1,094,276 | 222,937 | 1,048 | 99.9% | 98.9% |
+
+A turn costs about as much as what it added, however large the context has
+grown. The first request carries the whole context, zstd-compressed, to seed
+the dictionary; the last column includes it. The synthetic text is tuned so
+that plain zstd saves about as much as it does on this repository's own
+sources. Runs are reproducible byte for byte. To check your own traffic, see
+[measure it yourself](#measure-it-yourself).
+
+## Before you rely on it
+
+- **The other end must cooperate.** Portway compresses a request only when the
+  destination advertises support. It ships that side as `portway receive`,
+  which runs in front of a service you control, such as a self-hosted model
+  server or your own gateway. Any server implementing the
+  [protocol](docs/protocol.md) works too.
+- **Hosted APIs get plain forwarding.** Pointed directly at a provider's
+  public API, Portway sends requests uncompressed, because the provider
+  advertises no support. Model routing and recording still work.
+- **It saves bytes, not tokens.** The model receives the identical request and
+  bills the same tokens. Provider-side prompt caching cuts the cost of
+  processing a repeated prefix; Portway cuts the bytes and time of sending it.
+  The two complement each other.
+- **Dictionaries need warm-up.** The first request of a conversation travels
+  without a dictionary, and bodies under 32 KiB are never stored as one.
+  Dictionaries live only in memory on both sides and are kept apart per
+  credential.
+
+## How it works
+
+```text
+            agent             Portway sender                    portway receive           app
+turn 1   ─ 264 KB ─▶  zstd, 61 KB, X-Dict-Store: 1      ──▶  decode, keep body     ─ 264 KB ─▶
+                      ◀── 200, X-Dict-Stored: <SHA-256 of turn 1>
+turn 2   ─ 268 KB ─▶  dcz, 1 KB, names turn 1 by hash   ──▶  restore from turn 1   ─ 268 KB ─▶
+```
+
+- **Base selection.** The sender keeps up to eight confirmed bodies per route
+  and picks the one sharing the longest prefix with the new request. For an
+  append-only conversation, that is the previous turn.
+- **Frame format.** A dictionary-compressed request uses DCZ
+  (Dictionary-Compressed Zstandard) from
+  [RFC 9842](https://www.rfc-editor.org/rfc/rfc9842.html#section-5): a 40-byte
+  header carrying the dictionary's SHA-256, then a checksummed zstd frame.
+- **Confirmation.** The receiver answers with the SHA-256 of the bytes it
+  actually decoded and stored. The sender uses only a body whose hash matches.
+- **Recovery.** If the receiver has lost a dictionary, it answers 412 before
+  the application runs, and the sender resends once as plain zstd. Application
+  errors are never retried.
+
+No provider, model endpoint, credential, or price is built in. The workspace
+contains `portway-core`, an embeddable Rust library, and `portway`, a CLI with
+recording, daemon control, reports, and an optional terminal dashboard.
 
 ## Start here
 
 | You want to… | Read |
 | --- | --- |
 | Install Portway, create a TOML file, and send a first request | [Getting started](docs/getting-started.md) |
+| Put a compression receiver in front of a service you run | [Receiver setup](docs/getting-started.md#add-a-compression-receiver) |
+| Know whether Portway fits your setup | [FAQ](docs/faq.md) |
 | Register models, choose URLs, or adjust compression | [Configuration](docs/configuration.md) |
 | Send API keys or connect routes with different credentials | [Authentication](docs/authentication.md) |
 | Run in the background, use the dashboard, or diagnose errors | [Operations](docs/operations.md) |
-| Add request decompression in front of an existing service | [Receiver setup](docs/getting-started.md#add-a-compression-receiver) |
 | Implement a compatible receiver | [Request compression protocol](docs/protocol.md) |
+| Understand what Portway stores and how to report a vulnerability | [Security](SECURITY.md) |
 
 ## Install from this checkout
 
@@ -157,6 +231,37 @@ adapter supports Portway's streaming response type.
 Buildable examples: [forwarding](crates/portway-core/examples/embedded.rs) and
 [receiving](crates/portway-core/examples/receiving.rs).
 
+## Measure it yourself
+
+Reproduce the table above from a checkout. The script needs Python 3.9 or
+later and nothing outside its standard library:
+
+```sh
+cargo build --release --locked
+python3 scripts/bench.py
+python3 scripts/bench.py --context-kb 1024 --turns 20
+```
+
+It starts a local origin, a receiver, and one sender per configuration, then
+prints a per-turn table and a Markdown summary. Every restored body is checked
+against the SHA-256 of what was sent. The script exits nonzero when a request
+fails or a dictionary is never used, so CI runs it too. Pass `--keep` to keep
+the logs and databases; `--help` lists the payload options.
+
+For your own traffic, run an agent session through a sender whose destination
+has a receiver, then read the sender's counters:
+
+```sh
+curl --fail-with-body http://127.0.0.1:8787/__portway/stats
+portway --report --since 24h
+```
+
+In the stats, compare `body_bytes` with `wire_bytes`; `saved_bytes` is the
+difference, and `dict_hits` counts requests sent as a delta. The report shows
+the same comparison as `up raw`, `up wire`, and `saved`. See
+[checking compression](docs/operations.md#check-compression) if the numbers
+stay flat.
+
 ## Limits and verification
 
 Requests are buffered with a configurable 256MiB default limit; response bodies
@@ -171,5 +276,11 @@ bash scripts/check.sh
 Checks cover both default and TUI builds, formatting, clippy, real TCP forwarding,
 sender/receiver interoperability, retry safety, dictionary limits and isolation,
 stream cancellation, daemon lifecycle, recording, and dashboard rendering.
+
+## Contributing and security
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow and
+[SECURITY.md](SECURITY.md) for the threat model and private vulnerability
+reporting. Changes are listed in [CHANGELOG.md](CHANGELOG.md).
 
 Licensed under [MIT](LICENSE).
