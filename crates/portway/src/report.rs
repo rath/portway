@@ -6,7 +6,7 @@
 //! reads as "nothing recorded", not as an empty database.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use rusqlite::{Connection, params};
@@ -58,54 +58,147 @@ const TROUBLE_LOGS: &str = "SELECT ts_unix, level, message FROM logs
   WHERE ts_unix >= ?1 AND level >= 1
   ORDER BY ts_unix DESC LIMIT 20";
 
-/// Render the recorded window. `since` is the width measured back from now,
+/// The recorded window, read once and kept as data so that the text below
+/// and the web console's JSON are two views of the same numbers.
+#[derive(Debug, Clone)]
+pub struct Report {
+    pub db: PathBuf,
+    pub since: Duration,
+    pub model: Option<String>,
+    /// Unix seconds: the cutoff and the moment the window was read.
+    pub from: f64,
+    pub to: f64,
+    /// One row per model, busiest first; empty when nothing matched.
+    pub rows: Vec<Row>,
+    /// Every row summed, with percentiles over the pooled samples; `None`
+    /// exactly when `rows` is empty.
+    pub total: Option<Row>,
+    /// The most recent `TROUBLE` entries, oldest first, each with its line.
+    pub trouble: Vec<TroubleLine>,
+}
+
+/// One model's counts plus its timings. Timings are milliseconds, as stored.
+#[derive(Debug, Clone)]
+pub struct Row {
+    pub counts: Aggregate,
+    pub ttfb_p50: Option<f64>,
+    pub ttfb_p95: Option<f64>,
+    pub up_p50: Option<f64>,
+    pub up_p95: Option<f64>,
+    pub conn_mean: Option<f64>,
+}
+
+impl Row {
+    fn new(counts: Aggregate, ttfb: &[f64], upload: &[f64], connect: &[f64]) -> Self {
+        Row {
+            counts,
+            ttfb_p50: percentile(ttfb, 0.50),
+            ttfb_p95: percentile(ttfb, 0.95),
+            up_p50: percentile(upload, 0.50),
+            up_p95: percentile(upload, 0.95),
+            conn_mean: mean(connect),
+        }
+    }
+
+    /// The `saved` column: `-` without a body, else the whole percent saved.
+    pub fn saved(&self) -> String {
+        let Aggregate { body, wire, .. } = self.counts;
+        if body == 0 {
+            "-".to_string()
+        } else {
+            format!("{}%", (body - wire) * 100 / body)
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TroubleLine {
+    pub entry: Trouble,
+    pub text: String,
+}
+
+/// Read the recorded window. `since` is the width measured back from now,
 /// and `model` narrows the request tables to one upstream.
-pub fn render(db: &Path, since: Duration, model: Option<&str>) -> Result<String, String> {
+pub fn load(db: &Path, since: Duration, model: Option<&str>) -> Result<Report, String> {
     let Some(connection) = store::open_existing(db)? else {
         return Err(nothing_yet(db));
     };
-    let cutoff = logfmt::epoch() - since.as_secs_f64();
+    let to = logfmt::epoch();
+    let from = to - since.as_secs_f64();
 
-    let aggregates = load_aggregates(&connection, cutoff, model)?;
-    let ttfb = Samples::load(&connection, TTFB_SAMPLES, cutoff, model)?;
-    let upload = Samples::load(&connection, UPLOAD_SAMPLES, cutoff, model)?;
-    let connect = Samples::load(&connection, CONNECT_SAMPLES, cutoff, model)?;
+    let aggregates = load_aggregates(&connection, from, model)?;
+    let ttfb = Samples::load(&connection, TTFB_SAMPLES, from, model)?;
+    let upload = Samples::load(&connection, UPLOAD_SAMPLES, from, model)?;
+    let connect = Samples::load(&connection, CONNECT_SAMPLES, from, model)?;
 
+    let total = (!aggregates.is_empty()).then(|| {
+        Row::new(
+            totals(&aggregates),
+            &ttfb.pooled,
+            &upload.pooled,
+            &connect.pooled,
+        )
+    });
+    let rows = aggregates
+        .into_iter()
+        .map(|counts| {
+            let name = counts.model.clone();
+            Row::new(counts, ttfb.of(&name), upload.of(&name), connect.of(&name))
+        })
+        .collect();
+    Ok(Report {
+        db: db.to_path_buf(),
+        since,
+        model: model.map(str::to_string),
+        from,
+        to,
+        rows,
+        total,
+        trouble: trouble(&connection, from, model)?,
+    })
+}
+
+/// The `--report` text.
+pub fn render(db: &Path, since: Duration, model: Option<&str>) -> Result<String, String> {
+    load(db, since, model).map(|report| render_text(&report))
+}
+
+pub fn render_text(report: &Report) -> String {
     let mut out = String::new();
-    out.push_str(&format!("portway — {}\n", db.display()));
+    out.push_str(&format!("portway — {}\n", report.db.display()));
     out.push_str(&format!(
         "window  {} .. {}  ({}, {})\n",
-        logfmt::datetime(cutoff),
-        logfmt::datetime(logfmt::epoch()),
-        logfmt::span(since),
-        model.unwrap_or("all models"),
+        logfmt::datetime(report.from),
+        logfmt::datetime(report.to),
+        logfmt::span(report.since),
+        report.model.as_deref().unwrap_or("all models"),
     ));
 
-    if aggregates.is_empty() {
-        out.push('\n');
-        out.push_str(&match model {
+    out.push('\n');
+    match &report.total {
+        None => out.push_str(&match &report.model {
             Some(name) => format!("no requests for model {name} in this window\n"),
             None => "no requests recorded in this window\n".to_string(),
-        });
-    } else {
-        out.push('\n');
-        out.push_str(&volume_table(&aggregates));
-        out.push('\n');
-        out.push_str(&timing_table(&aggregates, [&ttfb, &upload, &connect]));
+        }),
+        Some(total) => {
+            let rows: Vec<&Row> = report.rows.iter().chain([total]).collect();
+            out.push_str(&volume_table(&rows));
+            out.push('\n');
+            out.push_str(&timing_table(&rows));
+        }
     }
 
     out.push('\n');
-    let trouble = trouble(&connection, cutoff, model)?;
     out.push_str(&format!("trouble (last {TROUBLE} in the window)\n"));
-    if trouble.is_empty() {
+    if report.trouble.is_empty() {
         out.push_str("  none\n");
     } else {
-        for line in trouble {
-            out.push_str(&line);
+        for line in &report.trouble {
+            out.push_str(&line.text);
             out.push('\n');
         }
     }
-    Ok(out)
+    out
 }
 
 fn nothing_yet(db: &Path) -> String {
@@ -116,19 +209,19 @@ fn nothing_yet(db: &Path) -> String {
 }
 
 #[derive(Debug, Clone)]
-struct Aggregate {
-    model: String,
-    requests: i64,
-    ok: i64,
-    redirect: i64,
-    client: i64,
-    server: i64,
-    truncated: i64,
-    reused: i64,
-    body: i64,
-    wire: i64,
-    received: i64,
-    received_wire: i64,
+pub struct Aggregate {
+    pub model: String,
+    pub requests: i64,
+    pub ok: i64,
+    pub redirect: i64,
+    pub client: i64,
+    pub server: i64,
+    pub truncated: i64,
+    pub reused: i64,
+    pub body: i64,
+    pub wire: i64,
+    pub received: i64,
+    pub received_wire: i64,
 }
 
 fn load_aggregates(
@@ -211,14 +304,11 @@ fn mean(samples: &[f64]) -> Option<f64> {
     Some(samples.iter().sum::<f64>() / samples.len() as f64)
 }
 
-fn volume_table(aggregates: &[Aggregate]) -> String {
+fn volume_table(rows: &[&Row]) -> String {
     let header = [
         "model", "reqs", "2xx", "3xx", "4xx", "5xx", "trunc", "reused",
     ];
-    let mut rows: Vec<Vec<String>> = aggregates.iter().map(volume_row).collect();
-
-    let total = totals(aggregates);
-    rows.push(volume_row(&total));
+    let rows: Vec<Vec<String>> = rows.iter().map(|row| volume_row(&row.counts)).collect();
     table(&header, &rows)
 }
 
@@ -267,7 +357,7 @@ fn totals(aggregates: &[Aggregate]) -> Aggregate {
     total
 }
 
-fn timing_table(aggregates: &[Aggregate], samples: [&Samples; 3]) -> String {
+fn timing_table(rows: &[&Row]) -> String {
     let header = [
         "model",
         "up raw",
@@ -280,58 +370,23 @@ fn timing_table(aggregates: &[Aggregate], samples: [&Samples; 3]) -> String {
         "up p95",
         "conn mean",
     ];
-    let [ttfb, upload, connect] = samples;
-
-    let mut rows: Vec<Vec<String>> = Vec::with_capacity(aggregates.len() + 1);
-    for row in aggregates {
-        rows.push(timing_row(
-            &row.model,
-            row.body,
-            row.wire,
-            row.received,
-            ttfb.of(&row.model),
-            upload.of(&row.model),
-            connect.of(&row.model),
-        ));
-    }
-    let total = totals(aggregates);
-    rows.push(timing_row(
-        "total",
-        total.body,
-        total.wire,
-        total.received,
-        &ttfb.pooled,
-        &upload.pooled,
-        &connect.pooled,
-    ));
+    let rows: Vec<Vec<String>> = rows.iter().map(|row| timing_row(row)).collect();
     table(&header, &rows)
 }
 
-fn timing_row(
-    model: &str,
-    body: i64,
-    wire: i64,
-    received: i64,
-    ttfb: &[f64],
-    upload: &[f64],
-    connect: &[f64],
-) -> Vec<String> {
-    let saved = if body == 0 {
-        "-".to_string()
-    } else {
-        format!("{}%", (body - wire) * 100 / body)
-    };
+fn timing_row(row: &Row) -> Vec<String> {
+    let counts = &row.counts;
     [
-        model.to_string(),
-        logfmt::human(body as u64),
-        logfmt::human(wire as u64),
-        saved,
-        logfmt::human(received as u64),
-        ms(percentile(ttfb, 0.50)),
-        ms(percentile(ttfb, 0.95)),
-        ms(percentile(upload, 0.50)),
-        ms(percentile(upload, 0.95)),
-        ms(mean(connect)),
+        counts.model.clone(),
+        logfmt::human(counts.body as u64),
+        logfmt::human(counts.wire as u64),
+        row.saved(),
+        logfmt::human(counts.received as u64),
+        ms(row.ttfb_p50),
+        ms(row.ttfb_p95),
+        ms(row.up_p50),
+        ms(row.up_p95),
+        ms(row.conn_mean),
     ]
     .to_vec()
 }
@@ -347,7 +402,8 @@ fn ms(value: Option<f64>) -> String {
 
 /// A line the report has to explain: a request that failed or was cut short,
 /// or a log record WARNING and up.
-enum Trouble {
+#[derive(Debug, Clone)]
+pub enum Trouble {
     Request {
         ts: f64,
         status: i64,
@@ -365,7 +421,7 @@ enum Trouble {
 }
 
 impl Trouble {
-    fn ts(&self) -> f64 {
+    pub fn ts(&self) -> f64 {
         match self {
             Trouble::Request { ts, .. } | Trouble::Log { ts, .. } => *ts,
         }
@@ -416,7 +472,7 @@ fn trouble(
     connection: &Connection,
     cutoff: f64,
     model: Option<&str>,
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<TroubleLine>, String> {
     let mut entries: Vec<Trouble> = Vec::new();
 
     let mut statement = connection.prepare(TROUBLE_REQUESTS).map_err(db_error)?;
@@ -452,9 +508,15 @@ fn trouble(
     }
 
     entries.sort_by(|a, b| a.ts().total_cmp(&b.ts()));
-    let entries = &entries[entries.len().saturating_sub(TROUBLE)..];
+    let entries = entries.split_off(entries.len().saturating_sub(TROUBLE));
     let width = entries.iter().map(Trouble::model_width).max().unwrap_or(0);
-    Ok(entries.iter().map(|entry| entry.render(width)).collect())
+    Ok(entries
+        .into_iter()
+        .map(|entry| TroubleLine {
+            text: entry.render(width),
+            entry,
+        })
+        .collect())
 }
 
 /// Left-aligns the first column, right-aligns every other cell, two spaces
