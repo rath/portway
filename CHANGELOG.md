@@ -49,7 +49,9 @@ version may contain breaking changes.
   `--tui`, or is hosted by the daemon with `--daemon --web`; `--status` prints
   its address. Access needs a per-run token exchanged for a session cookie. A
   foreground `--web` opens itself in the default browser with a one-time
-  launch code; `--no-open` only prints the link.
+  launch code; `--no-open` only prints the link. Bound to a wildcard, it
+  prints a link per interface address; `--web-allow-host` names the host
+  names it answers to besides `localhost` and IP addresses.
 - `portway_core::flights`: a registry of requests counted but not yet relayed,
   on `Telemetry::flights()`.
 

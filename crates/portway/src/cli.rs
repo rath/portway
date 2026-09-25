@@ -67,6 +67,17 @@ pub struct Args {
     #[cfg(feature = "web")]
     #[arg(long, value_name = "PORT", default_value_t = crate::web::DEFAULT_PORT, requires = "web")]
     pub web_port: u16,
+    /// A name the console answers to besides localhost and IP addresses, such
+    /// as the machine's host name; repeat or separate with commas.
+    #[cfg(feature = "web")]
+    #[arg(
+        long,
+        value_name = "NAME",
+        value_delimiter = ',',
+        value_parser = crate::web::address::host_name,
+        requires = "web"
+    )]
+    pub web_allow_host: Vec<String>,
     /// Print the console's link without opening a browser.
     #[cfg(feature = "web")]
     #[arg(long, requires = "web")]
@@ -190,6 +201,20 @@ mod tests {
             assert!(Args::try_parse_from(["portway", "--web-port", "1"]).is_err());
             assert!(Args::parse_from(["portway", "--web", "--no-open"]).no_open);
             assert!(!Args::parse_from(["portway", "--web"]).no_open);
+            let args = Args::parse_from([
+                "portway",
+                "--web",
+                "--web-allow-host",
+                "Sender-Host,box.lan",
+                "--web-allow-host",
+                "other",
+            ]);
+            assert_eq!(args.web_allow_host, ["sender-host", "box.lan", "other"]);
+            assert!(
+                Args::try_parse_from(["portway", "--web", "--web-allow-host", "sender-host:8790"])
+                    .is_err()
+            );
+            assert!(Args::try_parse_from(["portway", "--web-allow-host", "sender-host"]).is_err());
             assert!(Args::try_parse_from(["portway", "--no-open"]).is_err());
             #[cfg(feature = "tui")]
             assert!(Args::try_parse_from(["portway", "--web", "--tui"]).is_err());

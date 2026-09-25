@@ -115,14 +115,24 @@ impl Daemon {
         self.ready_with(None);
     }
 
-    /// The same, handing the launcher the web console's address to print:
-    /// the one terminal that may see its token is the one that started it.
-    pub fn ready_with(&self, console: Option<&str>) {
+    /// The same, handing the launcher the web console's token and addresses
+    /// to print: the one terminal that may see the token is the one that
+    /// started it. The token goes once, so the addresses a wildcard lists
+    /// still fit the one read the launcher makes.
+    pub fn ready_with(&self, console: Option<(&str, &[String])>) {
         if let Some(fd) = self.ready.replace(None) {
-            let message = match console {
-                Some(url) => format!("k\n{url}"),
-                None => "k".to_string(),
-            };
+            let mut message = "k".to_string();
+            if let Some((token, urls)) = console {
+                message.push('\n');
+                message.push_str(token);
+                for url in urls {
+                    if message.len() + 1 + url.len() > REASON_MAX {
+                        break;
+                    }
+                    message.push('\n');
+                    message.push_str(url);
+                }
+            }
             let bytes = message.as_bytes();
             unsafe { libc::write(fd, bytes.as_ptr().cast(), bytes.len().min(REASON_MAX)) };
             unsafe { libc::close(fd) };
@@ -297,7 +307,7 @@ fn report(fd: RawFd, pid: i32, log: &Path) -> ! {
                 "portway: daemon started (pid {pid}), logging to {}",
                 log.display()
             );
-            if let Some(url) = console {
+            for url in console {
                 println!("portway: console at {url}");
             }
             std::process::exit(0);
@@ -323,8 +333,8 @@ fn report(fd: RawFd, pid: i32, log: &Path) -> ! {
 }
 
 enum Ready {
-    /// Up, with the web console's address when it serves one.
-    Started(Option<String>),
+    /// Up, with the web console's addresses when it serves one.
+    Started(Vec<String>),
     /// The daemon said why it could not start.
     Refused(String),
     /// The pipe closed with nothing in it: it died before saying anything.
@@ -367,9 +377,12 @@ fn wait_ready(fd: RawFd) -> Ready {
         let text = String::from_utf8_lossy(&buffer[..read as usize])
             .trim()
             .to_string();
-        return match text.split_once('\n') {
-            _ if text == "k" => Ready::Started(None),
-            Some(("k", url)) => Ready::Started(Some(url.trim().to_string())),
+        let mut lines = text.lines().map(str::trim);
+        return match lines.next() {
+            Some("k") => {
+                let token = lines.next().unwrap_or_default().to_owned();
+                Ready::Started(lines.map(|url| format!("{url}#token={token}")).collect())
+            }
             _ => Ready::Refused(text),
         };
     }

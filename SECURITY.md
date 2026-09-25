@@ -107,8 +107,9 @@ request and stop or reload the forwarder, so it is guarded even on loopback:
   separate code, not the token. It opens one session and expires after two
   minutes; if someone else uses it first, the page asks for the printed link.
 - **Requests from other sites are refused.** The `Host` header must name the
-  console's port on `localhost` or an IP literal, which defeats DNS rebinding;
-  a present `Origin` must be the console's own; every `POST` must carry an
+  console's port on `localhost`, an IP literal, or a name the operator allowed
+  with `--web-allow-host` (or gave as `--web-host`), which defeats DNS
+  rebinding as long as those names resolve only where you expect; a present `Origin` must be the console's own; every `POST` must carry an
   `x-portway-console` header, which a cross-site form cannot send.
 - **The page cannot be turned against itself.** It is served with a
   Content-Security-Policy that allows only its own embedded files, no framing,

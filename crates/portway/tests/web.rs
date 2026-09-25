@@ -473,6 +473,7 @@ async fn a_daemon_hosts_its_console_and_another_attaches() {
         .arg("--data-dir")
         .arg(&dir)
         .args(["--daemon", "--web", "--web-port", "0"])
+        .args(["--web-allow-host", "Portway-Box."])
         .output()
         .unwrap();
     let _daemon = StopDaemon(dir.clone());
@@ -498,8 +499,25 @@ async fn a_daemon_hosts_its_console_and_another_attaches() {
         status.contains(&format!("console at {}", console.url)),
         "{status}"
     );
+    // An allowed name is printed as a second link, and its door opens.
+    let named = format!(
+        "console at http://portway-box:{}/#token={}",
+        console.port, console.token
+    );
+    assert!(out.contains(&named), "{out}");
+    assert!(status.contains(&named), "{status}");
 
     let mut page = Page::new(console.port);
+    let host = format!("portway-box:{}", console.port);
+    let named = page
+        .send("GET", "/api/health", &[("host", host.as_str())], "")
+        .await;
+    assert_eq!(named.status, StatusCode::OK);
+    let host = format!("other-box:{}", console.port);
+    let other = page
+        .send("GET", "/api/health", &[("host", host.as_str())], "")
+        .await;
+    assert_eq!(other.status, StatusCode::FORBIDDEN);
     page.sign_in(&console.token).await;
     let snapshot = page.get("/api/snapshot").await.json();
     assert_eq!(snapshot["header"]["mode"], "daemon");

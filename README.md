@@ -196,7 +196,9 @@ A dashboard attached to a daemon can be closed without stopping forwarding.
 the requests still in flight, history, search and export, reload and stop
 controls, and a choice of themes; `--daemon --web` hosts it in the daemon. A
 foreground `--web` opens it in the default browser; with `--no-open`, or from a
-daemon, open the printed link, which carries the run's token. See
+daemon, open the printed link, which carries the run's token. With
+`--web-host 0.0.0.0` it prints a link for each of the machine's addresses and
+for each name given with `--web-allow-host`. See
 [the web console](docs/operations.md#optional-web-console).
 Use `--reload` to reread routes, upstream URLs, and compression settings without
 dropping the listener. Daemon mode does not install a boot or login service.

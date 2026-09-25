@@ -185,6 +185,7 @@ async fn run(
                 let options = web::Options {
                     host: args.web_host.clone(),
                     port: args.web_port,
+                    allow: args.web_allow_host.clone(),
                     feed: web::Feed::Live(Arc::clone(&router_state)),
                     events,
                     header: web::Header {
@@ -217,15 +218,18 @@ async fn run(
             None => None,
         };
         #[cfg(feature = "web")]
-        let console_url = console.as_ref().map(|console| {
-            logfmt::info(&format!("console at {}", console.public_url));
-            console.url.clone()
-        });
+        if let Some(console) = &console {
+            logfmt::info(&format!("console at {}", console.public_urls.join(", ")));
+        }
+        #[cfg(feature = "web")]
+        let ready = console
+            .as_ref()
+            .map(|console| (console.token.as_str(), console.public_urls.as_slice()));
         #[cfg(not(feature = "web"))]
-        let console_url: Option<String> = None;
+        let ready = None;
         match daemon {
             Some(daemon) => {
-                daemon.ready_with(console_url.as_deref());
+                daemon.ready_with(ready);
                 let log = daemon.log_path().to_path_buf();
                 tokio::spawn(reload_on_hangup(
                     args.clone(),
@@ -235,20 +239,24 @@ async fn run(
             }
             // The token goes to the terminal that started this, never to
             // the log: whoever reads the log has not been handed the page.
+            #[cfg(feature = "web")]
             None => {
-                if let Some(url) = &console_url {
-                    eprintln!("portway: console at {url}");
-                }
-                #[cfg(feature = "web")]
-                if let Some(console) = console.as_ref().filter(|_| !args.no_open) {
-                    web::launch::open(&console.launch_url);
+                if let Some(console) = &console {
+                    for url in &console.urls {
+                        eprintln!("portway: console at {url}");
+                    }
+                    if !args.no_open {
+                        web::launch::open(&console.launch_url);
+                    }
                 }
             }
+            #[cfg(not(feature = "web"))]
+            None => {}
         }
         router.negotiate_all().await;
         // A foreground console has no log to reopen: a hangup is the terminal
         // going away, and ends the process the orderly way.
-        let hangup = console_url.is_some() && daemon.is_none();
+        let hangup = ready.is_some() && daemon.is_none();
         tokio::select! {
             () = serving(listener, router_state, decoder) => {}
             () = terminate() => {
@@ -361,11 +369,15 @@ fn watching(
 }
 
 /// `--status`, plus where the console is while one is running on `dir`.
+#[cfg(feature = "web")]
+fn with_console(status: String, dir: &std::path::Path) -> String {
+    web::console_urls(dir).iter().fold(status, |status, url| {
+        format!("{status}\nportway: console at {url}")
+    })
+}
+
+#[cfg(not(feature = "web"))]
 fn with_console(status: String, _dir: &std::path::Path) -> String {
-    #[cfg(feature = "web")]
-    if let Some(url) = web::console_url(_dir) {
-        return format!("{status}\nportway: console at {url}");
-    }
     status
 }
 
@@ -400,6 +412,7 @@ fn web_watching(
         let console = web::Console::start(web::Options {
             host: args.web_host.clone(),
             port: args.web_port,
+            allow: args.web_allow_host.clone(),
             feed: web::Feed::Recorded(watch.window()),
             events: receiver,
             header: web::Header {
@@ -416,8 +429,10 @@ fn web_watching(
             dir: dir.to_path_buf(),
         })
         .await?;
-        logfmt::info(&format!("console at {}", console.public_url));
-        eprintln!("portway: console at {}", console.url);
+        logfmt::info(&format!("console at {}", console.public_urls.join(", ")));
+        for url in &console.urls {
+            eprintln!("portway: console at {url}");
+        }
         if !args.no_open {
             web::launch::open(&console.launch_url);
         }

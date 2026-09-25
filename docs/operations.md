@@ -155,9 +155,25 @@ local users. Like `--tui`, a console started on a port another Portway already s
 attaches to that instance's data directory instead of starting a forwarder,
 and a bare `portway --web` needs no upstream configuration to attach.
 
+To reach the console from another machine, bind it to every interface with
+`--web-host 0.0.0.0` (or `::`). The console then prints one link per address:
+loopback first, then each address of an interface that is up (link-local ones
+left out), then each name given with `--web-allow-host`. The console answers
+only to `localhost`, IP addresses, a `--web-host` that is a name, and the names
+`--web-allow-host` lists (repeat it or separate names with commas), such as the
+machine's host name or its Tailscale MagicDNS name; any other name in the
+`Host` header is refused, which is what keeps DNS rebinding out.
+
+```sh
+portway --daemon --web --web-host 0.0.0.0 --web-allow-host sender-host
+# portway: console at http://127.0.0.1:8790/#token=…
+# portway: console at http://192.168.0.10:8790/#token=…
+# portway: console at http://sender-host:8790/#token=…
+```
+
 `--daemon --web` hosts the console in the daemon without opening a browser. The
-launcher prints the link next to the log path, `--status` prints it again while the console runs, and it
-is kept in `portway.web` (mode 0600) in the data directory. The log only ever
+launcher prints the links next to the log path, `--status` prints them again while the console runs, and they
+are kept in `portway.web` (mode 0600) in the data directory. The log only ever
 contains the address without the token.
 
 The console shows everything the terminal dashboard shows, computed by the
@@ -179,7 +195,7 @@ The keys match the terminal dashboard (`q` asks before stopping; a second `q`
 confirms), with `/` for search, `?` for the key list and ⌘K or Ctrl-K for every
 command. Desktop notifications for trouble in a background tab are opt-in.
 
-`--web`, `--web-host`, `--web-port` and `--no-open` are absent in builds without
+`--web`, `--web-host`, `--web-port`, `--web-allow-host` and `--no-open` are absent in builds without
 the `web` feature. See [security](../SECURITY.md#web-console) before binding the
 console to anything other than loopback.
 

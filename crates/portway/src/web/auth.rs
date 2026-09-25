@@ -10,8 +10,8 @@
 //! for one session and only for two minutes.
 //!
 //! Three more checks close the ways a hostile page could reach a loopback
-//! listener: the `Host` header must name this port on `localhost` or an IP
-//! literal (DNS rebinding), a present `Origin` must be this console's own, and
+//! listener: the `Host` header must name this port on `localhost`, an IP
+//! literal or a name the operator allowed (DNS rebinding), a present `Origin` must be this console's own, and
 //! every POST must carry a custom header a cross-site form cannot set and a
 //! cross-site script cannot send without a preflight nobody answers.
 
@@ -63,10 +63,12 @@ pub struct Auth {
     /// The code itself, for the address the browser is handed.
     launch_code: String,
     port: u16,
+    /// Names allowed besides `localhost`, normalized (see `address`).
+    names: Vec<String>,
 }
 
 impl Auth {
-    pub fn new(port: u16) -> io::Result<Self> {
+    pub fn new(port: u16, names: Vec<String>) -> io::Result<Self> {
         let launch_code = random_hex(32)?;
         Ok(Auth {
             token: random_hex(32)?,
@@ -74,6 +76,7 @@ impl Auth {
             launch: Mutex::new(Some((launch_code.clone(), Instant::now()))),
             launch_code,
             port,
+            names,
         })
     }
 
@@ -136,14 +139,18 @@ impl Auth {
             .any(|(key, value)| key == name && ct_eq(value.as_bytes(), self.session.as_bytes()))
     }
 
-    /// `localhost` or an IP literal, on exactly this port. A name that merely
-    /// resolves here is refused: that is what a rebinding attack looks like.
+    /// `localhost`, an IP literal or an allowed name, on exactly this port. A
+    /// name that merely resolves here is refused: that is what a rebinding
+    /// attack looks like.
     pub fn host_allowed(&self, host: Option<&str>) -> bool {
         let Some((name, port)) = host.and_then(split_host) else {
             return false;
         };
-        port == self.port
-            && (name.eq_ignore_ascii_case("localhost") || name.parse::<IpAddr>().is_ok())
+        if port != self.port {
+            return false;
+        }
+        let name = super::address::normalize(name);
+        name == "localhost" || name.parse::<IpAddr>().is_ok() || self.names.contains(&name)
     }
 
     /// No `Origin` is a client that is not a browser page; one that is there
@@ -184,7 +191,7 @@ mod tests {
 
     #[test]
     fn only_this_port_on_a_literal_or_localhost_is_served() {
-        let auth = Auth::new(8790).unwrap();
+        let auth = Auth::new(8790, Vec::new()).unwrap();
         for good in [
             "127.0.0.1:8790",
             "localhost:8790",
@@ -206,8 +213,19 @@ mod tests {
     }
 
     #[test]
+    fn an_allowed_name_is_served_on_this_port_only() {
+        let auth = Auth::new(8790, vec!["sender-host".to_string()]).unwrap();
+        for good in ["sender-host:8790", "SENDER-HOST:8790", "sender-host.:8790"] {
+            assert!(auth.host_allowed(Some(good)), "{good}");
+        }
+        for bad in ["sender-host:8791", "sender-host.lan:8790", "evil.example:8790"] {
+            assert!(!auth.host_allowed(Some(bad)), "{bad}");
+        }
+    }
+
+    #[test]
     fn a_session_is_the_cookie_value_not_the_token() {
-        let auth = Auth::new(8790).unwrap();
+        let auth = Auth::new(8790, Vec::new()).unwrap();
         let cookie = auth.set_cookie();
         assert!(cookie.contains("HttpOnly") && cookie.contains("SameSite=Strict"));
         let pair = cookie.split(';').next().unwrap();
@@ -220,7 +238,7 @@ mod tests {
 
     #[test]
     fn the_launch_code_opens_one_session_while_fresh() {
-        let auth = Auth::new(8790).unwrap();
+        let auth = Auth::new(8790, Vec::new()).unwrap();
         let code = auth.launch_code().to_owned();
         assert_ne!(code, auth.token());
         assert!(!auth.token_ok(&code), "the code is not the token");
@@ -230,7 +248,7 @@ mod tests {
         assert!(!auth.launch_ok(&code), "used once, gone");
         assert!(auth.token_ok(auth.token()), "the token still works");
 
-        let stale = Auth::new(8790).unwrap();
+        let stale = Auth::new(8790, Vec::new()).unwrap();
         let code = stale.launch_code().to_owned();
         let later = Instant::now() + LAUNCH_TTL + Duration::from_secs(1);
         assert!(!stale.launch_ok_at(&code, later));
@@ -239,7 +257,7 @@ mod tests {
 
     #[test]
     fn a_foreign_origin_is_refused() {
-        let auth = Auth::new(8790).unwrap();
+        let auth = Auth::new(8790, Vec::new()).unwrap();
         assert!(auth.origin_allowed(None, "127.0.0.1:8790"));
         assert!(auth.origin_allowed(Some("http://127.0.0.1:8790"), "127.0.0.1:8790"));
         assert!(!auth.origin_allowed(Some("http://evil.example"), "127.0.0.1:8790"));
