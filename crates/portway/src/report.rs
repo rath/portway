@@ -45,9 +45,15 @@ const UPLOAD_SAMPLES: &str = "SELECT model, upload_ms FROM requests
   WHERE ts_unix >= ?1 AND (?2 IS NULL OR model = ?2) AND upload_ms IS NOT NULL
   ORDER BY model, upload_ms";
 
-const CONNECT_SAMPLES: &str = "SELECT model, dns_ms + tcp_ms + tls_ms FROM requests
-  WHERE ts_unix >= ?1 AND (?2 IS NULL OR model = ?2) AND dns_ms IS NOT NULL
-  ORDER BY model, dns_ms";
+/// A fresh dial's handshake, the way the log line adds it up: a phase that
+/// did not happen (no TLS to a plain-HTTP upstream) counts as zero, and a
+/// pooled connection, with none of the three, is not a sample at all.
+const CONNECT_SAMPLES: &str = "SELECT model,
+    COALESCE(dns_ms, 0) + COALESCE(tcp_ms, 0) + COALESCE(tls_ms, 0)
+  FROM requests
+  WHERE ts_unix >= ?1 AND (?2 IS NULL OR model = ?2)
+    AND NOT (dns_ms IS NULL AND tcp_ms IS NULL AND tls_ms IS NULL)
+  ORDER BY model";
 
 const TROUBLE_REQUESTS: &str = "SELECT ts_unix, status, model, method, path, received, complete
   FROM requests
@@ -738,6 +744,25 @@ trouble (last 20 in the window)
 <when>  500  model-zeta  POST /v1/chat/completions  (truncated after 1KB)
 <when>  WARNING  /health.request_encodings missing: api.example.test
 ";
+
+    /// A plain-HTTP upstream is dialed without TLS: the connect time is dns
+    /// plus tcp, not a NULL that fails the whole report.
+    #[test]
+    fn a_dial_without_tls_still_has_a_connect_time() {
+        let dir = dir("plain-http");
+        let store = store::spawn(&dir, 0).unwrap();
+        let mut plain = record("model-plain", 200, true);
+        plain.tls = None;
+        store
+            .sender()
+            .send(Event::Request(Arc::new(plain)))
+            .unwrap();
+        store.shutdown();
+        let text = render(&dir.join(store::DB_FILE), Duration::from_secs(86_400), None).unwrap();
+        // The second row the model has is the timing table's.
+        let timing = &rows(&text, "model-plain")[1];
+        assert_eq!(timing.last().unwrap(), "30ms", "\n{text}");
+    }
 
     #[test]
     fn a_model_filter_leaves_one_row_plus_the_total() {
