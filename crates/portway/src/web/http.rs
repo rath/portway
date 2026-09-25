@@ -142,15 +142,18 @@ pub async fn handle(app: Arc<App>, request: Request<Incoming>) -> Response<WebBo
             }
         }
         (&Method::GET, "/api/stream") => {
+            // An EventSource reconnects to the URL it was opened with and
+            // says how far it got in `Last-Event-ID`: the newer of the two.
+            let last_id = request
+                .headers()
+                .get("last-event-id")
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.parse::<u64>().ok());
             let after = query(&request, "after")
-                .or_else(|| {
-                    request
-                        .headers()
-                        .get("last-event-id")
-                        .and_then(|value| value.to_str().ok())
-                        .map(str::to_owned)
-                })
-                .and_then(|value| value.parse().ok())
+                .and_then(|value| value.parse::<u64>().ok())
+                .into_iter()
+                .chain(last_id)
+                .max()
                 .unwrap_or(0);
             stream(&app, after)
         }
