@@ -14,6 +14,9 @@ You need:
 - A C compiler and CMake, for bundled SQLite, zstd, and the TLS crypto
   provider.
 - Python 3.9 or later, only for the benchmark script.
+- Node.js 18 or later, only for the web console's JavaScript tests. There are
+  no packages to install; `check.sh` skips them with a warning when `node` is
+  missing and fails without it in CI.
 
 Build and run everything the CI runs:
 
@@ -26,7 +29,8 @@ bash scripts/check.sh
 | Path | Contents |
 | --- | --- |
 | `crates/portway-core` | The embeddable library: forwarding, compression negotiation, dictionaries, the receiver, and telemetry |
-| `crates/portway` | The `portway` CLI: configuration, daemon control, SQLite recording, reports, and the optional `tui` dashboard |
+| `crates/portway` | The `portway` CLI: configuration, daemon control, SQLite recording, reports, the optional `tui` dashboard and the optional `web` console server |
+| `crates/portway/webui` | The web console's page: `static/` is embedded in the binary as is (no build step), `test/` runs under `node --test` |
 | `crates/portway-core/tests`, `crates/portway/tests` | Integration tests over real TCP, including sender and receiver interoperability |
 | `crates/portway-core/examples` | Buildable embedding examples |
 | `examples/` | Annotated TOML files referenced by the documentation |
@@ -39,11 +43,18 @@ bash scripts/check.sh
 
 1. `cargo fmt --check`.
 2. Tests and `clippy -D warnings` for the default build.
-3. Tests and `clippy -D warnings` with the `tui` feature.
+3. Tests and `clippy -D warnings` with the `tui`, `web`, and `tui,web`
+   features.
 4. Documentation tests.
-5. Two dependency boundary checks. `portway-core` must never depend on `clap`,
-   `rusqlite`, `ratatui`, or `crossterm`, and the default CLI build must never
-   depend on `ratatui` or `crossterm`.
+5. Three dependency boundary checks. `portway-core` must never depend on
+   `clap`, `rusqlite`, `ratatui`, or `crossterm`, and neither the default CLI
+   build nor the `web` build may depend on `ratatui` or `crossterm`.
+6. The web console's JavaScript tests, `node --test` in `crates/portway/webui`.
+   They assert the formatters against `test/fixtures/format.json`, which the
+   Rust tests assert too, and every theme's contrast.
+
+A file added under `crates/portway/webui/static` also needs a line in
+`crates/portway/src/web/assets.rs`; a test compares the table to the directory.
 
 Behavior changes need a test. Prefer integration tests that exercise real
 sockets over mocks of Portway's own types.

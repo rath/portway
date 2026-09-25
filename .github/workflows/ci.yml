@@ -26,7 +26,7 @@ jobs:
       matrix:
         # macOS minutes cost about ten times Linux ones, so pull requests run on Linux only.
         os: ${{ fromJSON(github.event_name == 'push' && '["ubuntu-latest", "macos-latest"]' || '["ubuntu-latest"]') }}
-    # A cold cache builds bundled SQLite, zstd and aws-lc for two feature sets.
+    # A cold cache builds bundled SQLite, zstd and aws-lc for four feature sets.
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
@@ -34,11 +34,16 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      # The web console's JavaScript tests; no packages are installed.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
       - name: Toolchain versions
         run: |
           rustc --version
           cargo --version
           cmake --version | head -n 1
+          node --version
       - name: scripts/check.sh
         run: bash scripts/check.sh
 
