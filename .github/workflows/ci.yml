@@ -24,7 +24,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        # macOS minutes cost about ten times Linux ones, so pull requests run on Linux only.
+        os: ${{ fromJSON(github.event_name == 'push' && '["ubuntu-latest", "macos-latest"]' || '["ubuntu-latest"]') }}
     # A cold cache builds bundled SQLite, zstd and aws-lc for two feature sets.
     timeout-minutes: 60
     steps:
