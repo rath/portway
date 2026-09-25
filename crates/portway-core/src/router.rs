@@ -155,11 +155,16 @@ impl Router {
                     .map(str::to_owned);
             }
             let Some(fwd) = model.as_deref().and_then(|m| self.get(m)) else {
-                return invalid_request(
-                    StatusCode::BAD_REQUEST,
-                    &format!("Specify a supported model: {}", self.names().join(", ")),
-                    Some("model"),
-                );
+                // Naming the requested model — or its absence — makes the 400
+                // actionable without re-reading the request.
+                let message = match model.as_deref() {
+                    Some(requested) => format!(
+                        "Unknown model {requested:?}. Specify a supported model: {}",
+                        self.names().join(", ")
+                    ),
+                    None => format!("Specify a supported model: {}", self.names().join(", ")),
+                };
+                return invalid_request(StatusCode::BAD_REQUEST, &message, Some("model"));
             };
             fwd
         };

@@ -36,6 +36,12 @@ version may contain breaking changes.
 - A FAQ, a security policy, contribution guidelines, and continuous
   integration on Linux and macOS.
 
+### Changed
+
+- A request for an unconfigured model in router mode is still a 400 listing
+  the supported models, but the message now names the model the request
+  asked for when one was given.
+
 ### Security
 
 - The request database is created with mode 0600, and an existing database is

@@ -328,6 +328,32 @@ async fn the_router_rejects_an_invalid_or_missing_model_without_forwarding() {
     }
 }
 
+/// The 400 says which name was rejected, so a wrong `model` field can be fixed
+/// from the error alone. A request that names no model gets the plain prompt.
+#[tokio::test]
+async fn an_unknown_model_is_named_in_the_error() {
+    let up = upstream(Health::JsonBare, Reply::Ok).await;
+    let fwd = forwarder(&[("model-zeta", &up.base)], &[]).await;
+
+    let answer = fwd
+        .post("/v1/chat/completions", body_for("no-such-model"))
+        .await;
+    assert_eq!(answer.status, 400);
+    let error = answer.json();
+    let message = error["error"]["message"].as_str().unwrap();
+    assert!(message.contains(r#""no-such-model""#), "{message}");
+    assert!(message.contains("model-zeta"), "{message}");
+    assert!(up.calls().is_empty(), "nothing was forwarded");
+
+    let answer = fwd
+        .post("/v1/chat/completions", Bytes::from_static(b"{}"))
+        .await;
+    let error = answer.json();
+    let message = error["error"]["message"].as_str().unwrap();
+    assert!(!message.contains("Unknown"), "{message}");
+    assert!(message.contains("model-zeta"), "{message}");
+}
+
 #[tokio::test]
 async fn the_router_rejects_a_preencoded_body_and_an_ambiguous_get() {
     let up = upstream(Health::Json(vec!["zstd"]), Reply::Ok).await;
