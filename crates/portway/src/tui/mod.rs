@@ -14,7 +14,7 @@
 //! a draw onto the dead terminal fails with EIO, which is what ends the loop.
 
 pub mod chart;
-pub mod spend;
+pub use crate::spend;
 pub mod state;
 pub mod view;
 

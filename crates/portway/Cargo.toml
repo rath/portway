@@ -10,6 +10,7 @@ description = "A compression-first HTTP forwarder"
 [features]
 default = []
 tui = ["dep:ratatui"]
+web = []
 
 [dependencies]
 portway-core = { path = "../portway-core", version = "0.1.0" }

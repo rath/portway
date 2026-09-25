@@ -297,6 +297,27 @@ fn format_epoch(epoch: i64, date: bool) -> String {
     }
 }
 
+/// `891`, `18.2K`, `1.2M`: a token count, short enough for a line that has to
+/// fit beside everything else. The log line prints these whole — it exists to
+/// be accounted from — while a dashboard column is read at a glance, and the
+/// popup has the exact numbers.
+pub fn human_count(count: u64) -> String {
+    if count < 10_000 {
+        return count.to_string();
+    }
+    let (scaled, unit) = if count < 1_000_000 {
+        (count as f64 / 1_000.0, "K")
+    } else {
+        (count as f64 / 1_000_000.0, "M")
+    };
+    // 18.2K, but 182K: three digits before the point already say the scale.
+    if scaled < 100.0 {
+        format!("{scaled:.1}{unit}")
+    } else {
+        format!("{scaled:.0}{unit}")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

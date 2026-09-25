@@ -8,29 +8,24 @@
 //! window has no counters but the events it replayed, and adds those up
 //! instead.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::forwarder::{Coding, StatsView};
+use std::ops::{Deref, DerefMut};
+
+pub use crate::board::{
+    BARS, ModelRow, SAMPLES, SCALES, Series, TRAFFIC_SECONDS, Totals, Traffic, mean, percentile,
+};
+use crate::board::{Board, push_capped};
 use crate::logfmt::{self, Level};
-use crate::router::Router;
+use crate::spend;
 use crate::telemetry::{Event, RequestRecord};
-use crate::tui::spend;
-use crate::watch;
 
 /// Event pane backlog. ~10k lines is minutes of a busy agent session and a
 /// couple of MB at worst.
 pub const EVENT_CAPACITY: usize = 10_000;
-/// Rolling window for the latency percentiles.
-pub const SAMPLES: usize = 512;
-/// Per-request bars kept for the compression chart.
-pub const BARS: usize = 1024;
-/// One hour of one-second traffic buckets.
-pub const TRAFFIC_SECONDS: usize = 3600;
-/// Bucket widths `t` cycles through, in seconds.
-pub const SCALES: [usize; 3] = [1, 10, 60];
 /// How often the usage screen reads the day back. Its query is a fresh
 /// connection and a scan of everything since local midnight, so it is nothing
 /// like the 250ms sample the counters are.
@@ -213,117 +208,6 @@ impl Filter {
     }
 }
 
-#[derive(Clone)]
-pub struct ModelRow {
-    pub name: String,
-    pub view: StatsView,
-}
-
-/// The per-model counters added up, for the HUD.
-#[derive(Default, Clone)]
-pub struct Totals {
-    pub requests: u64,
-    pub encoded: u64,
-    pub in_flight: u64,
-    pub body_bytes: u64,
-    pub wire_bytes: u64,
-    pub down_bytes: u64,
-    pub down_wire_bytes: u64,
-    /// What the hop actually sent the agent once it re-encoded; 0 on a replay
-    /// of rows recorded before the counters existed, so the header hides it.
-    pub agent_bytes: u64,
-    pub retried_identity: u64,
-    pub aborts: u64,
-    pub upstream_errors: u64,
-    pub idle_conns: usize,
-}
-
-/// Bytes/second per column, newest on the right.
-pub struct Series {
-    pub up: Vec<u64>,
-    pub down: Vec<u64>,
-}
-
-/// Socket throughput in one-second buckets, aggregated on the way out.
-pub struct Traffic {
-    up: VecDeque<u64>,
-    down: VecDeque<u64>,
-    /// Cumulative counters as of the last sample, to difference against.
-    last: (u64, u64),
-    /// Index of the second the back bucket describes.
-    second: u64,
-}
-
-impl Traffic {
-    fn new() -> Self {
-        Traffic {
-            up: VecDeque::from([0]),
-            down: VecDeque::from([0]),
-            last: (0, 0),
-            second: 0,
-        }
-    }
-
-    /// Fold the counters' growth into the bucket for `elapsed`, opening empty
-    /// buckets for any second that went by without a sample.
-    fn sample(&mut self, elapsed: u64, totals: (u64, u64)) {
-        while self.second < elapsed {
-            push_capped(&mut self.up, 0, TRAFFIC_SECONDS);
-            push_capped(&mut self.down, 0, TRAFFIC_SECONDS);
-            self.second += 1;
-        }
-        let grew = (
-            totals.0.saturating_sub(self.last.0),
-            totals.1.saturating_sub(self.last.1),
-        );
-        self.last = totals;
-        if let Some(slot) = self.up.back_mut() {
-            *slot += grew.0;
-        }
-        if let Some(slot) = self.down.back_mut() {
-            *slot += grew.1;
-        }
-    }
-
-    /// Replace the buckets with a window read out of the database, oldest
-    /// first. A window is sampled whole rather than accumulated, so whatever
-    /// was on the chart is not added to — it is the chart.
-    pub fn load(&mut self, buckets: &[(u64, u64)]) {
-        self.up.clear();
-        self.down.clear();
-        let skip = buckets.len().saturating_sub(TRAFFIC_SECONDS);
-        for (up, down) in buckets.iter().skip(skip) {
-            self.up.push_back(*up);
-            self.down.push_back(*down);
-        }
-    }
-
-    /// The last `width` columns of `scale`-second buckets, as a rate so the
-    /// chart's shape does not jump when the bucket width changes.
-    pub fn series(&self, scale: usize, width: usize) -> Series {
-        Series {
-            up: rate(&self.up, scale, width),
-            down: rate(&self.down, scale, width),
-        }
-    }
-}
-
-fn rate(buckets: &VecDeque<u64>, scale: usize, width: usize) -> Vec<u64> {
-    if width == 0 || scale == 0 {
-        return Vec::new();
-    }
-    let wanted = width * scale;
-    let skip = buckets.len().saturating_sub(wanted);
-    let tail: Vec<u64> = buckets.iter().skip(skip).copied().collect();
-    // Right-align: a short history leaves the left columns empty rather than
-    // stretching a few seconds across the whole chart.
-    let mut out = vec![0u64; width.saturating_sub(tail.len().div_ceil(scale))];
-    for chunk in tail.chunks(scale) {
-        out.push(chunk.iter().sum::<u64>() / scale as u64);
-    }
-    out
-}
-
 pub struct State {
     pub prices: crate::config::Prices,
     entries: VecDeque<Row>,
@@ -348,20 +232,8 @@ pub struct State {
     /// Set by the first quit keystroke while requests are still in flight.
     pub confirm_quit: bool,
     pub scale: usize,
-    pub models: Vec<ModelRow>,
-    pub totals: Totals,
-    pub traffic: Traffic,
-    pub started: Instant,
-    /// Set when the rows come from another forwarder: the per-model counters
-    /// below are then the only ones there are, and the log lines the window
-    /// replayed are the only place its retries and aborts can be counted.
-    pub recorded: bool,
-    models_tally: BTreeMap<String, StatsView>,
-    retried_identity: u64,
-    aborted: u64,
-    /// How far back the rows on screen reach, when they were read rather than
-    /// served: the live process knows its own uptime instead.
-    pub coverage: Option<Duration>,
+    /// The numbers: counters, samples and charts, shared with the web console.
+    pub board: Board,
     /// The database the usage screen reads the day back out of. `None` leaves
     /// it with nothing to draw but the reason.
     pub db: Option<PathBuf>,
@@ -376,19 +248,6 @@ pub struct State {
     pub usage: Option<spend::Table>,
     pub usage_error: Option<String>,
     usage_read: Option<Instant>,
-    /// Counts the events carry but the atomics do not.
-    pub seen: u64,
-    pub ok: u64,
-    pub redirected: u64,
-    pub client_errors: u64,
-    pub server_errors: u64,
-    pub reused: u64,
-    pub truncated: u64,
-    pub ttfb: VecDeque<f64>,
-    pub upload: VecDeque<f64>,
-    pub handshake: VecDeque<f64>,
-    /// `(raw, wire)` of every request that carried a body.
-    pub bars: VecDeque<(u64, u64)>,
 }
 
 impl State {
@@ -410,15 +269,7 @@ impl State {
             columns: Columns::ALL,
             confirm_quit: false,
             scale: SCALES[0],
-            models: Vec::new(),
-            totals: Totals::default(),
-            traffic: Traffic::new(),
-            started: Instant::now(),
-            recorded: false,
-            models_tally: BTreeMap::new(),
-            retried_identity: 0,
-            aborted: 0,
-            coverage: None,
+            board: Board::new(),
             db: None,
             usage_open: false,
             usage_range: spend::Range::Today,
@@ -426,43 +277,22 @@ impl State {
             usage: None,
             usage_error: None,
             usage_read: None,
-            seen: 0,
-            ok: 0,
-            redirected: 0,
-            client_errors: 0,
-            server_errors: 0,
-            reused: 0,
-            truncated: 0,
-            ttfb: VecDeque::new(),
-            upload: VecDeque::new(),
-            handshake: VecDeque::new(),
-            bars: VecDeque::new(),
         }
     }
 
     pub fn push(&mut self, event: Event) {
+        self.board.observe(&event);
         let entry = match event {
             Event::Log {
                 stamp,
                 level,
                 message,
-            } => {
-                if self.recorded {
-                    self.tally_line(&message);
-                }
-                Entry::Log {
-                    stamp,
-                    level,
-                    message,
-                }
-            }
-            Event::Request(record) => {
-                self.tally(&record);
-                if self.recorded {
-                    self.tally_model(&record);
-                }
-                Entry::Request(record)
-            }
+            } => Entry::Log {
+                stamp,
+                level,
+                message,
+            },
+            Event::Request(record) => Entry::Request(record),
         };
         let seq = self.next_seq;
         self.next_seq += 1;
@@ -476,74 +306,6 @@ impl State {
             }
         }
         self.entries.push_back(Row { seq, entry });
-    }
-
-    fn tally(&mut self, record: &RequestRecord) {
-        self.seen += 1;
-        match record.status {
-            status if status < 300 => self.ok += 1,
-            status if status < 400 => self.redirected += 1,
-            status if status < 500 => self.client_errors += 1,
-            _ => self.server_errors += 1,
-        }
-        if record.reused() {
-            self.reused += 1;
-        }
-        if !record.complete {
-            self.truncated += 1;
-        }
-        push_capped(&mut self.ttfb, record.ttfb, SAMPLES);
-        if let Some(upload) = record.upload {
-            push_capped(&mut self.upload, upload, SAMPLES);
-        }
-        if let Some(handshake) = record.handshake() {
-            push_capped(&mut self.handshake, handshake, SAMPLES);
-        }
-        if record.body_len > 0 {
-            // zstd can round up on incompressible input; a bar never exceeds
-            // its own raw size.
-            let wire = record.wire_len.min(record.body_len);
-            push_capped(&mut self.bars, (record.body_len, wire), BARS);
-        }
-    }
-
-    /// Resample the per-model counters and the socket throughput.
-    pub fn tick(&mut self, router: &Router) {
-        self.models = router
-            .models()
-            .iter()
-            .map(|(name, forwarder)| ModelRow {
-                name: name.clone(),
-                view: forwarder.view(),
-            })
-            .collect();
-        self.totals = absorb(&self.models);
-        self.traffic.sample(
-            self.started.elapsed().as_secs(),
-            router.telemetry().socket_bytes(),
-        );
-    }
-
-    /// The same 250ms sample when the counters are another forwarder's rows:
-    /// the model table is the tally the replayed events kept, and the window
-    /// itself is the only source for the per-second bytes.
-    pub fn tick_recorded(&mut self, window: &watch::Window) {
-        self.models = self
-            .models_tally
-            .iter()
-            .map(|(name, view)| ModelRow {
-                name: name.clone(),
-                view: view.clone(),
-            })
-            .collect();
-        let mut totals = absorb(&self.models);
-        // Nothing per model can know these — the line names the route, not the
-        // upstream — so they are counted off the replayed lines instead.
-        totals.retried_identity = self.retried_identity;
-        totals.aborts = self.aborted;
-        self.totals = totals;
-        self.traffic.load(&window.traffic);
-        self.coverage = Some(window.coverage);
     }
 
     // ----------------------------------------------------------- usage screen
@@ -603,38 +365,6 @@ impl State {
             }
         }
         self.usage_read = Some(Instant::now());
-    }
-
-    /// One replayed request, added to the model it went to. The fields the
-    /// running process keeps in memory — in flight, idle connections, whether
-    /// a dictionary is in use — stay at zero: no row can carry them.
-    fn tally_model(&mut self, record: &RequestRecord) {
-        let view = self.models_tally.entry(record.model.clone()).or_default();
-        view.requests += 1;
-        if record.coding != Coding::None {
-            view.encoded_requests += 1;
-        }
-        view.body_bytes += record.body_len;
-        view.wire_bytes += record.wire_len;
-        view.down_bytes += record.received;
-        view.down_wire_bytes += record.received_wire;
-        view.agent_bytes += record.received_agent;
-        if record.status >= 500 {
-            view.upstream_errors += 1;
-        }
-        // What the model is doing now, which is what the column is for.
-        view.coding = record.coding;
-    }
-
-    /// The two counters the request path only ever wrote to the log, read back
-    /// out of the lines the window replayed. Both messages are built in
-    /// `forwarder.rs` and `relay.rs`.
-    fn tally_line(&mut self, message: &str) {
-        if message.ends_with("agent left before the first byte") {
-            self.aborted += 1;
-        } else if message.ends_with("resending identity") {
-            self.retried_identity += 1;
-        }
     }
 
     // ------------------------------------------------------------ event pane
@@ -772,7 +502,12 @@ impl State {
 
     /// `all -> trouble` and then once through the models.
     pub fn cycle_filter(&mut self) {
-        let names: Vec<&str> = self.models.iter().map(|row| row.name.as_str()).collect();
+        let names: Vec<&str> = self
+            .board
+            .models
+            .iter()
+            .map(|row| row.name.as_str())
+            .collect();
         let next = match &self.filter {
             Filter::All => Filter::Trouble,
             Filter::Trouble => match names.first() {
@@ -796,87 +531,30 @@ impl State {
     }
 }
 
+/// The view reads the numbers as if they were its own: `state.totals` is
+/// `state.board.totals`. Inside this file the board is always named.
+impl Deref for State {
+    type Target = Board;
+    fn deref(&self) -> &Board {
+        &self.board
+    }
+}
+
+impl DerefMut for State {
+    fn deref_mut(&mut self) -> &mut Board {
+        &mut self.board
+    }
+}
+
 impl Default for State {
     fn default() -> Self {
         Self::new()
     }
 }
 
-/// The per-model counters added up, which is what the HUD's totals are in
-/// either mode.
-fn absorb(models: &[ModelRow]) -> Totals {
-    let mut totals = Totals::default();
-    for row in models {
-        totals.requests += row.view.requests;
-        totals.encoded += row.view.encoded_requests;
-        totals.in_flight += row.view.in_flight;
-        totals.body_bytes += row.view.body_bytes;
-        totals.wire_bytes += row.view.wire_bytes;
-        totals.down_bytes += row.view.down_bytes;
-        totals.down_wire_bytes += row.view.down_wire_bytes;
-        totals.agent_bytes += row.view.agent_bytes;
-        totals.retried_identity += row.view.retried_identity;
-        totals.aborts += row.view.client_aborts;
-        totals.upstream_errors += row.view.upstream_errors;
-        totals.idle_conns += row.view.idle_conns;
-    }
-    totals
-}
-
-fn push_capped<T>(queue: &mut VecDeque<T>, value: T, cap: usize) {
-    if queue.len() >= cap {
-        queue.pop_front();
-    }
-    queue.push_back(value);
-}
-
-/// Nearest-rank percentile over a rolling window. Sorting 512 floats four
-/// times a second costs nothing and keeps the window honest.
-pub fn percentile(samples: &VecDeque<f64>, quantile: f64) -> Option<f64> {
-    if samples.is_empty() {
-        return None;
-    }
-    let mut sorted: Vec<f64> = samples.iter().copied().collect();
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let at = ((sorted.len() - 1) as f64 * quantile).round() as usize;
-    sorted.get(at).copied()
-}
-
-pub fn mean(samples: &VecDeque<f64>) -> Option<f64> {
-    if samples.is_empty() {
-        return None;
-    }
-    Some(samples.iter().sum::<f64>() / samples.len() as f64)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// A window is sampled whole rather than accumulated, so loading one
-    /// replaces whatever the chart was holding — and the window that does not
-    /// fit keeps its newest seconds, which are the ones on the right.
-    #[test]
-    fn a_loaded_window_is_the_chart_until_the_next_one() {
-        let mut traffic = Traffic::new();
-        traffic.load(&[(10, 1), (20, 2), (30, 3)]);
-        assert_eq!(traffic.series(1, 3).up, vec![10, 20, 30]);
-        assert_eq!(traffic.series(1, 3).down, vec![1, 2, 3]);
-
-        traffic.load(&[(40, 4)]);
-        // Right-aligned: a window with one second in it leaves the left
-        // columns empty rather than stretching that second across the chart.
-        assert_eq!(traffic.series(1, 3).up, vec![0, 0, 40]);
-
-        let long: Vec<(u64, u64)> = (0..TRAFFIC_SECONDS as u64 + 3)
-            .map(|second| (second, second))
-            .collect();
-        traffic.load(&long);
-        let series = traffic.series(1, TRAFFIC_SECONDS);
-        assert_eq!(series.up.len(), TRAFFIC_SECONDS);
-        assert_eq!(series.up[0], 3);
-        assert_eq!(series.up[TRAFFIC_SECONDS - 1], TRAFFIC_SECONDS as u64 + 2);
-    }
 
     /// The set is what the flag, the file and the picker all speak: a name
     /// round-trips, and a typo is an error rather than a field going missing.

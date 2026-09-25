@@ -1,7 +1,7 @@
 //! What the day has cost, per model: the engines' own token counts added up
 //! and priced.
 //!
-//! The `u` screen reads this straight out of the database rather than out of
+//! The `u` screen (and the web console's usage view) reads this straight out of the database rather than out of
 //! the counters in memory, so it covers the whole local day even for a
 //! dashboard that started a minute ago, and the written record is the only
 //! place the two can be compared.
@@ -67,6 +67,20 @@ impl Range {
             Range::Week => (logfmt::midnight(midnight - 6.0 * DAY), now),
             Range::Month => (logfmt::midnight(midnight - 29.0 * DAY), now),
         }
+    }
+
+    /// The name a URL or a JSON body uses for it.
+    pub fn key(self) -> &'static str {
+        match self {
+            Range::Today => "today",
+            Range::Yesterday => "yesterday",
+            Range::Week => "week",
+            Range::Month => "month",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Range> {
+        Range::ALL.into_iter().find(|range| range.key() == key)
     }
 
     /// The range `delta` steps away in `ALL`, wrapping at both ends.
@@ -185,6 +199,44 @@ impl Table {
             (None, _) => self.unpriced += 1,
         }
     }
+}
+
+/// What the numbers are not, in the order a reader would ask: whose money,
+/// and which part of it is a floor. Every screen that shows a `Table` writes
+/// these under it, word for word.
+pub fn notes(table: &Table) -> Vec<String> {
+    let mut notes = Vec::new();
+    if table.blind > 0 {
+        notes.push(format!(
+            "{} request(s) in this window reported no usage ({} ended early): their tokens are missing from these sums",
+            table.blind, table.cut
+        ));
+    }
+    for row in &table.rows {
+        if row.requests > 0 && row.unreported == row.requests {
+            notes.push(format!(
+                "{}: no cache detail reported, so its prompt is charged at the input rate — an upper bound",
+                row.model
+            ));
+        }
+    }
+    if table.unpriced > 0 {
+        notes.push(format!(
+            "{} model(s) have no price here: their tokens are in the totals, their money is not",
+            table.unpriced
+        ));
+    }
+    if table.total.completion > 0 {
+        notes.push(format!(
+            "{} of the {} output tokens were thinking — inside the output rate, not on top of it",
+            logfmt::human_count(table.total.reasoning),
+            logfmt::human_count(table.total.completion),
+        ));
+    }
+    notes.push(
+        "estimates use configured USD rates per million tokens; they are not a bill".to_string(),
+    );
+    notes
 }
 
 /// `(prompt - cached) × input + cached × cache_read + completion × output`,

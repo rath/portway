@@ -9,13 +9,12 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Cell, Clear, Padding, Paragraph, Row, Sparkline, Table};
 
-use http::Method;
-
-use crate::forwarder::{Coding, CompressionIssue, StatsView};
-use crate::logfmt::{self, Level, human, human_time};
+use crate::board::{self, compression_status};
+use crate::forwarder::Coding;
+use crate::logfmt::{self, Level, human, human_count, human_time};
+use crate::spend;
 use crate::telemetry::RequestRecord;
 use crate::tui::chart::TwoToneBars;
-use crate::tui::spend;
 use crate::tui::state::{COLUMNS, Column, Columns, Entry, State, USAGE_REFRESH, mean, percentile};
 
 // The 16 terminal colors only: the dashboard has to sit inside whatever theme
@@ -196,27 +195,6 @@ fn ratio(raw: u64, wire: u64) -> String {
     format!("-{}%", raw.saturating_sub(wire) * 100 / raw)
 }
 
-/// `891`, `18.2K`, `1.2M`: a token count, short enough for a line that has to
-/// fit beside everything else. The log line prints these whole — it exists to
-/// be accounted from — while a dashboard column is read at a glance, and the
-/// popup has the exact numbers.
-fn human_count(count: u64) -> String {
-    if count < 10_000 {
-        return count.to_string();
-    }
-    let (scaled, unit) = if count < 1_000_000 {
-        (count as f64 / 1_000.0, "K")
-    } else {
-        (count as f64 / 1_000_000.0, "M")
-    };
-    // 18.2K, but 182K: three digits before the point already say the scale.
-    if scaled < 100.0 {
-        format!("{scaled:.1}{unit}")
-    } else {
-        format!("{scaled:.0}{unit}")
-    }
-}
-
 fn stat<'a>(label: &'a str, value: String, shade: Color) -> Vec<Span<'a>> {
     vec![
         Span::styled(label, Style::default().fg(DIM)),
@@ -383,50 +361,17 @@ fn hud<'a>(state: &State, header: &'a Header) -> Paragraph<'a> {
 // -------------------------------------------------------------------- models
 
 fn coding_span(coding: Coding, dict: bool) -> Span<'static> {
-    match coding.name() {
-        Some(name) if dict => Span::styled(format!("{name}+dcz"), Style::default().fg(GOOD)),
-        Some(name) => Span::styled(name, Style::default().fg(GOOD)),
-        None => Span::styled("identity", Style::default().fg(DIM)),
-    }
+    let color = if coding == Coding::None { DIM } else { GOOD };
+    Span::styled(
+        board::coding_label(coding, dict),
+        Style::default().fg(color),
+    )
 }
 
 /// Below this the table sheds columns rather than letting every one of them
 /// shrink until the model names are unreadable.
 const ROOMY_TABLE: u16 = 100;
 const STATUS_TABLE: u16 = 136;
-
-fn compression_status(view: &StatsView) -> String {
-    let issue = if view.coding == Coding::None {
-        view.identity_reason
-            .map(|reason| (reason, view.identity_backoff_secs))
-    } else if !view.dict {
-        view.dict_backoff_reason
-            .map(|reason| (reason, view.dict_backoff_secs))
-    } else {
-        None
-    };
-    let Some((reason, seconds)) = issue else {
-        return if view.last_probe_ok == Some(false) {
-            "probe failed; coding kept".into()
-        } else {
-            String::new()
-        };
-    };
-    let label = match reason {
-        CompressionIssue::NotNegotiated => return "not negotiated".into(),
-        CompressionIssue::ConfiguredOff => return "compression off in config".into(),
-        CompressionIssue::ProbeFailed => return "probe failed".into(),
-        CompressionIssue::NoSupportedCoding => return "no supported coding".into(),
-        CompressionIssue::EncodingRefused => "415 backoff",
-        CompressionIssue::DictionaryRefused => "dcz 415 backoff",
-        CompressionIssue::HashMismatch => "dcz hash mismatch",
-    };
-    if seconds > 0 {
-        format!("{label}; {seconds}s")
-    } else {
-        format!("{label}; probe due")
-    }
-}
 
 fn models_table(state: &State, width: u16) -> Table<'_> {
     let roomy = width >= ROOMY_TABLE;
@@ -840,37 +785,7 @@ fn part(amount: Option<f64>) -> String {
 /// would ask. A screen full of money has to say whose money, and which part of
 /// it is a floor.
 fn usage_notes(table: &spend::Table) -> Vec<Line<'static>> {
-    let mut notes = Vec::new();
-    if table.blind > 0 {
-        notes.push(note(format!(
-            "{} request(s) in this window reported no usage ({} ended early): their tokens are missing from these sums",
-            table.blind, table.cut
-        )));
-    }
-    for row in &table.rows {
-        if row.requests > 0 && row.unreported == row.requests {
-            notes.push(note(format!(
-                "{}: no cache detail reported, so its prompt is charged at the input rate — an upper bound",
-                row.model
-            )));
-        }
-    }
-    if table.unpriced > 0 {
-        notes.push(note(format!(
-            "{} model(s) have no price here: their tokens are in the totals, their money is not",
-            table.unpriced
-        )));
-    }
-    if table.total.completion > 0 {
-        notes.push(note(format!(
-            "{} of the {} output tokens were thinking — inside the output rate, not on top of it",
-            human_count(table.total.reasoning),
-            human_count(table.total.completion),
-        )));
-    }
-    notes.push(note(
-        "estimates use configured USD rates per million tokens; they are not a bill".to_string(),
-    ));
+    let mut notes: Vec<Line<'static>> = spend::notes(table).into_iter().map(note).collect();
     notes.push(Line::from(vec![
         Span::styled(" u / esc", Style::default().fg(WIRE)),
         Span::styled(
@@ -1008,23 +923,7 @@ fn draw_charts(frame: &mut Frame, state: &State, area: Rect, mode: Charts) {
 /// `POST /v1/completions` is told apart from its chat sibling, whose tail the
 /// abbreviation happens to match.
 fn route(record: &RequestRecord) -> (String, Style) {
-    let path = record.path.split('?').next().unwrap_or(&record.path);
-    let known = matches!(
-        (&record.method, path),
-        (&Method::POST, "/v1/chat/completions")
-            | (&Method::POST, "/v1/completions")
-            | (&Method::POST, "/v1/embeddings")
-            | (&Method::GET, "/v1/models")
-    );
-    let shown = if known {
-        format!(
-            "{} ../{}",
-            record.method,
-            path.rsplit('/').next().unwrap_or(path)
-        )
-    } else {
-        format!("{} {}", record.method, path)
-    };
+    let (shown, known) = board::route(&record.method, &record.path);
     let style = if known {
         Style::default().fg(DIM)
     } else {
@@ -1497,6 +1396,7 @@ fn help_lines() -> Vec<Line<'static>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::forwarder::{CompressionIssue, StatsView};
     use crate::telemetry::Event;
     use crate::usage::Usage;
     use crate::watch;
