@@ -490,16 +490,14 @@ impl Forwarder {
     /// JSON capability endpoint serves JSON with a `request_encodings` field; the SGLang
     /// builds serve plain text and advertise via `X-Request-Encodings`.
     async fn probe_health(&self) -> Result<Advertised, UpstreamError> {
-        if let Some(path) = &self.probe_path {
-            return self.probe_at(path).await;
-        }
         let capabilities = self.probe_at(crate::router::CAPABILITIES_PATH).await;
         if let Ok(ref advertised) = capabilities
             && (!advertised.encodings.is_empty() || advertised.dcz)
         {
             return capabilities;
         }
-        self.probe_at("/health").await
+        self.probe_at(self.probe_path.as_deref().unwrap_or("/health"))
+            .await
     }
     async fn probe_at(&self, path: &str) -> Result<Advertised, UpstreamError> {
         let clock = Arc::new(PhaseClock::new());

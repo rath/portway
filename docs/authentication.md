@@ -101,8 +101,8 @@ with upstreams. Neither response proves that an API key is valid. Test an actual
 application request to verify credentials.
 
 Compression probes intentionally contain no caller Authorization or Cookie
-headers. They try `/__portway/capabilities`, then `/health`, unless `probe_path`
-is set. If every capability endpoint requires authentication, initial requests
+headers. They try `/__portway/capabilities`, then `probe_path` (`/health` by
+default). If every capability endpoint requires authentication, initial requests
 remain uncompressed; authenticated application calls can still succeed.
 Do not make the application API public merely to enable compression: expose only
 the receiver's read-only capability endpoint through your gateway.

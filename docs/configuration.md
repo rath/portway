@@ -233,7 +233,7 @@ min_bytes = 1024
 | `level` | `11` | 1–19; gzip is capped at 9 |
 | `min_bytes` | `1024` | Smaller request bodies remain unchanged |
 | `max_body_bytes` | `268435456` | Maximum collected request size (256MiB) |
-| `probe_path` | automatic | Absolute origin path, without query |
+| `probe_path` | `/health` | Absolute fallback origin path, without query |
 
 `auto` prefers zstd, then gzip, and otherwise sends identity (uncompressed).
 `coding = "zstd"` is a preference that still requires advertised support; it does
@@ -245,9 +245,8 @@ Use `coding = "off"` to disable Portway's request compression altogether.
 Already encoded bodies pass through in single-upstream mode. These settings are
 for request compression; response negotiation is handled separately.
 
-Automatic negotiation tries `/__portway/capabilities`, then `/health` if no codecs
-are advertised. Explicit `probe_path` disables that fallback. For a service
-advertising support at a custom path:
+Negotiation tries `/__portway/capabilities`, then `probe_path` if no codecs are
+advertised. For a legacy service advertising support at a custom path:
 
 ```toml
 [compression]

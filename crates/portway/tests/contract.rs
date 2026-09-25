@@ -138,6 +138,12 @@ async fn coding_is_negotiated_from_health() {
         // Header absent, and header present but empty.
         (Health::Plaintext(None), vec![], None),
         (Health::Plaintext(Some(vec![])), vec![], None),
+        // A configured legacy fallback must not hide Portway receivers.
+        (
+            Health::Portway(vec!["zstd", "gzip"]),
+            vec!["--probe-path", "/health"],
+            Some("zstd"),
+        ),
     ];
 
     for (health, argv, expected) in cases {

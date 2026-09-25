@@ -50,7 +50,7 @@ pub struct ForwarderConfig {
     pub level: i32,
     pub min_bytes: usize,
     pub max_body_bytes: usize,
-    /// Absolute origin path. None probes Portway capabilities, then /health.
+    /// Absolute fallback path. Probing always tries Portway capabilities first.
     pub probe_path: Option<String>,
     #[serde(skip)]
     pub telemetry: Arc<Telemetry>,

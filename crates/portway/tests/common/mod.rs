@@ -28,9 +28,11 @@ fn boxed(bytes: impl Into<Bytes>) -> MockBody {
     Full::new(bytes.into()).boxed()
 }
 
-/// What the upstream advertises on /health.
+/// What the upstream advertises for compression discovery.
 #[derive(Clone)]
 pub enum Health {
+    /// A Portway receiver: capabilities live on the reserved management path.
+    Portway(Vec<&'static str>),
     /// JSON capability endpoint: JSON with a `request_encodings` field.
     Json(Vec<&'static str>),
     /// JSON capability endpoint behind the edge: the same JSON, gzip-compressed.
@@ -284,10 +286,24 @@ async fn respond(
 ) -> Result<Response<MockBody>, Infallible> {
     let (parts, incoming) = request.into_parts();
     if parts.uri.path() == "/__portway/capabilities" {
-        return Ok(Response::builder()
-            .status(404)
-            .body(boxed("not found"))
-            .unwrap());
+        return match health.lock().unwrap().clone() {
+            Health::Portway(encodings) => Ok(Response::builder()
+                .status(200)
+                .header("content-type", "application/json")
+                .header("x-request-encodings", encodings.join(", "))
+                .header("x-request-dictionary", "dcz")
+                .body(boxed(
+                    serde_json::to_vec(&serde_json::json!({
+                        "request_encodings": encodings
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap()),
+            _ => Ok(Response::builder()
+                .status(404)
+                .body(boxed("not found"))
+                .unwrap()),
+        };
     }
     if parts.uri.path() == "/health" {
         *probes.lock().unwrap() += 1;
@@ -408,6 +424,10 @@ async fn respond(
 
 fn serve_health(health: Health) -> Response<MockBody> {
     match health {
+        Health::Portway(_) => Response::builder()
+            .status(404)
+            .body(boxed("not found"))
+            .unwrap(),
         Health::Json(encodings) => Response::builder()
             .status(200)
             .header("content-type", "application/json")

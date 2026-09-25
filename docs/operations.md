@@ -220,8 +220,7 @@ curl --fail-with-body -i https://gateway.example.com/__portway/capabilities
 A compatible receiver advertises `zstd`/`gzip` and, when enabled, `dcz`. A 404, an
 authentication challenge, or an ordinary health response with no advertisement
 cannot enable compression. Setting `--coding zstd` does not bypass negotiation.
-After fixing discovery, `--reload` on the sender daemon requests fresh probes;
-changing `probe_path` in TOML requires a restart.
+After fixing discovery, `--reload` on the sender daemon requests fresh probes.
 
 Dictionary storage is memory-only, so restarts, expiry, eviction, or rotated
 credentials may require warm-up again. A recognized dictionary miss falls back
