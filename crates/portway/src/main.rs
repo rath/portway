@@ -9,14 +9,14 @@ use clap::Parser;
 use portway::cli::CodingArg;
 use portway::cli::{Args, Mode};
 use portway::config::Config;
-use portway::router::{Router, STATS_PATH};
+use portway::control::{self, RouterCell};
+use portway::router::STATS_PATH;
 use portway::telemetry::{Event, Sinks};
 #[cfg(feature = "tui")]
 use portway::tui::view::Header;
 use portway::{daemon, logfmt, report, server, store, telemetry};
 #[cfg(feature = "tui")]
 use portway::{tui, watch};
-use tokio::sync::RwLock;
 #[cfg(feature = "tui")]
 type Settings = tui::Settings;
 #[cfg(not(feature = "tui"))]
@@ -122,7 +122,7 @@ async fn run(
     _settings: Settings,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let router = config.router(args.mode)?;
-    let router_state = Arc::new(RwLock::new(Arc::clone(&router)));
+    let router_state = control::cell(&router);
     let decoder = (args.mode == Mode::Receive)
         .then(|| portway_core::Receiver::new(config.receiver.clone()))
         .transpose()?;
@@ -199,7 +199,7 @@ async fn run(
         logfmt::info(&banner);
         router.negotiate_all().await;
         tokio::select! {
-            () = serving(listener, Arc::new(RwLock::new(Arc::clone(&router))), decoder) => {}
+            () = serving(listener, router_state, decoder) => {}
             _ = quit => {}
             () = terminate_tui() => {}
         }
@@ -281,7 +281,7 @@ fn daemon_message(outcome: Result<String, String>) -> ! {
 
 /// SIGHUP in daemon mode: reopen the log, rebuild the router from the current
 /// TOML and CLI overrides, then negotiate the new upstreams before publishing it.
-async fn reload_on_hangup(args: Args, router: Arc<RwLock<Arc<Router>>>, log: PathBuf) {
+async fn reload_on_hangup(args: Args, router: RouterCell, log: PathBuf) {
     use tokio::signal::unix::{SignalKind, signal};
 
     let Ok(mut stream) = signal(SignalKind::hangup()) else {
@@ -292,13 +292,8 @@ async fn reload_on_hangup(args: Args, router: Arc<RwLock<Arc<Router>>>, log: Pat
             Ok(()) => logfmt::info("SIGHUP: log reopened; reloading configuration"),
             Err(err) => logfmt::error(&format!("SIGHUP: could not reopen the log: {err}")),
         }
-        let reloaded = Config::load(&args).and_then(|config| config.router(args.mode));
-        match reloaded {
-            Ok(next) => {
-                next.inherit_origin_state(&**router.read().await);
-                next.negotiate_all().await;
-                let routes = next.models().len();
-                *router.write().await = next;
+        match control::reload(&args, &router).await {
+            Ok(routes) => {
                 logfmt::info(&format!(
                     "SIGHUP: configuration reloaded ({routes} route(s))"
                 ));
@@ -371,29 +366,22 @@ async fn terminate_tui() {
 
 async fn serving(
     listener: tokio::net::TcpListener,
-    router: Arc<RwLock<Arc<Router>>>,
+    router: RouterCell,
     receiver: Option<Arc<portway_core::Receiver>>,
 ) {
-    let telemetry = {
-        let guard = router.read().await;
-        Arc::clone(guard.telemetry())
-    };
+    let telemetry = Arc::clone(control::current(&router).await.telemetry());
     server::serve_with(listener, telemetry, move |request| {
         let router = Arc::clone(&router);
         let receiver = receiver.clone();
         async move {
             let Some(receiver) = receiver else {
-                let current = {
-                    let guard = router.read().await;
-                    Arc::clone(&guard)
-                };
-                return current.handle(request).await;
+                return control::current(&router).await.handle(request).await;
             };
             if request.method() == http::Method::GET
                 && request.uri().path() == portway::router::STATS_PATH
             {
                 let models = {
-                    let current = router.read().await;
+                    let current = control::current(&router).await;
                     current
                         .models()
                         .iter()
@@ -409,11 +397,10 @@ async fn serving(
                 .handle(request, move |request| {
                     let router = Arc::clone(&router);
                     async move {
-                        let current = {
-                            let guard = router.read().await;
-                            Arc::clone(&guard)
-                        };
-                        current.handle(request.map(http_body_util::Full::new)).await
+                        control::current(&router)
+                            .await
+                            .handle(request.map(http_body_util::Full::new))
+                            .await
                     }
                 })
                 .await

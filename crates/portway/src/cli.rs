@@ -111,7 +111,7 @@ fn column(raw: &str) -> Result<Column, String> {
         )
     })
 }
-fn parse_span(raw: &str) -> Result<Duration, String> {
+pub fn parse_span(raw: &str) -> Result<Duration, String> {
     const BAD: &str = "--since must look like 90s, 30m, 24h or 7d";
     let (count, scale) = match raw.as_bytes().last() {
         Some(b's') => (&raw[..raw.len() - 1], 1),
