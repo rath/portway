@@ -23,7 +23,7 @@ type Settings = tui::Settings;
 type Settings = ();
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let args = Args::parse();
+    let mut args = Args::parse();
 
     // One-shot commands: no runtime, no listener, no recorder thread.
     if args.stop || args.reload || args.status {
@@ -57,6 +57,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(2);
     }
     logfmt::init_color();
+    // The daemon moves to `/`, and SIGHUP reloads with these same arguments:
+    // pin both paths now, so a reload rereads the file this start read
+    // instead of whatever a relative path names from `/`.
+    args.data_dir = args.data_dir.map(std::path::absolute).transpose()?;
+    args.config = Config::path(&args).map(std::path::absolute).transpose()?;
     let config = Config::load(&args)?;
 
     let dir = store::data_dir(args.data_dir.as_deref())?;

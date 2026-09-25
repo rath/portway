@@ -16,9 +16,13 @@ version may contain breaking changes.
   receivers in `portway_core::dict`.
 
 - Without `--config`, the CLI looks for `./portway.toml` in the working
-  directory, then under the runtime data directory (`$XDG_CONFIG_HOME/portway`
-  or `~/.config/portway`), before falling back to built-in defaults. A bare
-  `portway --tui` now attaches to the config the daemon is actually using.
+  directory, then in the runtime data directory (`--data-dir` when given,
+  otherwise `$XDG_CONFIG_HOME/portway` or `~/.config/portway`), before falling
+  back to built-in defaults. An explicit `--data-dir` never falls back to the
+  default directory's file. A bare `portway --tui` now attaches to the config
+  the daemon is actually using. Relative `--config` and `--data-dir` paths are
+  resolved once at startup, so a daemon keeps its files and `--reload` rereads
+  the same TOML after the daemon leaves the launch directory.
 
 - `portway-core`, an embeddable library for forwarding HTTP requests with
   zstd or gzip request compression, negotiated per destination.

@@ -46,22 +46,26 @@ fn default_config_path(candidates: &[PathBuf]) -> Option<PathBuf> {
 }
 
 impl Config {
-    pub fn load(args: &Args) -> Result<Self, String> {
-        // An explicit --config wins outright. Without one, look in the current
-        // directory first (project-local settings), then under the data dir
-        // ($XDG_CONFIG_HOME/portway or ~/.config/portway) so a bare
-        // `portway --tui` still finds the same file the daemon is writing
-        // beside its database. Only when neither exists do we fall back to
-        // the built-in default.
-        let path = match &args.config {
+    /// The file `load` reads, or `None` for the built-in default. An explicit
+    /// --config wins outright. Without one, look in the current directory
+    /// first (project-local settings), then in the data directory: --data-dir
+    /// when given, else $XDG_CONFIG_HOME/portway or ~/.config/portway. An
+    /// instance given its own --data-dir never falls back to the default
+    /// instance's file, and a dashboard given the same --data-dir (or none)
+    /// finds the file the daemon keeps beside its database.
+    pub fn path(args: &Args) -> Option<PathBuf> {
+        match &args.config {
             Some(path) => Some(path.clone()),
             None => default_config_path(&[
                 PathBuf::from("portway.toml"),
-                crate::store::data_dir(None)
+                crate::store::data_dir(args.data_dir.as_deref())
                     .map(|dir| dir.join("portway.toml"))
                     .unwrap_or_default(),
             ]),
-        };
+        }
+    }
+    pub fn load(args: &Args) -> Result<Self, String> {
+        let path = Self::path(args);
         let mut config = match path.as_deref().map(std::fs::read_to_string) {
             Some(Ok(text)) => toml::from_str::<Self>(&text)
                 .map_err(|e| format!("{}: {e}", path.as_ref().unwrap().display()))?,

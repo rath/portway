@@ -23,15 +23,20 @@ The standalone binary chooses its configuration in this order:
 
 1. If supplied, read exactly `--config PATH`. A missing file is an error.
 2. Otherwise, try `portway.toml` in the **current working directory**.
-3. If that file does not exist, try `portway.toml` under the runtime data
-   directory — `$XDG_CONFIG_HOME/portway` when that variable is absolute, or
-   `~/.config/portway`. A file there is the same one the daemon writes its
-   database beside, so a bare `portway --tui` attaches to it by default.
+3. If that file does not exist, try `portway.toml` in the runtime data
+   directory: `--data-dir PATH` when given, otherwise `$XDG_CONFIG_HOME/portway`
+   when that variable is absolute, or `~/.config/portway`. This is the directory
+   that holds the daemon's database, so a dashboard started with the same
+   `--data-dir` (or none) reads the same file as the daemon. An explicit
+   `--data-dir` never falls back to the default directory's file.
 4. If neither exists, use defaults and explicit command-line settings. Serving
    still requires a destination, such as `--upstream URL`.
 
 The data directory's TOML is read no matter which directory the process is
-launched from. A stable absolute path skips the search entirely:
+launched from. Relative `--config` and `--data-dir` paths are resolved against
+the launch directory once, at startup, so `--reload` rereads the same file after
+the daemon has left that directory. A stable absolute path skips the search
+entirely:
 
 ```sh
 portway --config "$HOME/.config/portway/portway.toml" --daemon
@@ -363,7 +368,8 @@ The runtime directory contains `db.sqlite3`, `portway.pid` in daemon mode,
 `portway.log` for daemon output, and `portway.tui` for saved dashboard settings.
 Old runtime directories are not discovered or automatically migrated.
 
-`--config` chooses TOML; `--data-dir` chooses storage. Neither implies the other.
+`--data-dir` chooses storage and, without `--config`, where the search looks
+after the working directory. `--config` chooses TOML and never moves storage.
 `data_dir`, `api_key`, `mode`, `tui`, and `retention_days` are not TOML root fields.
 Choose mode and operations with CLI arguments:
 

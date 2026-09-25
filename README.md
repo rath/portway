@@ -195,9 +195,10 @@ The CLI records request metadata in SQLite, never bodies, credentials, cookies,
 or dictionary contents. The runtime directory defaults to
 `$XDG_CONFIG_HOME/portway` (when absolute) or `~/.config/portway`.
 Without `--config`, the binary reads `./portway.toml` first, then
-`portway.toml` under that runtime directory, so a bare `portway --tui` attaches
-to the same file the daemon is using. Use `--data-dir` consistently for
-separate instances.
+`portway.toml` in the runtime directory (`--data-dir` when given), so a bare
+`portway --tui` attaches to the same file the daemon is using. Use `--data-dir`
+consistently for separate instances; an explicit one never falls back to the
+default directory's file.
 
 For health checks, use `GET /__portway/health`; ordinary `/health` is forwarded to
 the upstream. See [operations and troubleshooting](docs/operations.md).
