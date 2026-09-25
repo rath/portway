@@ -39,14 +39,16 @@ sources. Runs are reproducible byte for byte. To check your own traffic, see
 
 ## Before you rely on it
 
-- **The other end must cooperate.** Portway compresses a request only when the
-  destination advertises support. It ships that side as `portway receive`,
-  which runs in front of a service you control, such as a self-hosted model
+- **The other end must cooperate.** The sender compresses requests when its
+  destination advertises the Portway protocol. It ships that side as
+  `portway receive`, which runs in front of a service you control, such as a self-hosted model
   server or your own gateway. Any server implementing the
   [protocol](docs/protocol.md) works too.
-- **Hosted APIs get plain forwarding.** Pointed directly at a provider's
-  public API, Portway sends requests uncompressed, because the provider
-  advertises no support. Model routing and recording still work.
+- **Origin compression is separate.** A sender pointed at an API without Portway
+  capabilities forwards uncompressed. A receiver can independently try gzip/zstd
+  toward its origin, learn from responses, and remember refusals. Enable
+  [`[receiver.origin_compression] mode = "auto"`](docs/configuration.md#receiver-to-origin-upload-compression)
+  to use this optional policy; support varies by provider.
 - **It saves bytes, not tokens.** The model receives the identical request and
   bills the same tokens. Provider-side prompt caching cuts the cost of
   processing a repeated prefix; Portway cuts the bytes and time of sending it.

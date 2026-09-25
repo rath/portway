@@ -180,7 +180,7 @@ Useful fields include:
 
 | Field | Interpretation |
 | --- | --- |
-| `coding` | Currently negotiated request coding; `null` means identity (no request compression) |
+| `coding` | Sender-negotiated request coding; `null` means identity. Origin auto selects per context; see below. |
 | `encoded_requests` | Requests actually sent with compression |
 | `body_bytes`, `wire_bytes`, `saved_bytes` | Original body size, sent body size, and savings counters |
 | `dict` | Whether dictionary support is enabled for the route |
@@ -193,7 +193,7 @@ Useful fields include:
 | `in_flight` | Active relays; useful when choosing a restart time |
 | `upstream_errors`, `client_aborts` | Upstream failures and clients that disconnected |
 
-Refusal backoffs last 600 seconds. A zero remaining time means the backoff has
+For sender capability negotiation, refusal backoffs last 600 seconds. A zero remaining time means the backoff has
 expired, not that compression has recovered: requests trigger background probes,
 and a successful capability advertisement must enable the coding again. A
 dictionary-only refusal or hash mismatch keeps ordinary zstd compression enabled.
@@ -248,3 +248,38 @@ to ordinary compression according to the [retry protocol](protocol.md#errors-and
 | Dashboard has no prices or an empty history | Pass its price-bearing config and the serving instance's data directory; also check the selected date window. |
 | Health is OK but requests fail | Local health does not check upstream reachability, model availability, or credentials. Test a real request. |
 | Compression or DCZ is absent | Follow [compression checks](#check-compression); a working API alone does not imply support. |
+
+## Check receiver-to-origin compression
+
+With `[receiver.origin_compression] mode = "auto"`, read the **receiver's**
+`/__portway/stats`. Its `receiver` object counts decoding of the incoming hop;
+`models.upstream` describes forwarding to the origin. The origin codec varies
+by request context, so the route-level negotiated `coding` is not an aggregate
+origin capability. Use `models.upstream.origin_compression` instead:
+
+| Field | Meaning |
+| --- | --- |
+| `mode` | `auto` or `off`; only the mode is present when disabled |
+| `attempts`, `encoded_attempts` | Origin send attempts, including identity retries, and attempts with an encoding |
+| `wire_bytes` | Request-body bytes handed to HTTP across all attempts, including refusals and failed/cancelled requests |
+| `retried_identity`, `refusals` | Identity retries and cached compression refusals |
+| `cache_entries` | Number of retained request contexts, up to 1024 |
+| `gzip_entries`, `zstd_entries` | Unexpired contexts learned to use each codec |
+| `backoff_entries`, `probing_entries` | Contexts temporarily suspended or currently trialling compression |
+
+These origin counters and learned entries survive a compatible reload; ordinary
+route counters reset when the router is rebuilt. All state resets on restart.
+Wire counts exclude HTTP/TLS framing and TCP retransmissions and measure bytes
+handed to the transport, not a guarantee that the peer received them.
+
+The receiver's request log reports the final upload coding (`gzip`, `zstd`, or
+`identity`). Its upload byte count includes a rejected attempt before identity
+fallback; the failed trial can therefore produce negative savings. The warning
+`origin 415: retrying identity once` explains the retry. A preceding rejection
+warning names the attempted coding and the 600-second suspension. A 400 produces
+only the suspension warning and returns the original error.
+
+Existing `models.upstream.wire_bytes` includes refused attempts for requests that
+obtained a final response. The nested origin `wire_bytes` also includes bytes
+handed to HTTP before a transport error or cancellation. No origin URL, request
+body, or authentication value is exposed by the capability cache diagnostics.

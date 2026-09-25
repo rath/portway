@@ -185,9 +185,9 @@ portway --config "$HOME/.config/portway/portway.toml" --daemon  # or be explicit
 
 Forwarding works even when your upstream does not understand compressed requests.
 To gain zstd/gzip and dictionary compression, the receiving side must advertise
-and decode them. Hosted provider APIs do not, as the
-[FAQ](faq.md#does-portway-compress-requests-to-a-hosted-provider-api) explains.
-If you control the service, Portway can supply that layer:
+and decode them. A Portway receiver supplies this layer in front of your own
+application or a remote provider API. Upload compression toward that final origin
+is a separate, optional policy; provider support varies.
 
 ```text
 Client → local Portway → HTTPS/authentication gateway → Portway receive → application
@@ -228,3 +228,35 @@ and [receiver settings](configuration.md#receiving).
 The `[receiver]` table only changes receiver settings. It does not select the
 mode: the `receive` positional argument is required. A receiver accepts one
 `upstream`; it does not use a `[models]` routing table.
+
+### Compress the receiver's upload to a provider
+
+For a receiver on a remote host such as receiver-host, the final origin can itself be
+HTTPS. The sender continues pointing at the receiver through your existing tunnel:
+
+```text
+Claude Code → sender (sender-host) → SSH tunnel → receiver (receiver-host) → HTTPS origin
+```
+
+Example receiver configuration:
+
+```toml
+upstream = "https://api.anthropic.com"
+host = "127.0.0.1"
+port = 8788 # use the receiver port targeted by your SSH tunnel
+
+[receiver.origin_compression]
+mode = "auto"
+```
+
+Keep your existing origin URL and listener port if they differ. Replace the
+receiver binary and restart it once to install this version. Later configuration
+changes can use `portway --reload --data-dir ./receiver-data` in daemon mode.
+No sender change is needed to enable compression on the receiver's origin leg.
+
+The receiver first tries gzip and learns supported codings from origin responses.
+A 415 triggers one identity retry and a ten-minute suspension; a 400 suspends
+compression without replaying that request. Enabling `auto` does not guarantee
+that any particular provider accepts compressed uploads. See the complete
+[origin policy](configuration.md#receiver-to-origin-upload-compression) and
+[diagnostics](operations.md#check-receiver-to-origin-compression).

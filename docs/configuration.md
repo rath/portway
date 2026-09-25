@@ -272,9 +272,10 @@ work but compression or dictionary reuse is absent.
 ## Receiving
 
 Start with `portway receive --config ./receive.toml`. Receiver mode requires one
-`upstream`. It does not perform model routing or recompress restored requests
-before sending them to the application. `[receiver]` configures this mode; it
-does not activate the mode by itself.
+`upstream`. It restores incoming compressed requests and forwards them to that
+application. By default the origin upload is uncompressed; optional origin
+compression is described below. Receiver mode does not perform model routing.
+`[receiver]` configures this mode; it does not activate the mode by itself.
 
 | `[receiver]` setting | Default |
 | --- | --- |
@@ -302,6 +303,57 @@ A scope partitions storage; it is not authentication.
 See the [receiver walkthrough](getting-started.md#add-a-compression-receiver) and
 [authentication guidance](authentication.md#receivers-and-dictionary-isolation)
 when putting the receiver behind a gateway.
+
+### Receiver-to-origin upload compression
+
+The sender-to-receiver and receiver-to-origin legs negotiate independently.
+To enable adaptive upload compression on the receiver's configured `upstream`:
+
+```toml
+[receiver.origin_compression]
+mode = "auto" # default: "off"
+```
+
+`auto` tries gzip for an eligible request when support is unknown. It learns
+from the origin's response `Accept-Encoding`, including on successful responses.
+That response header advertises **request** content codings for subsequent
+requests to the resource ([RFC 9110 §12.5.3](https://www.rfc-editor.org/rfc/rfc9110.html#section-12.5.3)).
+The request's `Accept-Encoding` still negotiates response compression separately.
+No Portway capability or health probes are sent to the origin in this mode.
+
+Supported origin codings are gzip and zstd. Quality weights, explicit exclusions,
+and an empty advertisement are respected; gzip wins equal weights. Zstd requires
+an explicit advertisement. Without an advertisement, a successful compressed
+request establishes support for its codec. A missing response header alone does
+not establish support or erase a previous advertisement.
+
+Compression uses `[compression] level`, `min_bytes`, and `max_body_bytes`.
+Bodies must shrink; empty bodies, GET/HEAD, `Cache-Control: no-transform`, and
+requests carrying content digest or HTTP signature headers are not recompressed.
+Portway dictionaries and their headers are confined to the sender-to-receiver leg.
+`[compression] coding` and `dict` do not control this separate origin policy.
+
+If a request Portway compressed receives **415**, the receiver remembers the
+refusal and retries once with its original body. An explicit response advertisement
+excluding identity prevents that retry. A compressed request receiving **400**
+also suspends compression, but its error is returned without replay. Authentication
+errors, rate limits, 5xx responses, and transport failures do not cause an identity
+retry. This policy assumes the origin uses 415 to reject a request before executing
+it; it does not infer replay safety from arbitrary error text.
+
+Refusals suspend compression for 600 seconds. After expiry, one request trials
+gzip while concurrent requests use identity. The same single-trial rule applies
+when support is initially unknown. Origin capability entries expire after 600
+seconds without refresh. State is isolated by upstream, method, request target
+(including query), authentication context (including `X-API-Key`), content type,
+and Anthropic version/beta headers. At most 1024 hashed contexts are kept per
+upstream; neither bodies nor credentials are retained in this cache.
+
+`--reload` applies this policy immediately for new requests. Learned state survives
+reload when the destination, policy, level, and body thresholds remain the same;
+changing them starts fresh. Restarting the process also clears learned state.
+See [origin compression diagnostics](operations.md#check-receiver-to-origin-compression)
+for per-hop counters and refusal logs.
 
 ## Runtime files and command-only options
 

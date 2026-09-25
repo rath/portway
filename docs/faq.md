@@ -7,13 +7,16 @@ run, start with [getting started](getting-started.md).
 
 ### Does Portway compress requests to a hosted provider API?
 
-No. Portway compresses a request only when the destination advertises support
-for it, and public provider APIs do not. Pointed directly at one, Portway
-forwards requests uncompressed; model routing, recording, and the dashboard
-still work. To get compression, the destination must be a
-[Portway receiver](getting-started.md#add-a-compression-receiver) in front of a
-service you control, or a server that implements the
-[protocol](protocol.md).
+It depends on the hop and the provider. The ordinary sender compresses only when
+its destination advertises the Portway request-compression protocol; otherwise it
+forwards uncompressed. A [receiver](getting-started.md#add-a-compression-receiver)
+lets you compress that first hop even when the final provider does not implement
+the Portway protocol.
+
+The receiver can separately enable
+[`[receiver.origin_compression] mode = "auto"`](configuration.md#receiver-to-origin-upload-compression).
+It tries gzip, learns from response `Accept-Encoding`, and remembers refusals.
+Provider support is determined at runtime; no provider is assumed to support it.
 
 ### Does it reduce tokens or my bill?
 
@@ -89,16 +92,24 @@ used entries first, and keeps nothing larger than 32 MiB. The limits are in
 
 It answers 412 with `X-Dict-Miss: 1` before the application runs. The sender
 discards that dictionary and resends the same request once with plain zstd. A
-request makes at most three encoding attempts in total, and the application
-runs at most once. See [errors and replay](protocol.md#errors-and-replay).
+sender request makes at most three encoding attempts on this hop. The receiver
+forwards only the successfully decoded attempt; optional origin retries follow
+the separate policy below. See [errors and replay](protocol.md#errors-and-replay).
 
 ### Can a retry run my request twice?
 
-Portway replays a request only when the receiver's compression layer rejected
-it before the application ran, which it marks with `X-Dict-Miss` or
+On the sender-to-receiver leg, Portway replays only when the receiver's compression
+layer rejected it before the application ran, which it marks with `X-Dict-Miss` or
 `X-Portway-Decode-Error`. The receiver strips those headers from application
 responses, so an application cannot trigger a replay. Application errors and
 network errors after sending are returned as they are.
+
+The optional receiver-to-origin `auto` policy has a separate rule: an origin 415
+on a request Portway compressed permits one identity retry, unless identity is
+explicitly excluded. This relies on the origin rejecting the request before
+execution; it does not require a Portway marker. General 400, 5xx, and transport
+errors are never replayed by this policy. A 400 or 415 suspends origin compression
+for ten minutes. See [errors and replay](protocol.md#errors-and-replay).
 
 ### Is DCZ a standard?
 

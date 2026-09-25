@@ -3,7 +3,7 @@
 # The "receive" argument selects the mode; [receiver] alone does not.
 # This mode requires one upstream, not a [models] table.
 
-# The local application receives ordinary, restored HTTP requests.
+# The application receives restored requests, uncompressed by default.
 upstream = "http://127.0.0.1:8000"
 host = "127.0.0.1"
 port = 8788
@@ -22,3 +22,9 @@ min_dictionary_bytes = 32768       # Requests below 32KiB cannot seed a dictiona
 max_dictionary_bytes = 33554432    # 32MiB per dictionary
 max_body_bytes = 268435456         # 256MiB limit for encoded and decoded bodies
 max_window_bytes = 134217728       # 128MiB zstd window limit
+
+# Optional receiver-to-origin compression. Enable for adaptive gzip/zstd uploads.
+# A 415 retries identity once and suspends compression for 10 minutes.
+# A 400 suspends compression without replay. Other errors are not replayed.
+# [receiver.origin_compression]
+# mode = "auto" # default: "off"

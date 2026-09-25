@@ -66,6 +66,8 @@ The scope is not transmitted as a new HTTP header.
 
 ## Errors and replay
 
+The following decoder-marker contract governs the sender-to-receiver leg.
+
 | Condition | Result |
 | --- | --- |
 | Missing dictionary | 412 + `X-Dict-Miss: 1`; no decompression or application invocation |
@@ -87,6 +89,28 @@ unmarked 400/415 responses are returned unchanged. Safe replay requires the
 explicit decoder marker. The receiver removes any such marker or dictionary-miss
 header returned by the origin, so an application cannot accidentally trigger a
 second execution. A storage acknowledgement does not imply application success.
+
+### Optional receiver-to-origin policy
+
+After restoring a request, a standalone receiver may recompress it for its origin
+with `[receiver.origin_compression] mode = "auto"`. This leg uses ordinary gzip or
+zstd without Portway dictionaries, advertisements, or retry markers. A server's
+response `Accept-Encoding` advertises which request codings the resource accepts,
+including on 2xx responses; it is distinct from the client's response preferences.
+See [RFC 9110 §12.5.3](https://www.rfc-editor.org/rfc/rfc9110.html#section-12.5.3).
+
+Unknown support permits one optimistic gzip trial. A compressed origin request
+receiving 415 is resent as identity at most once unless identity was explicitly
+excluded. This opt-in rule relies on the origin using 415 for rejection before
+execution. It does not change the sender's marker requirement. A generic 400
+suspends compression without replay; network failures and 5xx do not trigger a
+replay or prove that compression is unsupported. The receiver continues stripping
+origin-supplied decoder markers before returning the final response to its sender.
+
+Refusals are remembered for ten minutes per request context. One trial after
+expiry checks for recovery while concurrent requests remain uncompressed. For
+cache scope, reload behavior, and eligibility, see
+[receiver-to-origin configuration](configuration.md#receiver-to-origin-upload-compression).
 
 ## Streaming and HTTP boundaries
 
