@@ -642,6 +642,40 @@ mod tests {
         );
     }
 
+    /// The whole text, byte for byte, with only what the clock and the temp
+    /// directory decide masked out. Pins the layout so that any change to how
+    /// the report is loaded or assembled shows up here as a diff.
+    #[test]
+    fn the_report_text_is_pinned() {
+        let dir = populated("golden");
+        let db = dir.join(store::DB_FILE);
+        let text = render(&db, Duration::from_secs(86_400), None).unwrap();
+        let stamp = regex::Regex::new(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}").unwrap();
+        let text = stamp
+            .replace_all(&text.replace(&db.display().to_string(), "<db>"), "<when>")
+            .into_owned();
+        assert_eq!(text, GOLDEN, "\n{text}");
+    }
+
+    const GOLDEN: &str = "\
+portway — <db>
+window  <when> .. <when>  (24h, all models)
+
+model        reqs  2xx  3xx  4xx  5xx  trunc  reused
+model-alpha     2    2    0    0    0      0       1
+model-zeta      1    0    0    0    1      1       0
+total           3    2    0    0    1      1       1
+
+model        up raw  up wire  saved  down  ttfb p50  ttfb p95  up p50  up p95  conn mean
+model-alpha   6.7MB    1.9MB    71%   2KB     500ms     500ms    10ms    10ms       77ms
+model-zeta      2KB    0.5KB    75%   1KB     500ms     500ms    10ms    10ms       77ms
+total         6.7MB    1.9MB    71%   3KB     500ms     500ms    10ms    10ms       77ms
+
+trouble (last 20 in the window)
+<when>  500  model-zeta  POST /v1/chat/completions  (truncated after 1KB)
+<when>  WARNING  /health.request_encodings missing: api.example.test
+";
+
     #[test]
     fn a_model_filter_leaves_one_row_plus_the_total() {
         let dir = populated("filter");
