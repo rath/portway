@@ -40,14 +40,36 @@ version may contain breaking changes.
 - A FAQ, a security policy, contribution guidelines, and continuous
   integration on Linux and macOS.
 
+- `--web`: the dashboard in a browser, behind the optional `web` build feature.
+  It shows what `--tui` shows, computed by the same code, plus requests still
+  in flight, the `--report` history for any window, search, CSV and JSON
+  export, insight charts, opt-in desktop notifications, a command palette and
+  15 themes. It runs beside a forwarder, attaches to a running one like
+  `--tui`, or is hosted by the daemon with `--daemon --web`; `--status` prints
+  its address. Access needs a per-run token exchanged for a session cookie.
+- `portway_core::flights`: a registry of requests counted but not yet relayed,
+  on `Telemetry::flights()`.
+
 ### Changed
 
 - A request for an unconfigured model in router mode is still a 400 listing
   the supported models, but the message now names the model the request
   asked for when one was given.
 
+- `RequestRecord` has a new `flight` field naming the in-flight entry the
+  record ends (`None` for rows rebuilt from the database). Code that builds
+  `RequestRecord` values must set it.
+- The flight registry entry is removed before `Event::Request` is emitted, so
+  a reader holding both never sees a request twice or not at all.
+
+### Fixed
+
+- `--report` failed with `Invalid column type Null` when a request had dialed
+  a plain-HTTP upstream (no TLS phase); such a dial now counts as DNS plus TCP.
+
 ### Security
 
 - The request database is created with mode 0600, and an existing database is
   narrowed to 0600, even when `--data-dir` names a directory Portway did not
   create.
+

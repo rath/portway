@@ -69,7 +69,8 @@ When Portway creates the data directory, it creates it with mode 0700. A
 serving process creates the database file with mode 0600, or narrows an
 existing one to 0600, even inside a directory it did not create; the WAL
 sidecar files share that mode. The daemon's pid and log files are created with
-mode 0600.
+mode 0600, and so is `portway.web`, which holds the web console's address and
+token while it runs.
 
 ## Deployment boundaries
 
@@ -89,6 +90,30 @@ mode 0600.
   [authentication](docs/authentication.md#receivers-and-dictionary-isolation).
 - **Not supported:** inbound TLS, HTTP/2, WebSockets, and CONNECT tunnels.
   Portway refuses tunnels and protocol upgrades.
+
+## Web console
+
+The optional `--web` console (the `web` build feature) can read every recorded
+request and stop or reload the forwarder, so it is guarded even on loopback:
+
+- **A token per run.** The launch link carries 256 random bits after `#`, which
+  browsers do not send to servers or put in referrers. The page removes it from
+  the address bar and trades it once for an `HttpOnly`, `SameSite=Strict`
+  session cookie whose value is a second, independent secret. Only the
+  launching terminal, the daemon's launcher and `portway.web` see the token;
+  the log records the address without it.
+- **Requests from other sites are refused.** The `Host` header must name the
+  console's port on `localhost` or an IP literal, which defeats DNS rebinding;
+  a present `Origin` must be the console's own; every `POST` must carry an
+  `x-portway-console` header, which a cross-site form cannot send.
+- **The page cannot be turned against itself.** It is served with a
+  Content-Security-Policy that allows only its own embedded files, no framing,
+  no inline script, and no inline styles. Every text it shows is set as text,
+  never parsed as markup.
+- **No TLS.** The console speaks plain HTTP. Binding `--web-host` to a
+  non-loopback address prints a warning: the token keeps strangers out, but
+  anyone on the path can read the traffic. Put it behind a TLS-terminating
+  proxy that preserves `Host`, or use an SSH tunnel instead.
 
 ## Replay safety
 

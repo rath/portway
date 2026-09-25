@@ -135,6 +135,50 @@ the terminal. Quitting a viewer leaves the serving process alive.
 
 Both `--tui` and `--event-columns` are absent in builds without the `tui` feature.
 
+## Optional web console
+
+```sh
+cargo build --release --locked --features web
+./target/release/portway --config examples/models.toml --web
+# portway: console at http://127.0.0.1:8790/#token=…
+```
+
+`--web` runs the forwarder as usual and serves a dashboard in the browser on a
+second listener, `--web-host` (default `127.0.0.1`) and `--web-port` (default
+8790; `0` picks a free port). Open the printed link. Its token is exchanged once
+for a session cookie and removed from the address bar; the page never stores
+it. Like `--tui`, a console started on a port another Portway already serves
+attaches to that instance's data directory instead of starting a forwarder,
+and a bare `portway --web` needs no upstream configuration to attach.
+
+`--daemon --web` hosts the console in the daemon. The launcher prints the link
+next to the log path, `--status` prints it again while the console runs, and it
+is kept in `portway.web` (mode 0600) in the data directory. The log only ever
+contains the address without the token.
+
+The console shows everything the terminal dashboard shows, computed by the
+same code, with these additions:
+
+| View | What it adds |
+| --- | --- |
+| Dashboard | Requests in flight, with their phase (upload, prefill, stream), age and progress; a slow prefill (over 30s) or a stalled stream (no bytes for 60s) is flagged. A console attached to another instance cannot see that instance's flights. |
+| Events | Search (`status:5xx`, `model:`, `route:`, `is:cut`, `ttfb:>2s`, `size:>1MB`, `tok:>50K`, `-word`, `"phrase"`), CSV and JSON export of the filtered lines, and older lines on request. |
+| Usage | The terminal's usage screen, refreshed every 5s. |
+| History | `--report` for any window, per model, as tables with CSV, or as the exact text. |
+| Insights | ttfb percentiles and upload savings since the page opened, and each model's share. |
+| Appearance | 15 themes plus one that follows the OS, density, type and motion; kept per browser. |
+
+Reload rereads the configuration the way `--reload` does. Stop ends a live
+console's forwarder the way SIGTERM does, after listing the requests it would
+cut; an attached console signals the daemon it is watching and stays open.
+The keys match the terminal dashboard (`q` asks before stopping; a second `q`
+confirms), with `/` for search, `?` for the key list and ⌘K or Ctrl-K for every
+command. Desktop notifications for trouble in a background tab are opt-in.
+
+`--web`, `--web-host` and `--web-port` are absent in builds without the `web`
+feature. See [security](../SECURITY.md#web-console) before binding the console
+to anything other than loopback.
+
 ## Health, model lists, and logs
 
 | Check | What it tells you |
@@ -236,7 +280,7 @@ to ordinary compression according to the [retry protocol](protocol.md#errors-and
 | `configure either upstream or [models], exclusively` | Configure exactly one routing mode. If neither was intended to be empty, check the current directory or pass `--config`. |
 | TOML complains about a table or type for a model | Quote names containing dots or slashes, including in `[prices."name"]`. |
 | Unknown field such as `api_key`, `data_dir`, or `mode` | Keys belong in client headers; runtime directory and mode are CLI options. |
-| Address already in use | Stop the process owning the port, choose another port, or use `--tui` to view an existing Portway. |
+| Address already in use | Stop the process owning the port, choose another port, or use `--tui` or `--web` to view an existing Portway. For `--web ...: Address already in use`, choose another `--web-port`. |
 | `--status` says stopped but requests succeed | Check the selected data directory and whether this is a foreground instance. |
 | 400 asks for a supported model | Match a registered name exactly and put it in the JSON object; there is no implicit default. |
 | 415 says routing needs an uncompressed body | Disable client-side request compression in model mode, or use single-upstream mode. |
@@ -245,6 +289,9 @@ to ordinary compression according to the [retry protocol](protocol.md#errors-and
 | Edited routes do not appear | Run `--reload` with the serving daemon's data directory and check the log for `configuration reloaded`; restart if the listener host or port changed. |
 | `--tui` is an unrecognized argument | Rebuild or install with `--features tui`, and check which executable your shell finds. |
 | Dashboard needs a terminal | Run `--tui` directly in a terminal; use `--report` for redirected output. |
+| `--web` is an unrecognized argument | Rebuild or install with `--features web`. |
+| The console asks for the printed address | The session belongs to one run: open the link the current run printed, or `portway --status --data-dir …` for a daemon's. |
+| The console shows no requests in flight | An attached console reads another instance's database; flights are only visible in the serving process's own console. |
 | Dashboard has no prices or an empty history | Pass its price-bearing config and the serving instance's data directory; also check the selected date window. |
 | Health is OK but requests fail | Local health does not check upstream reachability, model availability, or credentials. Test a real request. |
 | Compression or DCZ is absent | Follow [compression checks](#check-compression); a working API alone does not imply support. |

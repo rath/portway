@@ -365,12 +365,13 @@ for per-hop counters and refusal logs.
 `--data-dir PATH` overrides `$XDG_CONFIG_HOME/portway` (when XDG_CONFIG_HOME is
 absolute) or `$HOME/.config/portway`. Newly created directories have mode 0700.
 The runtime directory contains `db.sqlite3`, `portway.pid` in daemon mode,
-`portway.log` for daemon output, and `portway.tui` for saved dashboard settings.
+`portway.log` for daemon output, `portway.tui` for saved dashboard settings, and
+`portway.web` (mode 0600) with the running web console's address and token.
 Old runtime directories are not discovered or automatically migrated.
 
 `--data-dir` chooses storage and, without `--config`, where the search looks
 after the working directory. `--config` chooses TOML and never moves storage.
-`data_dir`, `api_key`, `mode`, `tui`, and `retention_days` are not TOML root fields.
+`data_dir`, `api_key`, `mode`, `tui`, `web`, and `retention_days` are not TOML root fields.
 Choose mode and operations with CLI arguments:
 
 | CLI option | Purpose |
@@ -380,11 +381,14 @@ Choose mode and operations with CLI arguments:
 | `--daemon` | Start in the background |
 | `--status`, `--reload`, `--stop` | Control the daemon in the selected data directory |
 | `--tui` | Start a dashboard or attach to an existing local instance; optional build feature |
+| `--web` | Serve the dashboard in a browser, or attach to an existing local instance; combines with `--daemon`; optional build feature |
+| `--web-host HOST`, `--web-port PORT` | Where the console listens; default `127.0.0.1` and `8790`, `0` for a free port |
 | `--report --since SPAN` | Read a report; default window is 24h |
 | `--model NAME` | Filter a report by recorded route name |
 | `--retention-days N` | Delete older rows at startup and daily; default `0` keeps all rows |
 
 `SPAN` accepts a positive integer followed by `s`, `m`, `h`, or `d`, such as
 `90s`, `30m`, `24h`, or `7d`.
-Daemon operations, `--report`, and `--tui` are mutually exclusive in one invocation.
+Daemon operations, `--report`, and `--tui` are mutually exclusive in one invocation;
+`--web` excludes `--tui`, `--report` and the daemon controls but combines with `--daemon`.
 See [operations](operations.md) for complete command sequences.

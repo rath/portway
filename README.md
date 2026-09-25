@@ -108,14 +108,16 @@ macOS and Linux. Run from the repository root:
 
 ```sh
 cargo install --path crates/portway --locked
-# Or include the optional terminal dashboard:
+# Or include the optional terminal dashboard, the browser console, or both:
 cargo install --path crates/portway --locked --features tui
+cargo install --path crates/portway --locked --features web
+cargo install --path crates/portway --locked --features tui,web
 ```
 
 Choose one command. Installation normally puts `portway` in `~/.cargo/bin`, which
 must be on your `PATH`. The default build has no terminal UI dependencies. To build
 without installing, use `cargo build --release --locked` (optionally with
-`--features tui`) and run `./target/release/portway` instead.
+`--features tui`, `web` or `tui,web`) and run `./target/release/portway` instead.
 
 ## First configuration
 
@@ -183,11 +185,18 @@ portway --status
 portway --report --since 7d
 # Requires installation with --features tui:
 portway --config ./portway.toml --tui
+# Requires installation with --features web; prints the address to open:
+portway --config ./portway.toml --web
 # In another terminal, when ready to stop:
 portway --stop
 ```
 
 A dashboard attached to a daemon can be closed without stopping forwarding.
+`--web` serves the same dashboard in a browser at `http://127.0.0.1:8790/`, plus
+the requests still in flight, history, search and export, reload and stop
+controls, and a choice of themes; `--daemon --web` hosts it in the daemon. Open
+the printed link, which carries a one-time token; see
+[the web console](docs/operations.md#optional-web-console).
 Use `--reload` to reread routes, upstream URLs, and compression settings without
 dropping the listener. Daemon mode does not install a boot or login service.
 
@@ -196,7 +205,7 @@ or dictionary contents. The runtime directory defaults to
 `$XDG_CONFIG_HOME/portway` (when absolute) or `~/.config/portway`.
 Without `--config`, the binary reads `./portway.toml` first, then
 `portway.toml` in the runtime directory (`--data-dir` when given), so a bare
-`portway --tui` attaches to the same file the daemon is using. Use `--data-dir`
+`portway --tui` or `portway --web` attaches to the same file the daemon is using. Use `--data-dir`
 consistently for separate instances; an explicit one never falls back to the
 default directory's file.
 
