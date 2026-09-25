@@ -553,6 +553,14 @@ function paletteCommands() {
     { name: `${state.notify ? "Turn off" : "Turn on"} desktop notifications`, hint: "notify", run: () => ctx.setNotify(!state.notify) },
     { name: `${state.shortcuts ? "Turn off" : "Turn on"} single-key shortcuts`, hint: "keys", run: () => ctx.setShortcuts(!state.shortcuts) },
     { name: "Choose columns", hint: "c", run: () => openColumns(ctx) },
+    {
+      name: "Reset column widths",
+      hint: "events",
+      run: () => {
+        const count = list.resetWidths();
+        toast(count ? `${count} column width(s) fit to their content again` : "no width was set by hand", "good");
+      },
+    },
     { name: "Keys", hint: "?", run: () => openHelp() },
   ];
   if (state.header.control?.reload) commands.push({ name: "Reload the configuration", hint: "r", run: () => reloadConfig() });

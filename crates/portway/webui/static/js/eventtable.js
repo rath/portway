@@ -119,9 +119,12 @@ export class Widths {
     this.seen = new Set(CELLS.filter((cell) => cell.always).map((cell) => cell.key));
   }
 
-  /** Measure one event; true when a column got wider or first appeared. */
+  /**
+   * Measure one event; true when a column got wider or first appeared. A log
+   * record fills only the time: its message runs across the rest of the row.
+   */
   add(event) {
-    if (event.kind !== "request") return false;
+    if (event.kind !== "request") return this.fit("time", event.stamp);
     let grew = false;
     for (const cell of CELLS) {
       const value = cell.read(event);
@@ -130,14 +133,46 @@ export class Widths {
         this.seen.add(cell.key);
         grew = true;
       }
-      const chars = Math.min(length(value.text), cell.cap ?? Infinity);
-      if (chars > this.chars[cell.key]) {
-        this.chars[cell.key] = chars;
-        grew = true;
-      }
+      if (this.fit(cell.key, value.text, cell.cap)) grew = true;
     }
     return grew;
   }
+
+  fit(key, text, cap = Infinity) {
+    const chars = Math.min(length(text), cap);
+    if (chars <= this.chars[key]) return false;
+    this.chars[key] = chars;
+    return true;
+  }
+}
+
+/** Bounds on a width set by hand, in characters. */
+export const HAND_MIN = 2;
+export const HAND_MAX = 200;
+
+/** A width dragged to `chars`, kept within bounds. */
+export function handWidth(chars) {
+  return Math.min(HAND_MAX, Math.max(HAND_MIN, Math.round(chars)));
+}
+
+/**
+ * Widths set by hand, from what the browser kept: known cells with widths in
+ * bounds, anything else dropped.
+ */
+export function parseHand(text) {
+  let saved;
+  try {
+    saved = JSON.parse(text ?? "{}");
+  } catch {
+    return {};
+  }
+  const hand = {};
+  if (!saved || typeof saved !== "object") return hand;
+  for (const cell of CELLS) {
+    const chars = saved[cell.key];
+    if (Number.isInteger(chars) && chars >= HAND_MIN && chars <= HAND_MAX) hand[cell.key] = chars;
+  }
+  return hand;
 }
 
 /** The cells `columns` (a Set of picker names) shows and some event filled, in draw order. */
@@ -153,13 +188,20 @@ export function shown(columns, widths) {
 export const PATH_FLOOR = 32;
 
 /**
- * `grid-template-columns` for those cells, one track each, and the fewest
- * characters the tracks can take. Every track is fixed but the path's, which
- * takes what the list has room for up to its widest.
+ * `grid-template-columns` for those cells, one track each, then a filler
+ * that takes what is left of the row (a log message runs into it), with the
+ * fewest characters the tracks can take and the gaps between them. A width
+ * set by hand (`hand`, by key) is kept as set; otherwise every track is
+ * fixed but the path's, which takes what the list has room for up to its
+ * widest.
  */
-export function template(cells, widths) {
+export function template(cells, widths, hand = {}) {
   let least = 0;
   const tracks = cells.map((cell) => {
+    if (hand[cell.key]) {
+      least += hand[cell.key];
+      return `${hand[cell.key]}ch`;
+    }
     const chars = widths.chars[cell.key];
     if (cell.key !== "path") {
       least += chars;
@@ -169,7 +211,8 @@ export function template(cells, widths) {
     least += floor;
     return `minmax(${floor}ch, ${chars}ch)`;
   });
-  return { tracks: tracks.join(" "), least };
+  tracks.push("minmax(0, 1fr)");
+  return { tracks: tracks.join(" "), least, gaps: cells.length };
 }
 
 /** A request's cells as `{ key, text, tone, title, numeric }`, blanks included. */

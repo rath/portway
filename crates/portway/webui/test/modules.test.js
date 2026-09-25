@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 import { ALL_COLUMNS, detailFields, eventLine, lineText, parseColumns } from "../static/js/eventline.js";
-import { CELLS, PATH_FLOOR, Widths, rowCells, shown, template } from "../static/js/eventtable.js";
+import { CELLS, HAND_MAX, PATH_FLOOR, Widths, handWidth, parseHand, rowCells, shown, template } from "../static/js/eventtable.js";
 import { compile, modeAccepts, nextMode, tokenize } from "../static/js/filter.js";
 import { EventStore } from "../static/js/ring.js";
 import { Bars, Traffic, rate } from "../static/js/series.js";
@@ -92,7 +92,9 @@ test("a cell takes room once some event fills it", () => {
   const widths = new Widths();
   const keys = () => shown(every, widths).map((cell) => cell.key);
   assert.deepEqual(keys(), ["time", "status", "model", "method", "path", "ttfb", "down"]);
-  assert.equal(widths.add(log()), false);
+  assert.equal(widths.add(log()), true, "a log record's stamp sizes the time");
+  assert.equal(widths.chars.time, "12:34:57".length);
+  assert.equal(widths.add(log({ message: "x".repeat(300) })), false, "its message runs across the row");
   assert.equal(widths.add(request()), true);
   assert.ok(!keys().includes("cut") && !keys().includes("dial") && !keys().includes("agent"));
   widths.add(request({ complete: false, handshake: 0.031, dns: 0.01, tcp: 0.01, tls: 0.011, received_agent: 512 }));
@@ -107,12 +109,30 @@ test("widths fit the widest text, never shrink, and stop at a cap", () => {
   assert.equal(widths.chars.path, 120);
   widths.add(request({ path: "/v1/models" }));
   assert.equal(widths.chars.path, 120);
-  const { tracks, least } = template(shown(new Set(["status", "route"]), widths), widths);
-  assert.equal(tracks, `6ch 6ch minmax(${PATH_FLOOR}ch, 120ch)`);
+  const { tracks, least, gaps } = template(shown(new Set(["status", "route"]), widths), widths);
+  assert.equal(tracks, `6ch 6ch minmax(${PATH_FLOOR}ch, 120ch) minmax(0, 1fr)`);
   assert.equal(least, 6 + 6 + PATH_FLOOR);
+  assert.equal(gaps, 3);
   const short = new Widths();
   short.add(request());
-  assert.equal(template(shown(new Set(["route"]), short), short).tracks, "6ch minmax(20ch, 20ch)");
+  assert.equal(template(shown(new Set(["route"]), short), short).tracks, "6ch minmax(20ch, 20ch) minmax(0, 1fr)");
+  assert.deepEqual(template([], short), { tracks: "minmax(0, 1fr)", least: 0, gaps: 0 });
+});
+
+test("a width set by hand wins, is bounded, and survives only when valid", () => {
+  const widths = new Widths();
+  widths.add(request());
+  const cells = shown(new Set(["model", "route"]), widths);
+  const { tracks, least } = template(cells, widths, { model: 30, path: 12 });
+  assert.equal(tracks, "30ch 6ch 12ch minmax(0, 1fr)", "a hand-set path no longer flexes");
+  assert.equal(least, 30 + 6 + 12);
+  assert.equal(handWidth(0.4), 2);
+  assert.equal(handWidth(17.6), 18);
+  assert.equal(handWidth(1e6), HAND_MAX);
+  assert.deepEqual(parseHand('{"model":30,"path":12.5,"nope":9,"ttfb":1}'), { model: 30 });
+  assert.deepEqual(parseHand("not json"), {});
+  assert.deepEqual(parseHand(null), {});
+  assert.deepEqual(parseHand("[1,2]"), {});
 });
 
 test("every table cell belongs to a picker column, and every column has one", () => {

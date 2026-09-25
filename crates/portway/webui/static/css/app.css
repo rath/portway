@@ -247,11 +247,13 @@ table.data tbody tr[aria-selected="true"] td { background: var(--select); }
   overscroll-behavior: contain;
 }
 /* A table under a sticky header. Every track is a number of characters
-   eventtable.js measured, so rows drawn apart still line up; only the path
-   narrows, and past its floor the list scrolls sideways. */
+   eventtable.js measured (or the reader dragged), so rows drawn apart still
+   line up; only the path narrows, and past its floor the list scrolls
+   sideways. A last, flexible track takes the rest of the row, and the gap
+   before it is the row's right margin. */
 .list {
   --cell-gap: 1.5ch;
-  --cells-min: calc(var(--cells-chars, 0) * 1ch + (var(--cells-count, 1) - 1) * var(--cell-gap) + 20px);
+  --cells-min: calc(var(--cells-chars, 0) * 1ch + var(--cells-gaps, 0) * var(--cell-gap) + 10px);
 }
 .list .head, .row {
   display: grid;
@@ -260,7 +262,7 @@ table.data tbody tr[aria-selected="true"] td { background: var(--select); }
   min-width: var(--cells-min);
   height: var(--row);
   line-height: var(--row);
-  padding: 0 10px;
+  padding: 0 0 0 10px;
 }
 .list .head {
   position: sticky; top: 0; z-index: 1;
@@ -272,9 +274,24 @@ table.data tbody tr[aria-selected="true"] td { background: var(--select); }
 .list .spacer { width: 1px; }
 .list .rows { position: absolute; left: 0; right: 0; top: var(--row); min-width: var(--cells-min); }
 .cell { overflow: hidden; text-overflow: ellipsis; white-space: pre; min-width: 0; }
+.list .head .cell { position: relative; overflow: visible; }
+.list .head .label { display: block; overflow: hidden; text-overflow: ellipsis; }
+/* The grip sits in the gap after its column. */
+.list .head .grip {
+  position: absolute; top: 0; bottom: 0; z-index: 1;
+  right: calc(var(--cell-gap) / -2 - 5px); width: 10px;
+  cursor: col-resize; touch-action: none;
+}
+.list .head .grip::after {
+  content: ""; position: absolute; left: 4.5px; top: 25%; bottom: 25%; width: 1px;
+  background: var(--border);
+}
+.list .head .grip:hover::after { background: var(--accent); width: 2px; left: 4px; }
+body.resizing, body.resizing * { cursor: col-resize; user-select: none; }
+.list .probe { position: absolute; top: 0; left: 0; visibility: hidden; white-space: pre; pointer-events: none; }
 .cell.num { text-align: right; }
 .cell.c-cut { text-align: center; }
-.row.log .c-message { grid-column: 2 / -1; }
+.row.log .c-message { grid-column: 2 / -1; padding-right: 10px; }
 .row.log .c-message.whole { grid-column: 1 / -1; }
 .row { cursor: default; }
 .row.alt { background: color-mix(in srgb, var(--text) 3%, transparent); }

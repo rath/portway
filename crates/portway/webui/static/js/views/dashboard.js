@@ -4,9 +4,10 @@
 
 import { $, fill, h } from "../dom.js";
 import { drawBars, drawTraffic } from "../charts.js";
-import { Widths, rowCells, shown, template } from "../eventtable.js";
+import { Widths, handWidth, parseHand, rowCells, shown, template } from "../eventtable.js";
 import { describe } from "../flights.js";
 import { human, humanTime, maybeTime, ratio, span, uptime } from "../format.js";
+import * as prefs from "../prefs.js";
 import { SCALES } from "../series.js";
 import { MONOCHROME } from "../themes.js";
 
@@ -187,7 +188,8 @@ function cellClass(key, numeric, tone) {
  * The virtualized list, as a table under a sticky header row. Follow keeps
  * the newest line in view; any move up leaves it, and walking off the bottom
  * resumes it (tui::State::scroll). The header is one row tall, so row `at`
- * sits one row below where the scroll offset alone would put it.
+ * sits one row below where the scroll offset alone would put it. Its grips
+ * set a column's width by hand, kept for this browser.
  */
 export class EventList {
   constructor(ctx) {
@@ -200,7 +202,13 @@ export class EventList {
     this.widths = new Widths();
     this.epoch = -1;
     this.measured = { low: Infinity, high: -Infinity };
-    this.layout = "";
+    this.hand = parseHand(prefs.get("widths", null));
+    this.keys = null;
+    this.tracks = null;
+    // A run of zeros in the list's font: what one `ch` is in pixels.
+    this.probe = h("span", { class: "probe", "aria-hidden": "true", text: "0".repeat(20) });
+    this.list.append(this.probe);
+    this.bindResize();
     this.list.addEventListener("scroll", () => this.onScroll(), { passive: true });
     this.list.addEventListener("click", (event) => {
       const row = event.target.closest(".row");
@@ -324,23 +332,75 @@ export class EventList {
     this.measured = { low: Math.min(this.measured.low, items[0].seq), high: items[items.length - 1].seq };
   }
 
-  /** The column tracks and the header row, redone only when they change. */
+  /**
+   * The header row, rebuilt only when the cells change (never mid-drag), and
+   * the column tracks, set whenever a width does.
+   */
   columns() {
     const cells = shown(this.ctx.state.columns, this.widths);
-    const { tracks, least } = cells.length ? template(cells, this.widths) : { tracks: "minmax(0, 1fr)", least: 0 };
-    const layout = `${cells.map((cell) => cell.key).join(",")}|${tracks}`;
-    if (layout !== this.layout) {
-      this.layout = layout;
+    const keys = cells.map((cell) => cell.key).join(",");
+    if (keys !== this.keys) {
+      this.keys = keys;
+      fill(this.head, cells.map((cell) => h("span", { class: cellClass(cell.key, cell.numeric, null), title: cell.note },
+        h("span", { class: "label", text: cell.label }),
+        h("span", { class: "grip", dataset: { key: cell.key }, title: "Drag to resize; double-click to fit the content" }))));
+    }
+    const { tracks, least, gaps } = template(cells, this.widths, this.hand);
+    if (tracks !== this.tracks) {
+      this.tracks = tracks;
       this.list.style.setProperty("--cells", tracks);
       this.list.style.setProperty("--cells-chars", String(least));
-      this.list.style.setProperty("--cells-count", String(Math.max(1, cells.length)));
-      fill(this.head, cells.map((cell) => h("span", {
-        class: cellClass(cell.key, cell.numeric, null),
-        title: cell.note,
-        text: cell.label,
-      })));
+      this.list.style.setProperty("--cells-gaps", String(gaps));
     }
     return cells;
+  }
+
+  /** Drag a header grip to set that column's width; double-click it to fit the content again. */
+  bindResize() {
+    this.head.addEventListener("pointerdown", (event) => {
+      const grip = event.target.closest(".grip");
+      if (!grip || event.button !== 0) return;
+      event.preventDefault();
+      const key = grip.dataset.key;
+      const unit = this.probe.getBoundingClientRect().width / 20 || 8;
+      const from = event.clientX;
+      const start = grip.parentElement.getBoundingClientRect().width / unit;
+      document.body.classList.add("resizing");
+      const move = (moved) => {
+        this.hand[key] = handWidth(start + (moved.clientX - from) / unit);
+        this.columns();
+      };
+      const end = () => {
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", end);
+        window.removeEventListener("pointercancel", end);
+        document.body.classList.remove("resizing");
+        this.saveHand();
+      };
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", end);
+      window.addEventListener("pointercancel", end);
+    });
+    this.head.addEventListener("dblclick", (event) => {
+      const grip = event.target.closest(".grip");
+      if (!grip) return;
+      delete this.hand[grip.dataset.key];
+      this.saveHand();
+      this.columns();
+    });
+  }
+
+  saveHand() {
+    prefs.set("widths", JSON.stringify(this.hand));
+  }
+
+  /** Forget every width set by hand; how many there were. */
+  resetWidths() {
+    const count = Object.keys(this.hand).length;
+    this.hand = {};
+    this.saveHand();
+    this.columns();
+    return count;
   }
 
   render() {
