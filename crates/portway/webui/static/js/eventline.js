@@ -4,17 +4,20 @@
 
 import { human, humanCount, humanTime, ratio } from "./format.js";
 
-/** Every field a request line can carry, in draw order (tui::state::COLUMNS). */
+/**
+ * Every field a request line can carry, in draw order (tui::state::COLUMNS).
+ * The notes describe the cells the page's table shows for each.
+ */
 export const COLUMNS = [
   { name: "time", note: "when the relay ended" },
   { name: "status", note: "the code the agent got" },
-  { name: "cut", note: "one cell: ✂ on a cut relay" },
+  { name: "cut", note: "✂ on a relay cut short" },
   { name: "model", note: "the upstream the turn went to" },
-  { name: "route", note: "method and path, + . on a fresh dial" },
-  { name: "sizes", note: "raw → wire, ratio, upload time" },
+  { name: "route", note: "method, full path, and the dial time of a fresh connection" },
+  { name: "sizes", note: "request body raw and on the wire, saved, ↑ time" },
   { name: "ttfb", note: "first byte of the answer" },
-  { name: "down", note: "response bytes and time" },
-  { name: "tokens", note: "in (cached) → out, what the engine counted" },
+  { name: "down", note: "response bytes, what the agent got, ↓ time" },
+  { name: "tokens", note: "in, cached and out, as the engine counted" },
 ];
 
 export const ALL_COLUMNS = COLUMNS.map((column) => column.name);

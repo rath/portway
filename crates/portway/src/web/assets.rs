@@ -55,6 +55,7 @@ assets! {
     "js/charts.js" => "text/javascript; charset=utf-8",
     "js/dom.js" => "text/javascript; charset=utf-8",
     "js/eventline.js" => "text/javascript; charset=utf-8",
+    "js/eventtable.js" => "text/javascript; charset=utf-8",
     "js/export.js" => "text/javascript; charset=utf-8",
     "js/filter.js" => "text/javascript; charset=utf-8",
     "js/flights.js" => "text/javascript; charset=utf-8",

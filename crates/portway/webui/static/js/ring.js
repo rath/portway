@@ -15,6 +15,8 @@ export class EventStore {
     this.accepts = () => true;
     /** Bumped on every change, so views redraw only when needed. */
     this.version = 0;
+    /** Bumped when everything is replaced, so measurements start over. */
+    this.epoch = 0;
   }
 
   get newest() {
@@ -59,6 +61,7 @@ export class EventStore {
 
   /** Replace everything: a snapshot after a reset. */
   reset(events) {
+    this.epoch++;
     this.items = [];
     this.bySeq.clear();
     this.filtered = [];

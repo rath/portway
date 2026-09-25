@@ -2,9 +2,9 @@
 // charts, the event list and the in-flight strip. Each part renders from
 // `ctx.state` when the scheduler says it is dirty.
 
-import { $, fill, h, segments } from "../dom.js";
+import { $, fill, h } from "../dom.js";
 import { drawBars, drawTraffic } from "../charts.js";
-import { eventLine } from "../eventline.js";
+import { Widths, rowCells, shown, template } from "../eventtable.js";
 import { describe } from "../flights.js";
 import { human, humanTime, maybeTime, ratio, span, uptime } from "../format.js";
 import { SCALES } from "../series.js";
@@ -178,17 +178,29 @@ export function renderCharts(ctx) {
 
 // ------------------------------------------------------------------ events
 
+/** A cell's classes: its key, alignment and tone. */
+function cellClass(key, numeric, tone) {
+  return `cell c-${key}${numeric ? " num" : ""}${tone ? ` t-${tone}` : ""}`;
+}
+
 /**
- * The virtualized list. Follow keeps the newest line in view; any move up
- * leaves it, and walking off the bottom resumes it (tui::State::scroll).
+ * The virtualized list, as a table under a sticky header row. Follow keeps
+ * the newest line in view; any move up leaves it, and walking off the bottom
+ * resumes it (tui::State::scroll). The header is one row tall, so row `at`
+ * sits one row below where the scroll offset alone would put it.
  */
 export class EventList {
   constructor(ctx) {
     this.ctx = ctx;
     this.list = $("#events-list");
+    this.head = $("#events-head");
     this.spacer = $("#events-spacer");
     this.rows = $("#events-rows");
     this.ignoreScrollUntil = 0;
+    this.widths = new Widths();
+    this.epoch = -1;
+    this.measured = { low: Infinity, high: -Infinity };
+    this.layout = "";
     this.list.addEventListener("scroll", () => this.onScroll(), { passive: true });
     this.list.addEventListener("click", (event) => {
       const row = event.target.closest(".row");
@@ -209,9 +221,10 @@ export class EventList {
     return Number.isFinite(value) && value > 0 ? value : 24;
   }
 
-  /** Rows the list has room for: what a page moves by. */
+  /** Rows the list has room for under its header: what a page moves by. */
   viewport() {
-    return Math.max(1, Math.floor(this.list.clientHeight / this.rowHeight()));
+    const height = this.rowHeight();
+    return Math.max(1, Math.floor((this.list.clientHeight - height) / height));
   }
 
   cursorIndex() {
@@ -261,13 +274,13 @@ export class EventList {
     this.ctx.invalidate("events");
   }
 
-  /** Bring filtered row `at` into view without moving more than needed. */
+  /** Bring filtered row `at` into view, below the header, moving no more than needed. */
   reveal(at) {
     const height = this.rowHeight();
     const top = at * height;
     let scroll = this.list.scrollTop;
     if (top < scroll) scroll = top;
-    else if (top + height > scroll + this.list.clientHeight) scroll = top + height - this.list.clientHeight;
+    else if (top + 2 * height > scroll + this.list.clientHeight) scroll = top + 2 * height - this.list.clientHeight;
     this.setScroll(scroll);
   }
 
@@ -293,13 +306,69 @@ export class EventList {
     this.ctx.invalidate("events");
   }
 
+  /**
+   * Widen the columns for events not measured yet: the new ones at the end,
+   * older ones loaded in front. A reset of the store measures from scratch.
+   */
+  measure() {
+    const items = this.store.items;
+    if (this.store.epoch !== this.epoch) {
+      this.epoch = this.store.epoch;
+      this.widths = new Widths();
+      this.measured = { low: Infinity, high: -Infinity };
+    }
+    if (!items.length) return;
+    let at = items.length - 1;
+    while (at >= 0 && items[at].seq > this.measured.high) this.widths.add(items[at--]);
+    for (let from = 0; from <= at && items[from].seq < this.measured.low; from++) this.widths.add(items[from]);
+    this.measured = { low: Math.min(this.measured.low, items[0].seq), high: items[items.length - 1].seq };
+  }
+
+  /** The column tracks and the header row, redone only when they change. */
+  columns() {
+    const cells = shown(this.ctx.state.columns, this.widths);
+    const { tracks, least } = cells.length ? template(cells, this.widths) : { tracks: "minmax(0, 1fr)", least: 0 };
+    const layout = `${cells.map((cell) => cell.key).join(",")}|${tracks}`;
+    if (layout !== this.layout) {
+      this.layout = layout;
+      this.list.style.setProperty("--cells", tracks);
+      this.list.style.setProperty("--cells-chars", String(least));
+      this.list.style.setProperty("--cells-count", String(Math.max(1, cells.length)));
+      fill(this.head, cells.map((cell) => h("span", {
+        class: cellClass(cell.key, cell.numeric, null),
+        title: cell.note,
+        text: cell.label,
+      })));
+    }
+    return cells;
+  }
+
   render() {
     const { state } = this.ctx;
     const height = this.rowHeight();
     const length = this.store.filtered.length;
+    this.measure();
     this.spacer.style.height = `${length * height}px`;
-    if (state.follow) this.setScroll(Math.max(0, length * height - this.list.clientHeight));
+    if (state.follow) this.setScroll(Math.max(0, (length + 1) * height - this.list.clientHeight));
     this.draw();
+  }
+
+  /** One request's cells, or a log record's stamp and message across the rest. */
+  cells(event, cells) {
+    if (event.kind === "request") {
+      return rowCells(event, cells).map((cell) => h("span", {
+        class: cellClass(cell.key, cell.numeric, cell.tone),
+        title: cell.title,
+        text: cell.text,
+      }));
+    }
+    const tone = event.level === "ERROR" ? "bad" : event.level === "WARNING" ? "time" : null;
+    const stamped = this.ctx.state.columns.has("time");
+    const message = tone ? `${event.level} ${event.message}` : event.message;
+    return [
+      stamped ? h("span", { class: cellClass("time", false, "dim"), text: event.stamp }) : null,
+      h("span", { class: `${cellClass("message", false, tone)}${stamped ? "" : " whole"}`, title: event.message, text: message }),
+    ];
   }
 
   draw() {
@@ -307,8 +376,9 @@ export class EventList {
     const height = this.rowHeight();
     const filtered = this.store.filtered;
     const length = filtered.length;
+    const cells = this.columns();
     const first = Math.max(0, Math.floor(this.list.scrollTop / height));
-    const count = Math.ceil(this.list.clientHeight / height) + 1;
+    const count = Math.ceil(Math.max(0, this.list.clientHeight - height) / height) + 1;
     const last = Math.min(length, first + count);
     this.rows.style.transform = `translateY(${first * height}px)`;
     const selected = state.follow ? null : state.cursor;
@@ -317,12 +387,13 @@ export class EventList {
       const event = this.store.get(filtered[at]);
       if (!event) continue;
       rows.push(h("div", {
-        class: "row",
+        // Stripes follow the row's place in the list, not in the drawn slice.
+        class: `row ${event.kind}${at % 2 ? " alt" : ""}`,
         id: `ev-${event.seq}`,
         role: "option",
         "aria-selected": event.seq === selected ? "true" : "false",
         dataset: { seq: String(event.seq) },
-      }, segments(eventLine(event, state.columns))));
+      }, this.cells(event, cells)));
     }
     if (!length) {
       rows.push(h("div", {
@@ -384,7 +455,8 @@ export function renderFlights(ctx) {
       },
     },
     h("span", { class: "flight-model t-model", text: flight.model }),
-    h("span", { class: `flight-route ${flight.route_known ? "t-dim" : "t-bold"}`, text: flight.route }),
+    h("span", { class: "flight-method t-dim", text: flight.method }),
+    h("span", { class: `flight-path${flight.route_known ? "" : " t-bold"}`, title: `${flight.method} ${flight.path}`, text: flight.path }),
     h("span", { class: flight.phase === "stream" ? "t-good" : "t-time", text: described.text }),
     described.warn ? h("span", { class: `badge ${described.warn === "stalled" ? "bad" : "warn"}`, text: described.warn }) : h("span"));
   }));

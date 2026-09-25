@@ -41,7 +41,8 @@ version may contain breaking changes.
   integration on Linux and macOS.
 
 - `--web`: the dashboard in a browser, behind the optional `web` build feature.
-  It shows what `--tui` shows, computed by the same code, plus requests still
+  It shows what `--tui` shows, computed by the same code, with the events as
+  an aligned table that spells out each request's path, plus requests still
   in flight, the `--report` history for any window, search, CSV and JSON
   export, insight charts, opt-in desktop notifications, a command palette and
   15 themes. It runs beside a forwarder, attaches to a running one like

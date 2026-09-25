@@ -246,18 +246,40 @@ table.data tbody tr[aria-selected="true"] td { background: var(--select); }
   background: var(--surface-2);
   overscroll-behavior: contain;
 }
-.list .spacer { width: 1px; }
-.list .rows { position: absolute; left: 0; right: 0; top: 0; min-width: max-content; }
-.row {
+/* A table under a sticky header. Every track is a number of characters
+   eventtable.js measured, so rows drawn apart still line up; only the path
+   narrows, and past its floor the list scrolls sideways. */
+.list {
+  --cell-gap: 1.5ch;
+  --cells-min: calc(var(--cells-chars, 0) * 1ch + (var(--cells-count, 1) - 1) * var(--cell-gap) + 20px);
+}
+.list .head, .row {
+  display: grid;
+  grid-template-columns: var(--cells, minmax(0, 1fr));
+  column-gap: var(--cell-gap);
+  min-width: var(--cells-min);
   height: var(--row);
   line-height: var(--row);
   padding: 0 10px;
-  white-space: pre;
-  cursor: default;
 }
+.list .head {
+  position: sticky; top: 0; z-index: 1;
+  background: var(--surface);
+  box-shadow: 0 1px 0 var(--border);
+  color: var(--text-dim);
+  font-weight: 600;
+}
+.list .spacer { width: 1px; }
+.list .rows { position: absolute; left: 0; right: 0; top: var(--row); min-width: var(--cells-min); }
+.cell { overflow: hidden; text-overflow: ellipsis; white-space: pre; min-width: 0; }
+.cell.num { text-align: right; }
+.cell.c-cut { text-align: center; }
+.row.log .c-message { grid-column: 2 / -1; }
+.row.log .c-message.whole { grid-column: 1 / -1; }
+.row { cursor: default; }
+.row.alt { background: color-mix(in srgb, var(--text) 3%, transparent); }
 .row:hover { background: var(--hover); }
 .row[aria-selected="true"] { background: var(--select); box-shadow: inset 3px 0 0 var(--accent); }
-.row .glyph { display: inline-block; width: 1.4em; }
 .empty { padding: 16px; color: var(--text-dim); }
 
 /* The requests the terminal cannot show: counted, not yet finished. */
@@ -268,15 +290,22 @@ table.data tbody tr[aria-selected="true"] td { background: var(--select); }
 }
 .flights-head::before { content: "▾ "; color: var(--text-dim); }
 .flights-head[aria-expanded="false"]::before { content: "▸ "; }
-.flights-rows { max-height: 180px; overflow-y: auto; }
-.flight {
+/* Model, method, path, phase, warning: the rows share their tracks, so the
+   paths start in one column and are shown whole. */
+.flights-rows {
   display: grid;
-  grid-template-columns: minmax(120px, 1fr) minmax(160px, 1.2fr) minmax(220px, 3fr) auto;
-  gap: 10px; padding: 0 10px; height: var(--row); line-height: var(--row);
-  white-space: nowrap; cursor: pointer;
+  grid-template-columns: max-content max-content max-content minmax(max-content, 1fr) max-content;
+  column-gap: 2ch;
+  max-height: 180px; overflow: auto;
+}
+.flights-rows > .note { grid-column: 1 / -1; }
+.flight {
+  grid-column: 1 / -1;
+  display: grid; grid-template-columns: subgrid;
+  padding: 0 10px; height: var(--row); line-height: var(--row);
+  white-space: pre; cursor: pointer;
 }
 .flight:hover { background: var(--hover); }
-.flight > span { overflow: hidden; text-overflow: ellipsis; }
 .badge {
   display: inline-block; padding: 0 6px; border-radius: 4px; line-height: 18px; font-size: 11px;
   border: 1px solid currentColor;
@@ -417,8 +446,9 @@ dialog.palette { margin-top: 12vh; width: min(560px, calc(100vw - 32px)); }
 @media (max-width: 480px) {
   main { padding: 8px 16px; }
   .hud { grid-template-columns: 1fr; }
-  .flight { grid-template-columns: 1fr auto; height: auto; line-height: 1.5; padding: 4px 10px; }
-  .flight .flight-model, .flight .flight-route { grid-column: 1; }
+  .flights-rows { display: block; }
+  .flight { display: flex; flex-wrap: wrap; column-gap: 1ch; height: auto; line-height: 1.5; padding: 4px 10px; white-space: normal; }
+  .flight .flight-path { word-break: break-all; }
 }
 /* Short screens drop the charts first, the way the terminal does. */
 @media (max-height: 700px) and (min-width: 481px) {

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 import { ALL_COLUMNS, detailFields, eventLine, lineText, parseColumns } from "../static/js/eventline.js";
+import { CELLS, PATH_FLOOR, Widths, rowCells, shown, template } from "../static/js/eventtable.js";
 import { compile, modeAccepts, nextMode, tokenize } from "../static/js/filter.js";
 import { EventStore } from "../static/js/ring.js";
 import { Bars, Traffic, rate } from "../static/js/series.js";
@@ -66,6 +67,59 @@ test("the detail popup's fields are the terminal's", () => {
   assert.equal(fields.ended, "upstream body finished");
 });
 
+test("the table spells the route out, one cell per field", () => {
+  const widths = new Widths();
+  widths.add(request());
+  const cells = shown(every, widths);
+  const row = Object.fromEntries(rowCells(request({ path: "/openai/deployments/gpt/chat/completions", route_known: false }), cells)
+    .map((cell) => [cell.key, cell]));
+  assert.equal(row.method.text, "POST");
+  assert.equal(row.path.text, "/openai/deployments/gpt/chat/completions");
+  assert.equal(row.path.tone, "bold");
+  assert.equal(row.raw.text, "461KB");
+  assert.equal(row.wire.text, "111KB");
+  assert.equal(row.saved.text, "-76%");
+  assert.equal(row.prompt.text, "91.2K");
+  assert.equal(row.cached.text, "91.1K");
+  assert.equal(row.completion.text, "891");
+  assert.ok(row.ttfb.numeric && !row.path.numeric);
+  const blank = rowCells(request({ body_len: 0, wire_len: 0, coding: null, usage: null }), cells);
+  assert.equal(blank.length, cells.length, "a blank cell still holds its place");
+  assert.equal(blank.find((cell) => cell.key === "raw").text, "");
+});
+
+test("a cell takes room once some event fills it", () => {
+  const widths = new Widths();
+  const keys = () => shown(every, widths).map((cell) => cell.key);
+  assert.deepEqual(keys(), ["time", "status", "model", "method", "path", "ttfb", "down"]);
+  assert.equal(widths.add(log()), false);
+  assert.equal(widths.add(request()), true);
+  assert.ok(!keys().includes("cut") && !keys().includes("dial") && !keys().includes("agent"));
+  widths.add(request({ complete: false, handshake: 0.031, dns: 0.01, tcp: 0.01, tls: 0.011, received_agent: 512 }));
+  assert.ok(keys().includes("cut") && keys().includes("dial") && keys().includes("agent"));
+  assert.deepEqual(shown(new Set(["time", "route"]), widths).map((cell) => cell.key), ["time", "method", "path", "dial"]);
+});
+
+test("widths fit the widest text, never shrink, and stop at a cap", () => {
+  const widths = new Widths();
+  assert.equal(widths.chars.status, "status".length, "the header is the least");
+  widths.add(request({ path: `/${"a".repeat(200)}` }));
+  assert.equal(widths.chars.path, 120);
+  widths.add(request({ path: "/v1/models" }));
+  assert.equal(widths.chars.path, 120);
+  const { tracks, least } = template(shown(new Set(["status", "route"]), widths), widths);
+  assert.equal(tracks, `6ch 6ch minmax(${PATH_FLOOR}ch, 120ch)`);
+  assert.equal(least, 6 + 6 + PATH_FLOOR);
+  const short = new Widths();
+  short.add(request());
+  assert.equal(template(shown(new Set(["route"]), short), short).tracks, "6ch minmax(20ch, 20ch)");
+});
+
+test("every table cell belongs to a picker column, and every column has one", () => {
+  assert.ok(CELLS.every((cell) => ALL_COLUMNS.includes(cell.column)));
+  assert.ok(ALL_COLUMNS.every((name) => CELLS.some((cell) => cell.column === name)));
+});
+
 test("column lists are validated", () => {
   assert.deepEqual([...parseColumns(" time , route ")], ["time", "route"]);
   assert.throws(() => parseColumns("time,uri"), /uri/);
@@ -117,6 +171,7 @@ test("the store evicts, filters and resumes without duplicates", () => {
   assert.equal(store.position(7), 0);
   const big = new EventStore(10);
   big.reset([request({ seq: 5 }), request({ seq: 6 })]);
+  assert.equal(big.epoch, 1, "a reset tells measurements to start over");
   assert.equal(big.prepend([request({ seq: 3 }), request({ seq: 4 }), request({ seq: 6 })]), 2);
   assert.deepEqual(big.items.map((e) => e.seq), [3, 4, 5, 6]);
 });
