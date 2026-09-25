@@ -1,8 +1,9 @@
 //! One upstream upstream: negotiate its request coding, compress toward it, relay
 //! its response back as identity, and log the single line that describes it.
 
-use std::sync::Arc;
+use crate::origin::{OriginCompressionMode, OriginState, UploadMeter};
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
@@ -234,6 +235,8 @@ impl StatsView {
 }
 
 pub struct Forwarder {
+    origin_auto: bool,
+    origin: RwLock<Arc<OriginState>>,
     max_body_bytes: usize,
     telemetry: Arc<Telemetry>,
     probe_path: Option<String>,
@@ -294,6 +297,8 @@ impl Forwarder {
     }
     pub(crate) fn new(model: &str, upstream: Arc<Upstream>, args: &ForwarderConfig) -> Self {
         Forwarder {
+            origin_auto: args.origin_compression.mode == OriginCompressionMode::Auto,
+            origin: RwLock::new(Arc::default()),
             max_body_bytes: args.max_body_bytes,
             telemetry: Arc::clone(&args.telemetry),
             probe_path: args.probe_path.clone(),
@@ -323,6 +328,20 @@ impl Forwarder {
         }
     }
 
+    /// Carry learned origin state across a reload only when its policy and destination match.
+    pub(crate) fn inherit_origin_state(&self, previous: &Self) {
+        if self.origin_auto
+            && previous.origin_auto
+            && self.upstream.base == previous.upstream.base
+            && self.min_bytes == previous.min_bytes
+            && self.level == previous.level
+            && self.max_body_bytes == previous.max_body_bytes
+        {
+            let state = previous.origin.read().expect("origin state").clone();
+            *self.origin.write().expect("origin state") = state;
+        }
+    }
+
     /// Milliseconds since this forwarder was built.
     fn now(&self) -> u64 {
         self.born.elapsed().as_millis() as u64
@@ -334,7 +353,7 @@ impl Forwarder {
 
     /// Pick the request coding from the upstream's /health, never by guessing.
     pub async fn negotiate(&self) {
-        if self.want == CodingPreference::Off {
+        if self.origin_auto || self.want == CodingPreference::Off {
             return;
         }
         let probed = self.probe_health().await;
@@ -361,7 +380,8 @@ impl Forwarder {
 
     /// Whether the negotiation should be re-read before the next request.
     fn reprobe_due(&self) -> bool {
-        self.want != CodingPreference::Off
+        !self.origin_auto
+            && self.want != CodingPreference::Off
             && (self.stale.load(Ordering::Relaxed)
                 || self
                     .now()
@@ -663,6 +683,7 @@ impl Forwarder {
         path_and_query: &str,
         headers: &HeaderMap,
         wire: Bytes,
+        meter: Option<Arc<UploadMeter>>,
     ) -> Result<(Response<Incoming>, Lease, Arc<PhaseClock>), UpstreamError> {
         let clock = Arc::new(PhaseClock::new());
         let mut builder = Request::builder()
@@ -680,8 +701,11 @@ impl Forwarder {
                 );
             }
         }
+        if let Some(meter) = &meter {
+            meter.attempt(headers);
+        }
         let request = builder
-            .body(TimedBody::new(wire, Arc::clone(&clock)))
+            .body(TimedBody::new(wire, Arc::clone(&clock)).metered(meter))
             .map_err(|e| UpstreamError::Resolve(e.to_string()))?;
         let (response, lease) = self.upstream.send(request, Arc::clone(&clock)).await?;
         Ok((response, lease, clock))
@@ -752,23 +776,54 @@ impl Forwarder {
         let mut headers = self.upstream_headers(&client_headers);
         let pre_encoded = client_headers.contains_key(http::header::CONTENT_ENCODING);
 
+        let origin = self
+            .origin_auto
+            .then(|| self.origin.read().expect("origin state").clone());
+        let meter = origin.as_ref().map(|state| state.meter());
+        let eligible = !body.is_empty()
+            && body.len() >= self.min_bytes
+            && !pre_encoded
+            && !no_transform(&client_headers)
+            && (!self.origin_auto
+                || (!matches!(method, Method::GET | Method::HEAD)
+                    && ![
+                        "content-md5",
+                        "digest",
+                        "content-digest",
+                        "signature",
+                        "signature-input",
+                    ]
+                    .iter()
+                    .any(|name| client_headers.contains_key(*name))));
+        let origin_attempt = origin
+            .as_ref()
+            .map(|state| state.begin(&method, &path_and_query, &client_headers, &scope, eligible));
+        let selected = origin_attempt
+            .as_ref()
+            .map_or_else(|| self.coding(), |attempt| attempt.coding);
+
         // Any content-encoding the agent set means it framed the body itself;
         // the bytes and the header both pass through untouched.
         let mut coding = Coding::None;
         let mut wire = body.clone();
         let mut base = None;
         let mut hash = None;
-        if self.coding() != Coding::None
-            && body.len() >= self.min_bytes
-            && !pre_encoded
-            && !no_transform(&client_headers)
-        {
-            let negotiated = self.coding();
+        if selected != Coding::None && eligible {
+            let negotiated = selected;
             let source = body.clone();
             let this = Arc::clone(self);
             let encoding_scope = scope.clone();
             let job = tokio::task::spawn_blocking(move || {
-                this.encode_turn(&source, negotiated, &encoding_scope)
+                if this.origin_auto {
+                    this.encode(&source, negotiated).map(|wire| Encoded {
+                        wire,
+                        coding: negotiated,
+                        base: None,
+                        hash: None,
+                    })
+                } else {
+                    this.encode_turn(&source, negotiated, &encoding_scope)
+                }
             });
             if let Ok(Ok(encoded)) = job.await
                 && encoded.wire.len() < body.len()
@@ -794,8 +849,51 @@ impl Forwarder {
         };
 
         let mut sent = self
-            .send(&method, &path_and_query, &headers, wire.clone())
+            .send(
+                &method,
+                &path_and_query,
+                &headers,
+                wire.clone(),
+                meter.clone(),
+            )
             .await;
+        if let Some(attempt) = &origin_attempt
+            && let Ok((response, _, _)) = &sent
+        {
+            attempt.observe(response.status(), response.headers(), coding);
+            if coding != Coding::None && matches!(response.status().as_u16(), 400 | 415) {
+                self.telemetry.warn(&format!(
+                    "origin {}: {} rejected {}; compression suspended for 600s",
+                    self.model,
+                    response.status().as_u16(),
+                    coding.name().unwrap_or("identity")
+                ));
+            }
+            if coding != Coding::None
+                && response.status() == StatusCode::UNSUPPORTED_MEDIA_TYPE
+                && crate::origin::identity_allowed(response.headers())
+            {
+                // Close the unread refusal connection before dialing the identity retry.
+                drop(sent);
+                self.telemetry.warn("origin 415: retrying identity once");
+                self.stats.retried_identity.fetch_add(1, Ordering::Relaxed);
+                meter.as_ref().expect("origin meter").retry();
+                coding = Coding::None;
+                wire = body.clone();
+                headers.remove(http::header::CONTENT_ENCODING);
+                sent = self
+                    .send(
+                        &method,
+                        &path_and_query,
+                        &headers,
+                        wire.clone(),
+                        meter.clone(),
+                    )
+                    .await;
+            }
+        }
+        // A trial ends at response headers; it must not remain reserved for a long SSE stream.
+        drop(origin_attempt);
         if let Ok((response, _, _)) = &mut sent
             && coding == Coding::Dcz
             && let Some(reason) = dict_refusal(response)
@@ -855,7 +953,13 @@ impl Forwarder {
                 }
             }
             sent = self
-                .send(&method, &path_and_query, &headers, wire.clone())
+                .send(
+                    &method,
+                    &path_and_query,
+                    &headers,
+                    wire.clone(),
+                    meter.clone(),
+                )
                 .await;
         }
         if let Ok((response, _, _)) = &sent
@@ -867,6 +971,7 @@ impl Forwarder {
             self.mark_stale();
         }
         if let Ok((response, _, _)) = &mut sent
+            && !self.origin_auto
             && response.status() == StatusCode::UNSUPPORTED_MEDIA_TYPE
             && response.headers().contains_key("x-portway-decode-error")
             && coding != Coding::None
@@ -896,7 +1001,13 @@ impl Forwarder {
             headers.remove(http::header::CONTENT_ENCODING);
             headers.remove(dict::STORE_HEADER);
             sent = self
-                .send(&method, &path_and_query, &headers, wire.clone())
+                .send(
+                    &method,
+                    &path_and_query,
+                    &headers,
+                    wire.clone(),
+                    meter.clone(),
+                )
                 .await;
         }
 
@@ -929,12 +1040,13 @@ impl Forwarder {
         if let Some(hash) = hash {
             self.note_stored(response.headers(), hash, &body, scope);
         }
+        let uploaded = meter
+            .as_ref()
+            .map_or(wire.len() as u64, |meter| meter.bytes());
         self.stats
             .body_bytes
             .fetch_add(body.len() as u64, Ordering::Relaxed);
-        self.stats
-            .wire_bytes
-            .fetch_add(wire.len() as u64, Ordering::Relaxed);
+        self.stats.wire_bytes.fetch_add(uploaded, Ordering::Relaxed);
         let ttfb = t0.elapsed().as_secs_f64();
 
         let (parts, incoming) = response.into_parts();
@@ -1036,7 +1148,7 @@ impl Forwarder {
             parts.status.as_u16(),
             clock,
             body.len() as u64,
-            wire.len() as u64,
+            uploaded,
             coding,
             ttfb,
             upstream_encoding,
@@ -1114,9 +1226,11 @@ impl Forwarder {
             upstream_errors: self.stats.upstream_errors.load(Ordering::Relaxed),
             coding: self.coding(),
             dict: self.dict.load(Ordering::Relaxed),
-            identity_reason: CompressionIssue::from_u8(
-                self.identity_reason.load(Ordering::Relaxed),
-            ),
+            identity_reason: if self.origin_auto {
+                None
+            } else {
+                CompressionIssue::from_u8(self.identity_reason.load(Ordering::Relaxed))
+            },
             identity_backoff_secs: remaining(&self.encoding_refused_until),
             dict_backoff_reason: CompressionIssue::from_u8(
                 self.dict_backoff_reason.load(Ordering::Relaxed),
@@ -1134,6 +1248,7 @@ impl Forwarder {
     pub fn snapshot(&self) -> serde_json::Value {
         let view = self.view();
         serde_json::json!({
+            "origin_compression": if self.origin_auto { self.origin.read().expect("origin state").snapshot() } else { serde_json::json!({"mode":"off"}) },
             "requests": view.requests,
             "encoded_requests": view.encoded_requests,
             "in_flight": view.in_flight,

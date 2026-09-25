@@ -26,17 +26,31 @@ use crate::telemetry::Telemetry;
 /// explicitly, which hyper honors over the body's own hint.
 pub struct TimedBody {
     data: Option<Bytes>,
+    meter: Option<Arc<crate::origin::UploadMeter>>,
     clock: Arc<PhaseClock>,
 }
 
 impl TimedBody {
     pub fn new(data: Bytes, clock: Arc<PhaseClock>) -> Self {
         let data = if data.is_empty() { None } else { Some(data) };
-        TimedBody { data, clock }
+        TimedBody {
+            data,
+            clock,
+            meter: None,
+        }
+    }
+
+    pub(crate) fn metered(mut self, meter: Option<Arc<crate::origin::UploadMeter>>) -> Self {
+        self.meter = meter;
+        self
     }
 
     pub fn empty(clock: Arc<PhaseClock>) -> Self {
-        TimedBody { data: None, clock }
+        TimedBody {
+            data: None,
+            clock,
+            meter: None,
+        }
     }
 }
 
@@ -50,6 +64,9 @@ impl Body for TimedBody {
     ) -> Poll<Option<Result<Frame<Bytes>, Self::Error>>> {
         match self.data.take() {
             Some(data) => {
+                if let Some(meter) = &self.meter {
+                    meter.add(data.len());
+                }
                 self.clock.mark_upload_started();
                 // The only frame there will ever be: from here the next write
                 // that completes on this connection ends the upload.

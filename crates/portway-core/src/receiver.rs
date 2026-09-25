@@ -20,6 +20,8 @@ pub const ERROR_HEADER: &str = "x-portway-decode-error";
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ReceiverConfig {
+    /// Standalone forwarding policy; embedding users apply it to their forwarder.
+    pub origin_compression: crate::origin::OriginCompressionConfig,
     pub dictionary_bytes: usize,
     pub dictionary_ttl_seconds: u64,
     pub min_dictionary_bytes: usize,
@@ -30,6 +32,7 @@ pub struct ReceiverConfig {
 impl Default for ReceiverConfig {
     fn default() -> Self {
         Self {
+            origin_compression: Default::default(),
             dictionary_bytes: 256 << 20,
             dictionary_ttl_seconds: 3600,
             min_dictionary_bytes: 32 << 10,

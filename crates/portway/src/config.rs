@@ -112,6 +112,7 @@ impl Config {
     pub fn router(&self, mode: Mode) -> Result<Arc<Router>, String> {
         let mut compression = self.compression.clone();
         if mode == Mode::Receive {
+            compression.origin_compression = self.receiver.origin_compression.clone();
             compression.coding = portway_core::CodingPreference::Off;
             compression.dict = portway_core::DictionaryPreference::Off;
         }

@@ -290,6 +290,7 @@ async fn reload_on_hangup(args: Args, router: Arc<RwLock<Arc<Router>>>, log: Pat
         let reloaded = Config::load(&args).and_then(|config| config.router(args.mode));
         match reloaded {
             Ok(next) => {
+                next.inherit_origin_state(&**router.read().await);
                 next.negotiate_all().await;
                 let routes = next.models().len();
                 *router.write().await = next;

@@ -406,3 +406,65 @@ impl Drop for Cleanup {
         let _ = oneshot(&self.0, "--stop");
     }
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn receiver_reload_applies_origin_compression_without_restarting_decoder() {
+    let origin = upstream(Health::JsonBare, Reply::RejectEncoded).await;
+    let dir = data_dir("reload-origin");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("receive.toml");
+    let write = |mode: &str| {
+        std::fs::write(
+            &path,
+            format!(
+                "upstream={:?}\n[receiver.origin_compression]\nmode={mode:?}\n",
+                origin.base
+            ),
+        )
+        .unwrap();
+    };
+    write("off");
+    let port = free_port();
+    let launched = Command::new(BIN)
+        .arg("receive")
+        .arg("--config")
+        .arg(&path)
+        .arg("--daemon")
+        .arg("--data-dir")
+        .arg(&dir)
+        .arg("--port")
+        .arg(port.to_string())
+        .output()
+        .unwrap();
+    assert!(launched.status.success(), "{}", stderr(&launched));
+    let _cleanup = Cleanup(dir.clone());
+    wait_for_listener(port).await;
+    let client = Fwd {
+        base: format!("http://127.0.0.1:{port}"),
+    };
+    let body = Bytes::from("reload receiver ".repeat(1000));
+    assert_eq!(client.post("/v1/messages", body.clone()).await.status, 200);
+    assert!(!origin.calls()[0].has("content-encoding"));
+    for mode in ["auto", "off"] {
+        write(mode);
+        assert!(oneshot(&dir, "--reload").status.success());
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let stats = client.get("/__portway/stats").await.json();
+                if stats["models"]["upstream"]["origin_compression"]["mode"] == mode {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(client.post("/v1/messages", body.clone()).await.status, 200);
+    }
+    let calls = origin.calls();
+    assert_eq!(calls.len(), 4);
+    assert_eq!(calls[1].header("content-encoding"), Some("gzip"));
+    assert!(!calls[2].has("content-encoding"));
+    assert!(!calls[3].has("content-encoding"));
+    assert_eq!(origin.probes(), 0);
+}

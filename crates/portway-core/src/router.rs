@@ -66,6 +66,14 @@ impl Router {
         }
         while probes.join_next().await.is_some() {}
     }
+    /// Preserve compatible origin learning without sharing pools or changing active requests.
+    pub fn inherit_origin_state(&self, previous: &Self) {
+        for (name, next) in &self.models {
+            if let Some(old) = previous.get(name) {
+                next.inherit_origin_state(old);
+            }
+        }
+    }
     pub fn models(&self) -> &[(String, Arc<Forwarder>)] {
         &self.models
     }

@@ -46,6 +46,9 @@ impl std::str::FromStr for DictionaryPreference {
 #[serde(default, deny_unknown_fields)]
 pub struct ForwarderConfig {
     pub coding: CodingPreference,
+    /// Origin policy is selected by receiver configuration, not sender TOML.
+    #[serde(skip)]
+    pub origin_compression: crate::origin::OriginCompressionConfig,
     pub dict: DictionaryPreference,
     pub level: i32,
     pub min_bytes: usize,
@@ -59,6 +62,7 @@ impl Default for ForwarderConfig {
     fn default() -> Self {
         Self {
             coding: CodingPreference::Auto,
+            origin_compression: Default::default(),
             dict: DictionaryPreference::Auto,
             level: 11,
             min_bytes: 1024,

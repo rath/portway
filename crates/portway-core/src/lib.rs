@@ -7,6 +7,7 @@ pub mod clock;
 pub mod config;
 pub mod dict;
 pub mod forwarder;
+pub mod origin;
 pub mod pool;
 pub mod relay;
 pub mod router;
