@@ -54,7 +54,8 @@ sources. Runs are reproducible byte for byte. To check your own traffic, see
   processing a repeated prefix; Portway cuts the bytes and time of sending it.
   The two complement each other.
 - **Dictionaries need warm-up.** The first request of a conversation travels
-  without a dictionary, and bodies under 32 KiB are never stored as one.
+  without a dictionary, and by default the receiver does not store bodies under
+  32 KiB as one ([`min_dictionary_bytes`](docs/configuration.md#receiving)).
   Dictionaries live only in memory on both sides and are kept apart per
   credential.
 
@@ -62,9 +63,9 @@ sources. Runs are reproducible byte for byte. To check your own traffic, see
 
 ```text
             agent             Portway sender                    portway receive           app
-turn 1   ─ 264 KB ─▶  zstd, 61 KB, X-Dict-Store: 1      ──▶  decode, keep body     ─ 264 KB ─▶
+turn 1  ─ 258 KiB ─▶  zstd, 59 KiB, X-Dict-Store: 1     ──▶  decode, keep body    ─ 258 KiB ─▶
                       ◀── 200, X-Dict-Stored: <SHA-256 of turn 1>
-turn 2   ─ 268 KB ─▶  dcz, 1 KB, names turn 1 by hash   ──▶  restore from turn 1   ─ 268 KB ─▶
+turn 2  ─ 262 KiB ─▶  dcz, 1 KiB, names turn 1 by hash  ──▶  restore from turn 1  ─ 262 KiB ─▶
 ```
 
 - **Base selection.** The sender keeps up to eight confirmed bodies per route
@@ -76,9 +77,12 @@ turn 2   ─ 268 KB ─▶  dcz, 1 KB, names turn 1 by hash   ──▶  restore
   header carrying the dictionary's SHA-256, then a checksummed zstd frame.
 - **Confirmation.** The receiver answers with the SHA-256 of the bytes it
   actually decoded and stored. The sender uses only a body whose hash matches.
-- **Recovery.** If the receiver has lost a dictionary, it answers 412 before
-  the application runs, and the sender resends once as plain zstd. Application
-  errors are never retried.
+- **Recovery.** A receiver refuses a request it cannot restore before the
+  application runs, and marks the refusal. A lost dictionary (412) or a refused
+  dictionary frame (400 or 415) makes the sender resend as plain zstd; a refused
+  zstd body (415) makes it resend uncompressed. A request is sent at most three
+  times, and application errors are never retried. See
+  [errors and replay](docs/protocol.md#errors-and-replay).
 
 No provider, model endpoint, credential, or price is built in. The workspace
 contains `portway-core`, an embeddable Rust library, and `portway`, a CLI with
@@ -200,24 +204,24 @@ the upstream. See [operations and troubleshooting](docs/operations.md).
 
 ## Embed the core
 
-```rust,no_run
+```rust
 use portway_core::{Forwarder, ForwarderConfig};
 use bytes::Bytes;
 use http::Request;
 
-# async fn example() -> Result<(), Box<dyn std::error::Error>> {
-let forwarder = Forwarder::from_url(
-    "api", "https://api.example.com", &ForwarderConfig::default(),
-)?;
-forwarder.negotiate().await;
-let response = forwarder.forward(Request::builder()
-    .method("POST")
-    .uri("/items")
-    .body(Bytes::from_static(b"arbitrary request bytes"))?
-).await;
-// Consume or stream response.into_body(); dropping it cancels the upstream.
-# Ok(())
-# }
+async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    let forwarder = Forwarder::from_url(
+        "api", "https://api.example.com", &ForwarderConfig::default(),
+    )?;
+    forwarder.negotiate().await;
+    let response = forwarder.forward(Request::builder()
+        .method("POST")
+        .uri("/items")
+        .body(Bytes::from_static(b"arbitrary request bytes"))?
+    ).await;
+    // Consume or stream response.into_body(); dropping it cancels the upstream.
+    Ok(())
+}
 ```
 
 The caller owns the Tokio runtime, configuration, authentication, and listener.
@@ -237,12 +241,14 @@ Buildable examples: [forwarding](crates/portway-core/examples/embedded.rs) and
 ## Measure it yourself
 
 Reproduce the table above from a checkout. The script needs Python 3.9 or
-later and nothing outside its standard library:
+later and nothing outside its standard library. Without options it runs 8 turns
+on a 256 KiB context; each table row is one 20-turn run:
 
 ```sh
 cargo build --release --locked
 python3 scripts/bench.py
-python3 scripts/bench.py --context-kb 1024 --turns 20
+# One row of the table; repeat with 128, 256, and 512 for the others:
+python3 scripts/bench.py --turns 20 --context-kb 1024
 ```
 
 It starts a local origin, a receiver, and one sender per configuration, then
@@ -267,7 +273,7 @@ stay flat.
 
 ## Limits and verification
 
-Requests are buffered with a configurable 256MiB default limit; response bodies
+Requests are buffered with a configurable 256 MiB default limit; response bodies
 stream incrementally. WebSockets, CONNECT, HTTP/2, inbound TLS, and unbounded
 streaming uploads are not supported. Cancellation closes the upstream HTTP/1.1
 connection. Dictionary storage is memory-only and bounded.
