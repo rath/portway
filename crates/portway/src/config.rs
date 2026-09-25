@@ -86,7 +86,7 @@ impl Config {
             config.port = port;
         }
         args.apply_compression(&mut config.compression);
-        if args.tui && config.upstream.is_none() && config.models.is_empty() {
+        if (args.tui || args.web) && config.upstream.is_none() && config.models.is_empty() {
             config.compression.validate()?;
             config.receiver.validate()?;
         } else {

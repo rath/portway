@@ -112,9 +112,19 @@ pub fn start(dir: &Path) -> Result<Daemon, String> {
 impl Daemon {
     /// The listener is bound and the banner is logged: let the launcher go.
     pub fn ready(&self) {
+        self.ready_with(None);
+    }
+
+    /// The same, handing the launcher the web console's address to print:
+    /// the one terminal that may see its token is the one that started it.
+    pub fn ready_with(&self, console: Option<&str>) {
         if let Some(fd) = self.ready.replace(None) {
-            let byte = b"k";
-            unsafe { libc::write(fd, byte.as_ptr().cast(), 1) };
+            let message = match console {
+                Some(url) => format!("k\n{url}"),
+                None => "k".to_string(),
+            };
+            let bytes = message.as_bytes();
+            unsafe { libc::write(fd, bytes.as_ptr().cast(), bytes.len().min(REASON_MAX)) };
             unsafe { libc::close(fd) };
         }
     }
@@ -282,11 +292,14 @@ fn report(fd: RawFd, pid: i32, log: &Path) -> ! {
     let outcome = wait_ready(fd);
     unsafe { libc::close(fd) };
     match outcome {
-        Ready::Started => {
+        Ready::Started(console) => {
             println!(
                 "portway: daemon started (pid {pid}), logging to {}",
                 log.display()
             );
+            if let Some(url) = console {
+                println!("portway: console at {url}");
+            }
             std::process::exit(0);
         }
         Ready::Refused(reason) => {
@@ -310,7 +323,8 @@ fn report(fd: RawFd, pid: i32, log: &Path) -> ! {
 }
 
 enum Ready {
-    Started,
+    /// Up, with the web console's address when it serves one.
+    Started(Option<String>),
     /// The daemon said why it could not start.
     Refused(String),
     /// The pipe closed with nothing in it: it died before saying anything.
@@ -353,10 +367,10 @@ fn wait_ready(fd: RawFd) -> Ready {
         let text = String::from_utf8_lossy(&buffer[..read as usize])
             .trim()
             .to_string();
-        return if text == "k" {
-            Ready::Started
-        } else {
-            Ready::Refused(text)
+        return match text.split_once('\n') {
+            _ if text == "k" => Ready::Started(None),
+            Some(("k", url)) => Ready::Started(Some(url.trim().to_string())),
+            _ => Ready::Refused(text),
         };
     }
 }

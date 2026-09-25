@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::sync::mpsc::SyncSender;
 
 use clap::Parser;
-#[cfg(feature = "tui")]
+#[cfg(any(feature = "tui", feature = "web"))]
 use portway::cli::CodingArg;
 use portway::cli::{Args, Mode};
 use portway::config::Config;
@@ -13,10 +13,14 @@ use portway::control::{self, RouterCell};
 use portway::router::STATS_PATH;
 use portway::telemetry::{Event, Sinks};
 #[cfg(feature = "tui")]
-use portway::tui::view::Header;
-use portway::{daemon, logfmt, report, server, store, telemetry};
+use portway::tui;
 #[cfg(feature = "tui")]
-use portway::{tui, watch};
+use portway::tui::view::Header;
+#[cfg(any(feature = "tui", feature = "web"))]
+use portway::watch;
+#[cfg(feature = "web")]
+use portway::web;
+use portway::{daemon, logfmt, report, server, store, telemetry};
 #[cfg(feature = "tui")]
 type Settings = tui::Settings;
 #[cfg(not(feature = "tui"))]
@@ -33,7 +37,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         } else if args.reload {
             daemon::reload(&dir)
         } else {
-            daemon::status(&dir)
+            daemon::status(&dir).map(|status| with_console(status, &dir))
         });
     }
     if args.report {
@@ -85,6 +89,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(feature = "tui")]
     if args.tui && watch::forwarder_on(&config.host, config.port) {
         return watching(&config, &dir, settings);
+    }
+    // The same for the browser: a console that reads the running forwarder's
+    // database, and signals its daemon for reload and stop.
+    #[cfg(feature = "web")]
+    if args.web && !args.daemon && watch::forwarder_on(&config.host, config.port) {
+        return web_watching(&args, &config, &dir);
     }
     // `--daemon` forks here, before the runtime and before the recorder thread
     // exists: the child returns with the pid file held, the parent waits for
@@ -150,26 +160,106 @@ async fn run(
     );
 
     if !args.tui {
+        #[cfg(feature = "web")]
+        let (web_sender, web_events) = match args.web {
+            true => {
+                let (sender, receiver) = std::sync::mpsc::channel();
+                (Some(sender), Some(receiver))
+            }
+            false => (None, None),
+        };
+        #[cfg(not(feature = "web"))]
+        let web_sender = None;
         telemetry::install(Sinks {
             store: Some(store),
+            web: web_sender,
             ..Sinks::default()
         });
         logfmt::info(&banner);
-        if let Some(daemon) = daemon {
-            daemon.ready();
-            let log = daemon.log_path().to_path_buf();
-            tokio::spawn(reload_on_hangup(
-                args.clone(),
-                Arc::clone(&router_state),
-                log,
-            ));
+        // Stop from the console: the same way out as SIGTERM, recorder flush
+        // and pid file included.
+        let stop = Arc::new(tokio::sync::Notify::new());
+        #[cfg(feature = "web")]
+        let console = match web_events {
+            Some(events) => {
+                let options = web::Options {
+                    host: args.web_host.clone(),
+                    port: args.web_port,
+                    feed: web::Feed::Live(Arc::clone(&router_state)),
+                    events,
+                    header: web::Header {
+                        listen: format!("http://{}:{}/v1", config.host, config.port),
+                        coding: coding_label(&config.compression),
+                        mode: if daemon.is_some() {
+                            web::Mode::Daemon
+                        } else {
+                            web::Mode::Live
+                        },
+                        window: None,
+                    },
+                    control: web::Control::Live {
+                        args: Box::new(args.clone()),
+                        cell: Arc::clone(&router_state),
+                        stop: Arc::clone(&stop),
+                    },
+                    db: Some(_dir.join(store::DB_FILE)),
+                    prices: config.prices.clone(),
+                    dir: _dir.to_path_buf(),
+                };
+                match web::Console::start(options).await {
+                    Ok(console) => Some(console),
+                    Err(message) => match daemon {
+                        Some(daemon) => daemon.fail(&message),
+                        None => return Err(message.into()),
+                    },
+                }
+            }
+            None => None,
+        };
+        #[cfg(feature = "web")]
+        let console_url = console.as_ref().map(|console| {
+            logfmt::info(&format!("console at {}", console.public_url));
+            console.url.clone()
+        });
+        #[cfg(not(feature = "web"))]
+        let console_url: Option<String> = None;
+        match daemon {
+            Some(daemon) => {
+                daemon.ready_with(console_url.as_deref());
+                let log = daemon.log_path().to_path_buf();
+                tokio::spawn(reload_on_hangup(
+                    args.clone(),
+                    Arc::clone(&router_state),
+                    log,
+                ));
+            }
+            // The token goes to the terminal that started this, never to
+            // the log: whoever reads the log has not been handed the page.
+            None => {
+                if let Some(url) = &console_url {
+                    eprintln!("portway: console at {url}");
+                }
+            }
         }
         router.negotiate_all().await;
+        // A foreground console has no log to reopen: a hangup is the terminal
+        // going away, and ends the process the orderly way.
+        let hangup = console_url.is_some() && daemon.is_none();
         tokio::select! {
             () = serving(listener, router_state, decoder) => {}
             () = terminate() => {
                 logfmt::info("stopping");
             }
+            () = stop.notified() => {
+                logfmt::info("stopping");
+            }
+            () = hung_up(), if hangup => {
+                logfmt::info("stopping");
+            }
+        }
+        #[cfg(feature = "web")]
+        if let Some(console) = console {
+            console.shutdown().await;
         }
         return Ok(());
     }
@@ -266,6 +356,75 @@ fn watching(
     Ok(())
 }
 
+/// `--status`, plus where the console is while one is running on `dir`.
+fn with_console(status: String, _dir: &std::path::Path) -> String {
+    #[cfg(feature = "web")]
+    if let Some(url) = web::console_url(_dir) {
+        return format!("{status}\nportway: console at {url}");
+    }
+    status
+}
+
+/// `--web` on a port that already has a forwarder: serve what that one is
+/// recording. Like the watching dashboard this owns no listener of the
+/// forwarder's, no recorder and no pid file; reload and stop go to the
+/// daemon through its pid file.
+#[cfg(feature = "web")]
+fn web_watching(
+    args: &Args,
+    config: &Config,
+    dir: &std::path::Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    telemetry::install(Sinks {
+        web: Some(sender.clone()),
+        ..Sinks::default()
+    });
+    let db = dir.join(store::DB_FILE);
+    let watch = watch::spawn(&db, sender)?;
+    logfmt::info(&format!(
+        "watching the forwarder on http://{}:{}: reading {}, last {}",
+        config.host,
+        config.port,
+        db.display(),
+        logfmt::span(watch::WINDOW),
+    ));
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    runtime.block_on(async {
+        let console = web::Console::start(web::Options {
+            host: args.web_host.clone(),
+            port: args.web_port,
+            feed: web::Feed::Recorded(watch.window()),
+            events: receiver,
+            header: web::Header {
+                listen: format!("http://{}:{}/v1", config.host, config.port),
+                coding: String::new(),
+                mode: web::Mode::Attached,
+                window: Some(watch::WINDOW),
+            },
+            control: web::Control::Attached {
+                dir: dir.to_path_buf(),
+            },
+            db: Some(db.clone()),
+            prices: config.prices.clone(),
+            dir: dir.to_path_buf(),
+        })
+        .await?;
+        logfmt::info(&format!("console at {}", console.public_url));
+        eprintln!("portway: console at {}", console.url);
+        tokio::select! {
+            () = terminate() => {}
+            () = hung_up() => {}
+        }
+        console.shutdown().await;
+        Ok::<(), String>(())
+    })?;
+    watch.shutdown();
+    Ok(())
+}
+
 /// One line and an exit code: 0 when the answer is yes, 1 when it is no.
 fn daemon_message(outcome: Result<String, String>) -> ! {
     match outcome {
@@ -308,7 +467,7 @@ async fn reload_on_hangup(args: Args, router: RouterCell, log: PathBuf) {
 
 /// What the header line says the compressor was asked to do. The coding each
 /// upstream actually negotiated is in the model table.
-#[cfg(feature = "tui")]
+#[cfg(any(feature = "tui", feature = "web"))]
 fn coding_label(args: &portway_core::ForwarderConfig) -> String {
     let want = match args.coding {
         CodingArg::Auto => "auto",
@@ -348,20 +507,21 @@ async fn terminate() {
 /// it meant before, and a dashboard has no log file to reopen.
 #[cfg(feature = "tui")]
 async fn terminate_tui() {
-    use tokio::signal::unix::{SignalKind, signal};
-
-    async fn wait(kind: SignalKind) {
-        match signal(kind) {
-            Ok(mut stream) => {
-                stream.recv().await;
-            }
-            Err(_) => std::future::pending::<()>().await,
-        }
-    }
-
     tokio::select! {
         () = terminate() => {}
-        () = wait(SignalKind::hangup()) => {}
+        () = hung_up() => {}
+    }
+}
+
+/// SIGHUP, for the processes that have no log to reopen on one.
+async fn hung_up() {
+    use tokio::signal::unix::{SignalKind, signal};
+
+    match signal(SignalKind::hangup()) {
+        Ok(mut stream) => {
+            stream.recv().await;
+        }
+        Err(_) => std::future::pending::<()>().await,
     }
 }
 

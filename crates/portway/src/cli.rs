@@ -46,6 +46,26 @@ pub struct Args {
     #[cfg(feature = "tui")]
     #[arg(long,value_name="LIST",value_delimiter=',',value_parser=column,requires="tui")]
     pub event_columns: Option<Vec<Column>>,
+    /// Serve the dashboard in a browser. Attaches to a forwarder already on
+    /// the port, like --tui, and combines with --daemon.
+    #[cfg_attr(
+        feature = "web",
+        arg(long, conflicts_with_all = ["stop", "reload", "status", "report"])
+    )]
+    #[cfg_attr(all(feature = "web", feature = "tui"), arg(conflicts_with = "tui"))]
+    #[cfg_attr(not(feature = "web"), arg(skip))]
+    pub web: bool,
+    #[cfg(feature = "web")]
+    #[arg(
+        long,
+        value_name = "HOST",
+        default_value = "127.0.0.1",
+        requires = "web"
+    )]
+    pub web_host: String,
+    #[cfg(feature = "web")]
+    #[arg(long, value_name = "PORT", default_value_t = crate::web::DEFAULT_PORT, requires = "web")]
+    pub web_port: u16,
     #[arg(long, value_name = "PATH")]
     pub data_dir: Option<PathBuf>,
     #[arg(long, group = "operation")]
@@ -147,6 +167,27 @@ mod tests {
             Args::parse_from(["portway", "receive", "--upstream", "http://localhost:8000"]).mode,
             Mode::Receive
         );
+    }
+    #[test]
+    fn the_console_is_a_way_to_run_not_a_one_shot_command() {
+        #[cfg(feature = "web")]
+        {
+            let args = Args::parse_from(["portway", "--web", "--daemon", "--web-port", "0"]);
+            assert!(args.web && args.daemon);
+            assert_eq!((args.web_host.as_str(), args.web_port), ("127.0.0.1", 0));
+            assert_eq!(Args::parse_from(["portway", "--web"]).web_port, 8790);
+            for other in ["--stop", "--reload", "--status", "--report"] {
+                assert!(
+                    Args::try_parse_from(["portway", "--web", other]).is_err(),
+                    "{other}"
+                );
+            }
+            assert!(Args::try_parse_from(["portway", "--web-port", "1"]).is_err());
+            #[cfg(feature = "tui")]
+            assert!(Args::try_parse_from(["portway", "--web", "--tui"]).is_err());
+        }
+        #[cfg(not(feature = "web"))]
+        assert!(Args::try_parse_from(["portway", "--web"]).is_err());
     }
     #[test]
     fn report_window_is_bounded_and_positive() {
