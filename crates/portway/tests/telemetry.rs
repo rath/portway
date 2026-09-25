@@ -28,7 +28,7 @@ fn events() -> &'static Mutex<Receiver<Event>> {
         assert!(
             telemetry::install(Sinks {
                 tui: Some(sender),
-                store: None,
+                ..Sinks::default()
             }),
             "the sink installs once"
         );

@@ -151,8 +151,8 @@ async fn run(
 
     if !args.tui {
         telemetry::install(Sinks {
-            tui: None,
             store: Some(store),
+            ..Sinks::default()
         });
         logfmt::info(&banner);
         if let Some(daemon) = daemon {
@@ -182,6 +182,7 @@ async fn run(
         telemetry::install(Sinks {
             tui: Some(sender),
             store: Some(store),
+            ..Sinks::default()
         });
         let header = Header {
             listen: format!("http://{}:{}/v1", config.host, config.port),
@@ -223,7 +224,7 @@ fn watching(
     let (sender, receiver) = std::sync::mpsc::channel();
     telemetry::install(Sinks {
         tui: Some(sender.clone()),
-        store: None,
+        ..Sinks::default()
     });
     let watch = watch::spawn(&dir.join(store::DB_FILE), sender)?;
     // After the backfill, which is already queued: the newest line in the pane

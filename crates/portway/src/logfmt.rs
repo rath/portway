@@ -178,7 +178,7 @@ pub fn console(level: Level, message: &str) {
 }
 
 /// A record from the thread that *is* behind the recorder — a failed write, a
-/// retention pass. The dashboard and the console see it; the recorder does
+/// retention pass. The dashboards and the console see it; the recorder does
 /// not, because feeding a write failure back into the queue it failed on is a
 /// loop.
 pub fn from_store(level: Level, message: &str) {
@@ -188,7 +188,7 @@ pub fn from_store(level: Level, message: &str) {
         return;
     }
     drop(held);
-    telemetry::emit_tui(Event::Log {
+    telemetry::emit_viewers(Event::Log {
         stamp: stamp(),
         level,
         message: message.to_string(),

@@ -4,12 +4,13 @@ pub use portway_core::telemetry::{Event, RequestRecord, Telemetry};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Sender, SyncSender, TrySendError};
 use std::sync::{Arc, OnceLock};
-/// Where events go: the dashboard when it owns the terminal, the recorder in
-/// every mode. Both are optional — a mode installs what it has, and a mode
-/// with neither is a test.
+/// Where events go: the dashboard when it owns the terminal, the web console
+/// when one is served, the recorder in every mode. All are optional — a mode
+/// installs what it has, and a mode with none is a test.
 #[derive(Default)]
 pub struct Sinks {
     pub tui: Option<Sender<Event>>,
+    pub web: Option<Sender<Event>>,
     pub store: Option<SyncSender<Event>>,
 }
 
@@ -32,15 +33,13 @@ pub fn tui_installed() -> bool {
 }
 
 /// Hand `event` to every installed sink. A request path never waits for one:
-/// the dashboard's channel is unbounded and the recorder's is sent to with
+/// the viewers' channels are unbounded and the recorder's is sent to with
 /// `try_send` — a full queue drops the event and counts it.
 pub fn emit(event: Event) {
     let Some(sinks) = SINKS.get() else {
         return;
     };
-    if let Some(tui) = &sinks.tui {
-        let _ = tui.send(event.clone());
-    }
+    viewers(sinks, &event);
     if let Some(store) = &sinks.store
         && let Err(TrySendError::Full(_)) = store.try_send(event)
     {
@@ -54,11 +53,17 @@ pub fn emit(event: Event) {
     }
 }
 
-/// Hand `event` to the dashboard alone. The recorder's own records use this:
+/// Hand `event` to the dashboards alone. The recorder's own records use this:
 /// a failing write that queued another write would be a loop.
-pub fn emit_tui(event: Event) {
-    if let Some(tui) = SINKS.get().and_then(|sinks| sinks.tui.as_ref()) {
-        let _ = tui.send(event);
+pub fn emit_viewers(event: Event) {
+    if let Some(sinks) = SINKS.get() {
+        viewers(sinks, &event);
+    }
+}
+
+fn viewers(sinks: &Sinks, event: &Event) {
+    for viewer in [&sinks.tui, &sinks.web].into_iter().flatten() {
+        let _ = viewer.send(event.clone());
     }
 }
 
