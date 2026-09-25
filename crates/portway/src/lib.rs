@@ -1,5 +1,7 @@
 //! Portway application components. For embedding, depend on `portway-core`.
-pub use portway_core::{ack, body, clock, dict, forwarder, pool, relay, router, server, usage};
+pub use portway_core::{
+    ack, body, clock, dict, flights, forwarder, pool, relay, router, server, usage,
+};
 #[cfg(any(feature = "tui", feature = "web"))]
 pub mod board;
 pub mod cli;
@@ -17,3 +19,5 @@ pub mod telemetry;
 pub mod tui;
 #[cfg(any(feature = "tui", feature = "web"))]
 pub mod watch;
+#[cfg(feature = "web")]
+pub mod web;
