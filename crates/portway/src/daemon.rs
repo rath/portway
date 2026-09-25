@@ -212,7 +212,7 @@ pub fn stop(dir: &Path) -> Result<String, String> {
     Ok(format!("stopped (pid {pid})"))
 }
 
-/// SIGHUP: the daemon reopens its log file and re-reads every upstream's `/health`.
+/// SIGHUP: the daemon reopens its log file and asks the serving process to reload.
 pub fn reload(dir: &Path) -> Result<String, String> {
     let path = dir.join(store::PID_FILE);
     match liveness(&path)? {

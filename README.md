@@ -182,8 +182,8 @@ portway --stop
 ```
 
 A dashboard attached to a daemon can be closed without stopping forwarding.
-Configuration changes require a restart; `--reload` only reopens the log and
-renegotiates compression. Daemon mode does not install a boot or login service.
+Use `--reload` to reread routes, upstream URLs, and compression settings without
+dropping the listener. Daemon mode does not install a boot or login service.
 
 The CLI records request metadata in SQLite, never bodies, credentials, cookies,
 or dictionary contents. The runtime directory defaults to

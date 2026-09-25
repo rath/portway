@@ -33,7 +33,7 @@ fn free_port() -> u16 {
     listener.local_addr().unwrap().port()
 }
 
-fn launch(dir: &Path, port: u16, upstreams: &str) -> Output {
+fn write_config(dir: &Path, upstreams: &str) -> PathBuf {
     std::fs::create_dir_all(dir).unwrap();
     let config = dir.join("test.toml");
     let models: std::collections::BTreeMap<_, _> = upstreams
@@ -51,6 +51,11 @@ fn launch(dir: &Path, port: u16, upstreams: &str) -> Output {
         ),
     )
     .unwrap();
+    config
+}
+
+fn launch(dir: &Path, port: u16, upstreams: &str) -> Output {
+    let config = write_config(dir, upstreams);
     Command::new(BIN)
         .arg("--config")
         .arg(config)
@@ -271,6 +276,85 @@ async fn the_daemon_starts_serves_records_and_stops() {
         logs.iter().any(|(_, message)| message.contains("stopping")),
         "{logs:?}"
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn reload_replaces_routes_from_the_config_file() {
+    let first = upstream(Health::Json(vec!["zstd"]), Reply::Ok).await;
+    let second = upstream(Health::Json(vec!["zstd"]), Reply::Ok).await;
+    let dir = data_dir("reload-routes");
+    let port = free_port();
+    let first_routes = format!("model-old={}", first.base);
+
+    let launched = launch(&dir, port, &first_routes);
+    assert!(
+        launched.status.success(),
+        "launcher: {} / {}",
+        stdout(&launched),
+        stderr(&launched)
+    );
+    let pid = launched_pid(&launched);
+    let _cleanup = Cleanup(dir.clone());
+    wait_for_listener(port).await;
+    let forwarder = Fwd {
+        base: format!("http://127.0.0.1:{port}"),
+    };
+
+    let old = Bytes::from(
+        serde_json::to_vec(&serde_json::json!({
+            "model": "model-old",
+            "messages": [{"role": "user", "content": "before reload ".repeat(200)}],
+        }))
+        .unwrap(),
+    );
+    assert_eq!(
+        forwarder.post("/v1/chat/completions", old).await.status,
+        200
+    );
+    assert_eq!(first.calls().len(), 1);
+
+    let second_routes = format!("model-new={}", second.base);
+    write_config(&dir, &second_routes);
+    let reload = oneshot(&dir, "--reload");
+    assert!(reload.status.success(), "{}", stderr(&reload));
+    wait_for_log(&dir, "SIGHUP: configuration reloaded (1 route(s))").await;
+
+    let models = forwarder.get("/v1/models").await.json();
+    assert_eq!(models["data"][0]["id"], "model-new");
+
+    let new = Bytes::from(
+        serde_json::to_vec(&serde_json::json!({
+            "model": "model-new",
+            "messages": [{"role": "user", "content": "after reload ".repeat(200)}],
+        }))
+        .unwrap(),
+    );
+    assert_eq!(
+        forwarder.post("/v1/chat/completions", new).await.status,
+        200
+    );
+    assert_eq!(second.calls().len(), 1);
+
+    let stale = Bytes::from(
+        serde_json::to_vec(&serde_json::json!({
+            "model": "model-old",
+            "messages": [],
+        }))
+        .unwrap(),
+    );
+    assert_eq!(
+        forwarder
+            .post("/v1/chat/completions", stale)
+            .await
+            .status
+            .as_u16(),
+        400
+    );
+    assert_eq!(first.calls().len(), 1);
+
+    let stop = oneshot(&dir, "--stop");
+    assert!(stop.status.success(), "{}", stderr(&stop));
+    assert_eq!(stdout(&stop), format!("portway: stopped (pid {pid})"));
 }
 
 #[tokio::test(flavor = "multi_thread")]

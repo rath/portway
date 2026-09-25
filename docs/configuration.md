@@ -57,7 +57,8 @@ A file must still parse successfully before CLI overrides can be applied.
 Relative config paths are read before daemonization. TOML strings do not expand
 shell variables or `~`; expansion in the shell command above happens before
 Portway sees its arguments. Unknown fields and invalid settings produce errors.
-After editing an active configuration, [restart the process](operations.md#apply-configuration-changes).
+After editing an active daemon configuration, [reload or restart as
+appropriate](operations.md#apply-configuration-changes).
 
 ## TOML basics that matter here
 
@@ -141,7 +142,7 @@ Registering `"fast"` does not rename an upstream model to `fast`.
 
 Registration is local routing configuration. It does not create, download, load,
 or discover models on a server. There is no live registration endpoint. Add or
-remove entries, restart Portway, then inspect the configured names:
+remove entries, reload Portway, then inspect the configured names:
 
 ```sh
 curl --fail-with-body http://127.0.0.1:8787/v1/models

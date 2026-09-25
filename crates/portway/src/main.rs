@@ -16,6 +16,7 @@ use portway::tui::view::Header;
 use portway::{daemon, logfmt, report, server, store, telemetry};
 #[cfg(feature = "tui")]
 use portway::{tui, watch};
+use tokio::sync::RwLock;
 #[cfg(feature = "tui")]
 type Settings = tui::Settings;
 #[cfg(not(feature = "tui"))]
@@ -116,6 +117,7 @@ async fn run(
     _settings: Settings,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let router = config.router(args.mode)?;
+    let router_state = Arc::new(RwLock::new(Arc::clone(&router)));
     let decoder = (args.mode == Mode::Receive)
         .then(|| portway_core::Receiver::new(config.receiver.clone()))
         .transpose()?;
@@ -151,11 +153,15 @@ async fn run(
         if let Some(daemon) = daemon {
             daemon.ready();
             let log = daemon.log_path().to_path_buf();
-            tokio::spawn(reload_on_hangup(Arc::clone(&router), log));
+            tokio::spawn(reload_on_hangup(
+                args.clone(),
+                Arc::clone(&router_state),
+                log,
+            ));
         }
         router.negotiate_all().await;
         tokio::select! {
-            () = serving(listener, router, decoder) => {}
+            () = serving(listener, router_state, decoder) => {}
             () = terminate() => {
                 logfmt::info("stopping");
             }
@@ -188,7 +194,7 @@ async fn run(
         logfmt::info(&banner);
         router.negotiate_all().await;
         tokio::select! {
-            () = serving(listener, Arc::clone(&router), decoder) => {}
+            () = serving(listener, Arc::new(RwLock::new(Arc::clone(&router))), decoder) => {}
             _ = quit => {}
             () = terminate_tui() => {}
         }
@@ -268,10 +274,9 @@ fn daemon_message(outcome: Result<String, String>) -> ! {
     }
 }
 
-/// SIGHUP in daemon mode: the log file was probably rotated, and every upstream's
-/// `/health` is re-read. Both are cheap, and the signal is an operator saying
-/// "look again".
-async fn reload_on_hangup(router: Arc<Router>, log: PathBuf) {
+/// SIGHUP in daemon mode: reopen the log, rebuild the router from the current
+/// TOML and CLI overrides, then negotiate the new upstreams before publishing it.
+async fn reload_on_hangup(args: Args, router: Arc<RwLock<Arc<Router>>>, log: PathBuf) {
     use tokio::signal::unix::{SignalKind, signal};
 
     let Ok(mut stream) = signal(SignalKind::hangup()) else {
@@ -279,10 +284,23 @@ async fn reload_on_hangup(router: Arc<Router>, log: PathBuf) {
     };
     while stream.recv().await.is_some() {
         match daemon::reopen_log(&log) {
-            Ok(()) => logfmt::info("SIGHUP: log reopened; re-reading every /health"),
+            Ok(()) => logfmt::info("SIGHUP: log reopened; reloading configuration"),
             Err(err) => logfmt::error(&format!("SIGHUP: could not reopen the log: {err}")),
         }
-        router.negotiate_all().await;
+        let reloaded = Config::load(&args).and_then(|config| config.router(args.mode));
+        match reloaded {
+            Ok(next) => {
+                next.negotiate_all().await;
+                let routes = next.models().len();
+                *router.write().await = next;
+                logfmt::info(&format!(
+                    "SIGHUP: configuration reloaded ({routes} route(s))"
+                ));
+            }
+            Err(err) => {
+                logfmt::error(&format!("SIGHUP: keeping existing configuration: {err}"));
+            }
+        }
     }
 }
 
@@ -347,11 +365,53 @@ async fn terminate_tui() {
 
 async fn serving(
     listener: tokio::net::TcpListener,
-    router: Arc<Router>,
+    router: Arc<RwLock<Arc<Router>>>,
     receiver: Option<Arc<portway_core::Receiver>>,
 ) {
-    match receiver {
-        Some(receiver) => server::serve_receiver(listener, router, receiver).await,
-        None => server::serve(listener, router).await,
-    }
+    let telemetry = {
+        let guard = router.read().await;
+        Arc::clone(guard.telemetry())
+    };
+    server::serve_with(listener, telemetry, move |request| {
+        let router = Arc::clone(&router);
+        let receiver = receiver.clone();
+        async move {
+            let Some(receiver) = receiver else {
+                let current = {
+                    let guard = router.read().await;
+                    Arc::clone(&guard)
+                };
+                return current.handle(request).await;
+            };
+            if request.method() == http::Method::GET
+                && request.uri().path() == portway::router::STATS_PATH
+            {
+                let models = {
+                    let current = router.read().await;
+                    current
+                        .models()
+                        .iter()
+                        .map(|(n, f)| (n.clone(), f.snapshot()))
+                        .collect::<serde_json::Map<String, serde_json::Value>>()
+                };
+                return portway::relay::json_response(
+                    http::StatusCode::OK,
+                    serde_json::json!({"models":models,"receiver":receiver.snapshot()}),
+                );
+            }
+            receiver
+                .handle(request, move |request| {
+                    let router = Arc::clone(&router);
+                    async move {
+                        let current = {
+                            let guard = router.read().await;
+                            Arc::clone(&guard)
+                        };
+                        current.handle(request.map(http_body_util::Full::new)).await
+                    }
+                })
+                .await
+        }
+    })
+    .await;
 }

@@ -44,8 +44,9 @@ Use the same `--data-dir` for each command when it is customized. A locked pid
 file prevents two daemons from owning one runtime directory. Startup reports its
 pid and log path. The process forks before creating a runtime or recorder thread.
 
-`--reload` sends SIGHUP, reopening the log and rereading upstream capabilities.
-It does not reload TOML routes, prices, or limits. Restart to apply those changes.
+`--reload` sends SIGHUP, reopens the log, rereads the config file, rebuilds the
+router, and renegotiates upstream capabilities. The new router is published only
+after it has been built and probed.
 `--stop` sends SIGTERM and waits up to ten seconds. The process flushes recording
 and removes its pid file. Controls do not require upstream configuration.
 
@@ -55,8 +56,9 @@ foreground server has no daemon pid file, so check its HTTP health instead.
 
 ## Apply configuration changes
 
-Model additions, destination changes, prices, ports, and compression settings
-are read at process startup. `--reload` is **not** a configuration reload.
+Model additions, destination changes, and compression settings can be applied
+with `--reload` in daemon mode. Listener host/port changes still require a
+restart because the socket is already bound.
 For a daemon using the default runtime directory:
 
 ```sh
@@ -220,7 +222,8 @@ curl --fail-with-body -i https://gateway.example.com/__portway/capabilities
 A compatible receiver advertises `zstd`/`gzip` and, when enabled, `dcz`. A 404, an
 authentication challenge, or an ordinary health response with no advertisement
 cannot enable compression. Setting `--coding zstd` does not bypass negotiation.
-After fixing discovery, `--reload` on the sender daemon requests fresh probes.
+After fixing discovery, `--reload` on the sender daemon rereads the config and
+requests fresh probes.
 
 Dictionary storage is memory-only, so restarts, expiry, eviction, or rotated
 credentials may require warm-up again. A recognized dictionary miss falls back
@@ -239,7 +242,7 @@ to ordinary compression according to the [retry protocol](protocol.md#errors-and
 | 415 says routing needs an uncompressed body | Disable client-side request compression in model mode, or use single-upstream mode. |
 | 404 from the upstream | Check path composition, especially a duplicated `/v1` prefix. |
 | 401 or 403 from the upstream | Send the destination's actual key from the client; see [authentication](authentication.md#if-authentication-fails). |
-| Edited routes do not appear | Restart using the intended config file; `--reload` does not reread TOML. |
+| Edited routes do not appear | Run `--reload` with the serving daemon's data directory and check the log for `configuration reloaded`; restart if the listener host or port changed. |
 | `--tui` is an unrecognized argument | Rebuild or install with `--features tui`, and check which executable your shell finds. |
 | Dashboard needs a terminal | Run `--tui` directly in a terminal; use `--report` for redirected output. |
 | Dashboard has no prices or an empty history | Pass its price-bearing config and the serving instance's data directory; also check the selected date window. |
