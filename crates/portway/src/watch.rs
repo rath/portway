@@ -265,6 +265,7 @@ impl Reader {
                             }),
                             _ => None,
                         },
+                        flight: None,
                     }),
                 })
             })
@@ -570,6 +571,7 @@ mod tests {
                 completion: 891,
                 reasoning: Some(742),
             }),
+            flight: None,
         }
     }
 

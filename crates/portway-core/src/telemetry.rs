@@ -1,5 +1,5 @@
 //! Instance-owned observations; never writes files or terminals.
-use crate::{forwarder::Coding, usage::Usage};
+use crate::{flights::Flights, forwarder::Coding, usage::Usage};
 use http::Method;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, mpsc};
@@ -64,6 +64,10 @@ pub struct RequestRecord {
     /// was not asked to (`stream_options.include_usage`), or a stream that was
     /// cut short before its last chunk.
     pub usage: Option<Usage>,
+    /// The flight this record ends (see `flights`): a reader showing the
+    /// requests in flight drops that entry when this record arrives. `None`
+    /// for records rebuilt from the database.
+    pub flight: Option<u64>,
 }
 
 impl RequestRecord {
@@ -108,6 +112,7 @@ pub struct Telemetry {
     up: AtomicU64,
     down: AtomicU64,
     dropped: AtomicU64,
+    flights: Flights,
 }
 impl std::fmt::Debug for Telemetry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -166,6 +171,11 @@ impl Telemetry {
     }
     pub(crate) fn add_socket_down(&self, n: usize) {
         self.down.fetch_add(n as u64, Ordering::Relaxed);
+    }
+    /// The requests this instance's forwarders have counted and not yet
+    /// finished relaying.
+    pub fn flights(&self) -> &Flights {
+        &self.flights
     }
     pub fn socket_bytes(&self) -> (u64, u64) {
         (

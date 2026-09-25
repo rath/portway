@@ -619,6 +619,7 @@ mod tests {
                     completion: 300,
                     reasoning: Some(150),
                 }),
+                flight: None,
             })))
             .unwrap();
         store.shutdown();

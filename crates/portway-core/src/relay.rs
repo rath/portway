@@ -121,12 +121,31 @@ impl RequestLog {
             download: self.first_byte.map(|at| at.elapsed().as_secs_f64()),
             complete: self.complete,
             usage: self.usage,
+            flight: Some(self._in_flight.flight().id()),
         }
+    }
+}
+
+impl RequestLog {
+    /// Publish the running totals to the flight registry. What the agent got
+    /// is the decoded count until the hop encodes.
+    fn report_progress(&self) {
+        let agent = if self.agent_coding.is_some() {
+            self.agent_bytes
+        } else {
+            self.received
+        };
+        self._in_flight
+            .flight()
+            .progress(self.received, self.received_wire, agent);
     }
 }
 
 impl Drop for RequestLog {
     fn drop(&mut self) {
+        // Out of the registry first: a reader that sees the record must not
+        // also still see the request in flight.
+        self._in_flight.end();
         self.telemetry.emit(Event::Request(Arc::new(self.record())));
     }
 }
@@ -188,6 +207,7 @@ impl RelayBody {
                 .agent_bytes
                 .fetch_add(len as u64, Ordering::Relaxed);
         }
+        log.report_progress();
     }
 }
 
@@ -347,4 +367,56 @@ pub fn json_response(status: StatusCode, value: serde_json::Value) -> Response<O
         )
         .body(OutBody::fixed(bytes))
         .expect("json response is well formed")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+
+    use super::*;
+
+    /// What the sink saw per record: flights still registered, and the id.
+    type Seen = Arc<Mutex<Vec<(usize, Option<u64>)>>>;
+
+    /// A reader that sees the record must not still see the request in
+    /// flight: the registry is emptied before the sink hears about it, and
+    /// the record names the flight it ended.
+    #[test]
+    fn the_flight_leaves_before_its_record_is_emitted() {
+        let seen: Seen = Arc::default();
+        let telemetry = Arc::new_cyclic(|weak: &std::sync::Weak<Telemetry>| {
+            let weak = weak.clone();
+            let seen = Arc::clone(&seen);
+            Telemetry::new(move |event| {
+                if let (Event::Request(record), Some(telemetry)) = (event, weak.upgrade()) {
+                    let flying = telemetry.flights().len();
+                    seen.lock().unwrap().push((flying, record.flight));
+                }
+            })
+        });
+        let stats = Arc::new(Stats::default());
+        let in_flight = InFlight::new(&stats, &telemetry, "alpha", &Method::POST, "/v1/x", 3);
+        let id = in_flight.flight().id();
+        let log = RequestLog::new(
+            "alpha".into(),
+            Method::POST,
+            "/v1/x".into(),
+            200,
+            Arc::new(PhaseClock::new()),
+            3,
+            3,
+            Coding::None,
+            0.1,
+            "identity".into(),
+            None,
+            Arc::clone(&stats),
+            in_flight,
+            Arc::clone(&telemetry),
+        );
+        assert_eq!(telemetry.flights().len(), 1);
+        assert_eq!(stats.in_flight.load(Ordering::Relaxed), 1);
+        drop(log);
+        assert_eq!(*seen.lock().unwrap(), vec![(0, Some(id))]);
+        assert_eq!(stats.in_flight.load(Ordering::Relaxed), 0);
+    }
 }

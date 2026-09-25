@@ -1429,6 +1429,7 @@ mod tests {
             download: Some(0.018),
             complete: true,
             usage: None,
+            flight: None,
         }
     }
 

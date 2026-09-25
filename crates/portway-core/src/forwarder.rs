@@ -14,6 +14,7 @@ use crate::body::{Decoder, Encoder, TimedBody, collect_raw};
 use crate::clock::PhaseClock;
 use crate::config::{CodingPreference, DictionaryPreference, ForwarderConfig};
 use crate::dict::{self, Ring};
+use crate::flights::Flight;
 use crate::pool::{Lease, Upstream, UpstreamError};
 use crate::relay::{OutBody, RelayBody, RequestLog, json_response};
 use crate::telemetry::Telemetry;
@@ -98,6 +99,14 @@ impl Coding {
         }
     }
 
+    /// Any coding by its discriminant, `Dcz` included.
+    pub(crate) fn from_code(raw: u8) -> Coding {
+        match raw {
+            3 => Coding::Dcz,
+            raw => Coding::from_u8(raw),
+        }
+    }
+
     fn from_u8(raw: u8) -> Coding {
         match raw {
             1 => Coding::Zstd,
@@ -174,21 +183,50 @@ pub struct Stats {
     pub upstream_errors: AtomicU64,
 }
 
-/// Holds `in_flight` up for one request. Created when the request is counted,
-/// moved into the `RequestLog` on success so it lives as long as the relay,
-/// and dropped on the spot by every early return.
-pub struct InFlight(Arc<Stats>);
+/// Holds `in_flight` up for one request, and its entry in the telemetry's
+/// flight registry. Created when the request is counted, moved into the
+/// `RequestLog` on success so it lives as long as the relay, and dropped on
+/// the spot by every early return.
+pub struct InFlight {
+    stats: Arc<Stats>,
+    telemetry: Arc<Telemetry>,
+    flight: Arc<Flight>,
+}
 
 impl InFlight {
-    fn new(stats: &Arc<Stats>) -> Self {
+    pub(crate) fn new(
+        stats: &Arc<Stats>,
+        telemetry: &Arc<Telemetry>,
+        model: &str,
+        method: &Method,
+        path: &str,
+        body_len: usize,
+    ) -> Self {
         stats.in_flight.fetch_add(1, Ordering::Relaxed);
-        InFlight(Arc::clone(stats))
+        InFlight {
+            stats: Arc::clone(stats),
+            telemetry: Arc::clone(telemetry),
+            flight: telemetry
+                .flights()
+                .begin(model, method, path, body_len as u64),
+        }
+    }
+
+    pub fn flight(&self) -> &Flight {
+        &self.flight
+    }
+
+    /// Leave the registry now rather than at the drop: the relay does this
+    /// before it emits the record, so no reader sees the request twice.
+    pub fn end(&self) {
+        self.telemetry.flights().end(self.flight.id());
     }
 }
 
 impl Drop for InFlight {
     fn drop(&mut self) {
-        self.0.in_flight.fetch_sub(1, Ordering::Relaxed);
+        self.end();
+        self.stats.in_flight.fetch_sub(1, Ordering::Relaxed);
     }
 }
 
@@ -684,8 +722,10 @@ impl Forwarder {
         headers: &HeaderMap,
         wire: Bytes,
         meter: Option<Arc<UploadMeter>>,
+        attempt: (&InFlight, Coding),
     ) -> Result<(Response<Incoming>, Lease, Arc<PhaseClock>), UpstreamError> {
         let clock = Arc::new(PhaseClock::new());
+        attempt.0.flight().attempt(&clock, wire.len(), attempt.1);
         let mut builder = Request::builder()
             .method(method)
             .uri(format!("{}{path_and_query}", self.upstream.base_path));
@@ -840,7 +880,14 @@ impl Forwarder {
             }
         }
         self.stats.requests.fetch_add(1, Ordering::Relaxed);
-        let in_flight = InFlight::new(&self.stats);
+        let in_flight = InFlight::new(
+            &self.stats,
+            &self.telemetry,
+            &self.model,
+            &method,
+            &path,
+            body.len(),
+        );
         let abort = AbortGuard {
             forwarder: Arc::clone(self),
             method: method.clone(),
@@ -855,6 +902,7 @@ impl Forwarder {
                 &headers,
                 wire.clone(),
                 meter.clone(),
+                (&in_flight, coding),
             )
             .await;
         if let Some(attempt) = &origin_attempt
@@ -888,6 +936,7 @@ impl Forwarder {
                         &headers,
                         wire.clone(),
                         meter.clone(),
+                        (&in_flight, coding),
                     )
                     .await;
             }
@@ -959,6 +1008,7 @@ impl Forwarder {
                     &headers,
                     wire.clone(),
                     meter.clone(),
+                    (&in_flight, coding),
                 )
                 .await;
         }
@@ -1007,6 +1057,7 @@ impl Forwarder {
                     &headers,
                     wire.clone(),
                     meter.clone(),
+                    (&in_flight, coding),
                 )
                 .await;
         }
@@ -1048,6 +1099,9 @@ impl Forwarder {
             .fetch_add(body.len() as u64, Ordering::Relaxed);
         self.stats.wire_bytes.fetch_add(uploaded, Ordering::Relaxed);
         let ttfb = t0.elapsed().as_secs_f64();
+        in_flight
+            .flight()
+            .responded(response.status().as_u16(), ttfb, uploaded, coding);
 
         let (parts, incoming) = response.into_parts();
         let upstream_encoding = parts

@@ -539,6 +539,7 @@ mod tests {
             download: None,
             complete: true,
             usage,
+            flight: None,
         }
     }
 

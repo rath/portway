@@ -495,6 +495,7 @@ mod tests {
                 completion: 891,
                 reasoning: Some(742),
             }),
+            flight: None,
         }
     }
 

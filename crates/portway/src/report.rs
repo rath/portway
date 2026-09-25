@@ -603,6 +603,7 @@ mod tests {
             download: Some(0.020),
             complete,
             usage: None,
+            flight: None,
         }
     }
 

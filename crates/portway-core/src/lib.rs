@@ -6,6 +6,7 @@ pub mod body;
 pub mod clock;
 pub mod config;
 pub mod dict;
+pub mod flights;
 pub mod forwarder;
 pub mod origin;
 pub mod pool;
