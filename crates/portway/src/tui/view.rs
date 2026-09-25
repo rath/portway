@@ -2085,4 +2085,40 @@ mod tests {
         // Everything off is a request too, and an empty line answers it.
         assert_eq!(text(&request_line(&fresh, Columns::parse("").unwrap())), "");
     }
+    /// The web console ports these formatters to JavaScript; one fixture,
+    /// asserted on both sides, keeps the two printing the same text.
+    #[test]
+    fn the_web_formatters_share_this_fixture() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/webui/test/fixtures/format.json"
+        );
+        let fixture: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let cases = |name: &str| fixture[name].as_array().unwrap().clone();
+        let text = |case: &serde_json::Value| case[1].as_str().unwrap().to_string();
+        for case in cases("human") {
+            assert_eq!(logfmt::human(case[0].as_u64().unwrap()), text(&case));
+        }
+        for case in cases("human_time") {
+            assert_eq!(logfmt::human_time(case[0].as_f64().unwrap()), text(&case));
+        }
+        for case in cases("human_count") {
+            assert_eq!(logfmt::human_count(case[0].as_u64().unwrap()), text(&case));
+        }
+        for case in cases("span") {
+            let seconds = Duration::from_secs(case[0].as_u64().unwrap());
+            assert_eq!(logfmt::span(seconds), text(&case));
+        }
+        for case in cases("uptime") {
+            assert_eq!(uptime(case[0].as_u64().unwrap()), text(&case));
+        }
+        for case in cases("ratio") {
+            let pair = (case[0][0].as_u64().unwrap(), case[0][1].as_u64().unwrap());
+            assert_eq!(ratio(pair.0, pair.1), text(&case));
+        }
+        for case in cases("dollars") {
+            assert_eq!(dollars(case[0].as_f64().unwrap()), text(&case));
+        }
+    }
 }

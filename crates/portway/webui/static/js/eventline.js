@@ -1,0 +1,176 @@
+// One event as the terminal prints it: the same fields in the same order,
+// the same marks glued in the same places, as a list of toned segments the
+// view turns into spans. Pure, so the line can be tested without a page.
+
+import { human, humanCount, humanTime, ratio } from "./format.js";
+
+/** Every field a request line can carry, in draw order (tui::state::COLUMNS). */
+export const COLUMNS = [
+  { name: "time", note: "when the relay ended" },
+  { name: "status", note: "the code the agent got" },
+  { name: "cut", note: "one cell: ✂ on a cut relay" },
+  { name: "model", note: "the upstream the turn went to" },
+  { name: "route", note: "method and path, + . on a fresh dial" },
+  { name: "sizes", note: "raw → wire, ratio, upload time" },
+  { name: "ttfb", note: "first byte of the answer" },
+  { name: "down", note: "response bytes and time" },
+  { name: "tokens", note: "in (cached) → out, what the engine counted" },
+];
+
+export const ALL_COLUMNS = COLUMNS.map((column) => column.name);
+
+/** A set of column names from a comma list; unknown names are an error. */
+export function parseColumns(list) {
+  const names = list.split(",").map((name) => name.trim()).filter(Boolean);
+  for (const name of names) {
+    if (!ALL_COLUMNS.includes(name)) {
+      throw new Error(`unknown column "${name}": ${ALL_COLUMNS.join(",")}`);
+    }
+  }
+  return new Set(names);
+}
+
+/** The tone a status code is drawn in. */
+export function statusTone(status) {
+  if (status < 300) return "good";
+  if (status < 400) return "wire";
+  if (status < 500) return "time";
+  return "bad";
+}
+
+/**
+ * Builds a line field by field: a field that is off closes its gap, and the
+ * two one-cell marks take the place of a separator (tui::view::Fields).
+ */
+class Fields {
+  constructor() {
+    this.segments = [];
+    this.gap = false;
+    this.held = false;
+  }
+
+  word(text, tone) {
+    const held = this.held;
+    this.held = false;
+    if (this.gap && !held) this.segments.push({ text: " ", tone: null });
+    this.segments.push({ text, tone });
+    this.gap = true;
+  }
+
+  bare(text, tone) {
+    this.segments.push({ text, tone });
+    this.gap = true;
+    this.held = false;
+  }
+
+  glue(text, tone) {
+    this.segments.push({ text, tone });
+    this.gap = true;
+    this.held = true;
+  }
+}
+
+/** A request event's line, restricted to `columns` (a Set of names). */
+export function requestLine(event, columns) {
+  const line = new Fields();
+  for (const name of ALL_COLUMNS) {
+    if (!columns.has(name)) continue;
+    switch (name) {
+      case "time":
+        line.word(event.stamp, "dim");
+        break;
+      case "status":
+        line.word(String(event.status), statusTone(event.status));
+        break;
+      case "cut":
+        if (!event.complete) line.glue("✂", "time");
+        break;
+      case "model":
+        line.word(event.model, "model");
+        break;
+      case "route":
+        line.word(event.route, event.route_known ? "dim" : "bold");
+        if (event.handshake != null) line.bare(".", "time");
+        break;
+      case "sizes":
+        if (event.body_len === 0) break;
+        line.word(human(event.body_len), "raw");
+        line.glue("→", "dim");
+        line.word(human(event.wire_len), "wire");
+        if (event.coding != null) line.word(ratio(event.body_len, event.wire_len), "good");
+        if (event.upload != null) line.word(humanTime(event.upload), "time");
+        break;
+      case "ttfb":
+        line.word("ttfb", "dim");
+        line.word(humanTime(event.ttfb), "time");
+        break;
+      case "down":
+        line.word("down", "dim");
+        line.word(human(event.received), "raw");
+        if (event.received_agent > 0 && event.received_agent !== event.received) {
+          line.glue("→", "dim");
+          line.word(human(event.received_agent), "wire");
+          line.word(ratio(event.received, event.received_agent), "good");
+        }
+        if (event.download != null) line.word(humanTime(event.download), "time");
+        break;
+      case "tokens": {
+        const usage = event.usage;
+        if (!usage) break;
+        line.word("tok", "dim");
+        line.word(humanCount(usage.prompt), "raw");
+        if (usage.cached != null) line.glue(`(${humanCount(usage.cached)} cached)`, "dim");
+        line.glue("→", "dim");
+        line.word(humanCount(usage.completion), "wire");
+        break;
+      }
+    }
+  }
+  return line.segments;
+}
+
+/** A log event's line: stamp, the level when it is WARNING or worse, message. */
+export function logLine(event) {
+  const tone = event.level === "ERROR" ? "bad" : event.level === "WARNING" ? "time" : null;
+  const segments = [{ text: event.stamp, tone: "dim" }, { text: " ", tone: null }];
+  if (tone) segments.push({ text: `${event.level} `, tone });
+  segments.push({ text: event.message, tone });
+  return segments;
+}
+
+export function eventLine(event, columns) {
+  return event.kind === "request" ? requestLine(event, columns) : logLine(event);
+}
+
+/** The line as plain text, the way it is copied. */
+export function lineText(segments) {
+  return segments.map((segment) => segment.text).join("");
+}
+
+/** The detail popup's fields, word for word (tui::view::detail_lines). */
+export function detailFields(event) {
+  const optional = (value) => (value == null ? "not measured" : humanTime(value));
+  const agent = event.received_agent > 0 && event.received_agent !== event.received
+    ? ` -> ${human(event.received_agent)} sent to the agent (${ratio(event.received, event.received_agent)})`
+    : "";
+  const usage = event.usage;
+  return [
+    ["when", event.stamp],
+    ["model", event.model],
+    ["request", `${event.method} ${event.path} -> ${event.status}`],
+    ["connection", event.handshake == null
+      ? "reused from the pool"
+      : `dialed in ${humanTime(event.handshake)} (dns ${optional(event.dns)}, tcp ${optional(event.tcp)}, tls ${optional(event.tls)})`],
+    ["upload", `${human(event.body_len)} -> ${human(event.wire_len)} (${event.coding ?? "identity"}, ${ratio(event.body_len, event.wire_len)})`],
+    ["upload acked in", optional(event.upload)],
+    ["ttfb", humanTime(event.ttfb)],
+    ["download", `${human(event.received_wire)} on the wire -> ${human(event.received)} decoded (${event.upstream_encoding})${agent}`],
+    ["download took", optional(event.download)],
+    ["tokens", usage
+      ? `${usage.prompt} in${usage.cached != null ? ` (${usage.cached} cached)` : ""} -> ${usage.completion} out${usage.reasoning != null ? ` (${usage.reasoning} reasoning)` : ""}`
+      : "not reported"],
+    ["ended", event.complete
+      ? "upstream body finished"
+      : "cut short (agent abort, error or read timeout)"],
+  ];
+}

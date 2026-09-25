@@ -63,8 +63,33 @@ fn parse_console(line: &str) -> Option<Launched> {
     })
 }
 
+/// A console process that is killed if the test panics before it ends it.
+struct Reap(Child);
+
+impl Drop for Reap {
+    fn drop(&mut self) {
+        if matches!(self.0.try_wait(), Ok(None)) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+}
+
+/// A daemon that is stopped if the test panics before it stops it.
+struct StopDaemon(PathBuf);
+
+impl Drop for StopDaemon {
+    fn drop(&mut self) {
+        let _ = Command::new(BIN)
+            .arg("--stop")
+            .arg("--data-dir")
+            .arg(&self.0)
+            .output();
+    }
+}
+
 /// A foreground `--web`, with stderr read until the console line appears.
-fn spawn_console(dir: &Path, args: &[&str]) -> (Child, Launched) {
+fn spawn_console(dir: &Path, args: &[&str]) -> (Reap, Launched) {
     let mut child = Command::new(BIN)
         .args(args)
         .arg("--data-dir")
@@ -85,6 +110,7 @@ fn spawn_console(dir: &Path, args: &[&str]) -> (Child, Launched) {
             }
         }
     });
+    let child = Reap(child);
     let launched = receiver
         .recv_timeout(Duration::from_secs(20))
         .expect("the console line on stderr");
@@ -215,10 +241,10 @@ async fn eventually<F: AsyncFnMut() -> bool>(what: &str, mut check: F) {
     }
 }
 
-fn exited(child: &mut Child, within: Duration) -> Option<std::process::ExitStatus> {
+fn exited(child: &mut Reap, within: Duration) -> Option<std::process::ExitStatus> {
     let deadline = std::time::Instant::now() + within;
     loop {
-        if let Some(status) = child.try_wait().unwrap() {
+        if let Some(status) = child.0.try_wait().unwrap() {
             return Some(status);
         }
         if std::time::Instant::now() >= deadline {
@@ -300,6 +326,28 @@ async fn a_live_console_guards_its_door_shows_flights_and_stops() {
         )
         .await;
     assert_eq!(wrong.status, StatusCode::UNAUTHORIZED);
+
+    // The page itself needs no session: it holds no data.
+    let index = page.get("/").await;
+    assert_eq!(index.status, StatusCode::OK);
+    assert!(
+        index.headers["content-type"]
+            .to_str()
+            .unwrap()
+            .starts_with("text/html")
+    );
+    assert!(String::from_utf8_lossy(&index.body).contains("/js/app.js"));
+    let etag = index.headers["etag"].to_str().unwrap().to_string();
+    let again = page.send("GET", "/", &[("if-none-match", &etag)], "").await;
+    assert_eq!(again.status, StatusCode::NOT_MODIFIED);
+    let script = page.get("/js/app.js").await;
+    assert!(
+        script.headers["content-type"]
+            .to_str()
+            .unwrap()
+            .starts_with("text/javascript")
+    );
+    assert_eq!(page.get("/nope.js").await.status, StatusCode::NOT_FOUND);
 
     page.sign_in(&launched.token).await;
     assert_eq!(page.get("/api/health").await.json()["session"], true);
@@ -427,6 +475,7 @@ async fn a_daemon_hosts_its_console_and_another_attaches() {
         .args(["--daemon", "--web", "--web-port", "0"])
         .output()
         .unwrap();
+    let _daemon = StopDaemon(dir.clone());
     let out = String::from_utf8_lossy(&launched.stdout).to_string();
     assert!(
         launched.status.success(),
@@ -473,7 +522,7 @@ async fn a_daemon_hosts_its_console_and_another_attaches() {
         "the daemon's console outlived it"
     );
     assert_eq!(other.post("/api/stop").await.status, StatusCode::CONFLICT);
-    unsafe { libc::kill(watcher.id() as i32, libc::SIGTERM) };
+    unsafe { libc::kill(watcher.0.id() as i32, libc::SIGTERM) };
     assert!(exited(&mut watcher, Duration::from_secs(10)).is_some());
 
     let log = std::fs::read_to_string(dir.join(LOG_FILE)).unwrap();

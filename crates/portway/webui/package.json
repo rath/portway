@@ -1,0 +1,9 @@
+{
+  "name": "portway-webui",
+  "private": true,
+  "type": "module",
+  "description": "The portway --web console. No dependencies and no build step: static/ is embedded as is.",
+  "scripts": {
+    "test": "node --test \"test/*.test.js\""
+  }
+}
