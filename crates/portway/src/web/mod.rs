@@ -13,6 +13,7 @@ mod auth;
 mod body;
 mod file;
 mod http;
+pub mod launch;
 mod ring;
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
@@ -97,11 +98,14 @@ pub struct Options {
 /// A running console. Dropping it without `shutdown` leaves the listener to
 /// the runtime; `shutdown` is what tells the pages and removes the file.
 pub struct Console {
-    /// The address with the launch token: printed once, to whoever started
+    /// The address with the run's token: printed once, to whoever started
     /// this, and written to the 0600 `portway.web`. Never logged.
     pub url: String,
     /// The same address without the token: safe for the log.
     pub public_url: String,
+    /// The address with the one-time launch code instead of the token: what
+    /// a browser this run opens is handed (see `launch`).
+    pub launch_url: String,
     closing: watch::Sender<bool>,
     server: tokio::task::JoinHandle<()>,
     board: aggregate::Handle,
@@ -131,6 +135,7 @@ impl Console {
         let auth = auth::Auth::new(local.port()).map_err(|err| format!("entropy: {err}"))?;
         let public_url = format!("http://{}/", url_authority(&host, local.ip(), local.port()));
         let url = format!("{public_url}#token={}", auth.token());
+        let launch_url = format!("{public_url}#token={}", auth.launch_code());
         if !local.ip().is_loopback() {
             logfmt::warn(&format!(
                 "console on {local} is reachable from the network: token-protected, not encrypted"
@@ -169,6 +174,7 @@ impl Console {
         Ok(Console {
             url,
             public_url,
+            launch_url,
             closing,
             server,
             board,

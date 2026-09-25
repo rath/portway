@@ -46,8 +46,9 @@ pub struct Args {
     #[cfg(feature = "tui")]
     #[arg(long,value_name="LIST",value_delimiter=',',value_parser=column,requires="tui")]
     pub event_columns: Option<Vec<Column>>,
-    /// Serve the dashboard in a browser. Attaches to a forwarder already on
-    /// the port, like --tui, and combines with --daemon.
+    /// Serve the dashboard in a browser, and open it in the default one.
+    /// Attaches to a forwarder already on the port, like --tui, and combines
+    /// with --daemon, which only prints the link.
     #[cfg_attr(
         feature = "web",
         arg(long, conflicts_with_all = ["stop", "reload", "status", "report"])
@@ -66,6 +67,10 @@ pub struct Args {
     #[cfg(feature = "web")]
     #[arg(long, value_name = "PORT", default_value_t = crate::web::DEFAULT_PORT, requires = "web")]
     pub web_port: u16,
+    /// Print the console's link without opening a browser.
+    #[cfg(feature = "web")]
+    #[arg(long, requires = "web")]
+    pub no_open: bool,
     #[arg(long, value_name = "PATH")]
     pub data_dir: Option<PathBuf>,
     #[arg(long, group = "operation")]
@@ -183,6 +188,9 @@ mod tests {
                 );
             }
             assert!(Args::try_parse_from(["portway", "--web-port", "1"]).is_err());
+            assert!(Args::parse_from(["portway", "--web", "--no-open"]).no_open);
+            assert!(!Args::parse_from(["portway", "--web"]).no_open);
+            assert!(Args::try_parse_from(["portway", "--no-open"]).is_err());
             #[cfg(feature = "tui")]
             assert!(Args::try_parse_from(["portway", "--web", "--tui"]).is_err());
         }

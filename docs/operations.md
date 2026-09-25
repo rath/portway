@@ -145,14 +145,18 @@ cargo build --release --locked --features web
 
 `--web` runs the forwarder as usual and serves a dashboard in the browser on a
 second listener, `--web-host` (default `127.0.0.1`) and `--web-port` (default
-8790; `0` picks a free port). Open the printed link. Its token is exchanged once
-for a session cookie and removed from the address bar; the page never stores
-it. Like `--tui`, a console started on a port another Portway already serves
+8790; `0` picks a free port). It opens in the default browser when the link is
+printed to a terminal, outside an SSH session, and (other than on macOS) with
+a display; otherwise, or with `--no-open`, open the printed link. The link's
+token is exchanged once for a session cookie and removed from the address bar;
+the page never stores it. The browser the console opens is handed a one-time
+launch code instead of the token, since a command line is visible to other
+local users. Like `--tui`, a console started on a port another Portway already serves
 attaches to that instance's data directory instead of starting a forwarder,
 and a bare `portway --web` needs no upstream configuration to attach.
 
-`--daemon --web` hosts the console in the daemon. The launcher prints the link
-next to the log path, `--status` prints it again while the console runs, and it
+`--daemon --web` hosts the console in the daemon without opening a browser. The
+launcher prints the link next to the log path, `--status` prints it again while the console runs, and it
 is kept in `portway.web` (mode 0600) in the data directory. The log only ever
 contains the address without the token.
 
@@ -175,9 +179,9 @@ The keys match the terminal dashboard (`q` asks before stopping; a second `q`
 confirms), with `/` for search, `?` for the key list and ⌘K or Ctrl-K for every
 command. Desktop notifications for trouble in a background tab are opt-in.
 
-`--web`, `--web-host` and `--web-port` are absent in builds without the `web`
-feature. See [security](../SECURITY.md#web-console) before binding the console
-to anything other than loopback.
+`--web`, `--web-host`, `--web-port` and `--no-open` are absent in builds without
+the `web` feature. See [security](../SECURITY.md#web-console) before binding the
+console to anything other than loopback.
 
 ## Health, model lists, and logs
 

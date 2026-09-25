@@ -102,6 +102,10 @@ request and stop or reload the forwarder, so it is guarded even on loopback:
   session cookie whose value is a second, independent secret. Only the
   launching terminal, the daemon's launcher and `portway.web` see the token;
   the log records the address without it.
+- **A launch code for the browser it opens.** A command line is visible to
+  other local users, so the browser a foreground `--web` opens is handed a
+  separate code, not the token. It opens one session and expires after two
+  minutes; if someone else uses it first, the page asks for the printed link.
 - **Requests from other sites are refused.** The `Host` header must name the
   console's port on `localhost` or an IP literal, which defeats DNS rebinding;
   a present `Origin` must be the console's own; every `POST` must carry an

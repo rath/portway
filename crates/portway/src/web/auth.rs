@@ -5,6 +5,10 @@
 //! cookie whose value is a second, independent secret, so the token never
 //! rides a request after the first one and never lands in a browser store.
 //!
+//! The browser a run opens for itself gets neither: its command line is
+//! readable by every local user, so it carries a launch code instead, good
+//! for one session and only for two minutes.
+//!
 //! Three more checks close the ways a hostile page could reach a loopback
 //! listener: the `Host` header must name this port on `localhost` or an IP
 //! literal (DNS rebinding), a present `Origin` must be this console's own, and
@@ -13,6 +17,8 @@
 
 use std::io::{self, Read};
 use std::net::IpAddr;
+use std::sync::{Mutex, PoisonError};
+use std::time::{Duration, Instant};
 
 /// The header every state-changing request must carry.
 pub const CSRF_HEADER: &str = "x-portway-console";
@@ -46,17 +52,27 @@ pub fn ct_eq(left: &[u8], right: &[u8]) -> bool {
         == 0
 }
 
+/// How long the launch code waits for the browser it was handed to.
+pub const LAUNCH_TTL: Duration = Duration::from_secs(120);
+
 pub struct Auth {
     token: String,
     session: String,
+    /// The launch code and when it was made, until it is used or stale.
+    launch: Mutex<Option<(String, Instant)>>,
+    /// The code itself, for the address the browser is handed.
+    launch_code: String,
     port: u16,
 }
 
 impl Auth {
     pub fn new(port: u16) -> io::Result<Self> {
+        let launch_code = random_hex(32)?;
         Ok(Auth {
             token: random_hex(32)?,
             session: random_hex(32)?,
+            launch: Mutex::new(Some((launch_code.clone(), Instant::now()))),
+            launch_code,
             port,
         })
     }
@@ -67,6 +83,33 @@ impl Auth {
 
     pub fn token_ok(&self, candidate: &str) -> bool {
         ct_eq(candidate.as_bytes(), self.token.as_bytes())
+    }
+
+    pub fn launch_code(&self) -> &str {
+        &self.launch_code
+    }
+
+    /// Whether `candidate` is the launch code, unused and fresh. A match uses
+    /// it up, so a code read off a command line is worth nothing once the
+    /// browser it was meant for has come.
+    pub fn launch_ok(&self, candidate: &str) -> bool {
+        self.launch_ok_at(candidate, Instant::now())
+    }
+
+    fn launch_ok_at(&self, candidate: &str, now: Instant) -> bool {
+        let mut launch = self.launch.lock().unwrap_or_else(PoisonError::into_inner);
+        let Some((code, made)) = launch.as_ref() else {
+            return false;
+        };
+        if now.saturating_duration_since(*made) > LAUNCH_TTL {
+            *launch = None;
+            return false;
+        }
+        if !ct_eq(candidate.as_bytes(), code.as_bytes()) {
+            return false;
+        }
+        *launch = None;
+        true
     }
 
     /// Named per port, so two consoles on one host do not overwrite each
@@ -173,6 +216,25 @@ mod tests {
         assert!(!auth.has_session([forged.as_str()]));
         assert!(auth.token_ok(auth.token()));
         assert!(!auth.token_ok(&auth.token()[1..]));
+    }
+
+    #[test]
+    fn the_launch_code_opens_one_session_while_fresh() {
+        let auth = Auth::new(8790).unwrap();
+        let code = auth.launch_code().to_owned();
+        assert_ne!(code, auth.token());
+        assert!(!auth.token_ok(&code), "the code is not the token");
+        assert!(!auth.launch_ok(auth.token()), "nor the token the code");
+        assert!(!auth.launch_ok(&code[1..]));
+        assert!(auth.launch_ok(&code));
+        assert!(!auth.launch_ok(&code), "used once, gone");
+        assert!(auth.token_ok(auth.token()), "the token still works");
+
+        let stale = Auth::new(8790).unwrap();
+        let code = stale.launch_code().to_owned();
+        let later = Instant::now() + LAUNCH_TTL + Duration::from_secs(1);
+        assert!(!stale.launch_ok_at(&code, later));
+        assert!(!stale.launch_ok(&code), "a stale code is dropped");
     }
 
     #[test]

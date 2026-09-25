@@ -185,7 +185,7 @@ portway --status
 portway --report --since 7d
 # Requires installation with --features tui:
 portway --config ./portway.toml --tui
-# Requires installation with --features web; prints the address to open:
+# Requires installation with --features web; opens it in the default browser:
 portway --config ./portway.toml --web
 # In another terminal, when ready to stop:
 portway --stop
@@ -194,8 +194,9 @@ portway --stop
 A dashboard attached to a daemon can be closed without stopping forwarding.
 `--web` serves the same dashboard in a browser at `http://127.0.0.1:8790/`, plus
 the requests still in flight, history, search and export, reload and stop
-controls, and a choice of themes; `--daemon --web` hosts it in the daemon. Open
-the printed link, which carries a one-time token; see
+controls, and a choice of themes; `--daemon --web` hosts it in the daemon. A
+foreground `--web` opens it in the default browser; with `--no-open`, or from a
+daemon, open the printed link, which carries the run's token. See
 [the web console](docs/operations.md#optional-web-console).
 Use `--reload` to reread routes, upstream URLs, and compression settings without
 dropping the listener. Daemon mode does not install a boot or login service.

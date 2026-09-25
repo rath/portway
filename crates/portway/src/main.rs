@@ -239,6 +239,10 @@ async fn run(
                 if let Some(url) = &console_url {
                     eprintln!("portway: console at {url}");
                 }
+                #[cfg(feature = "web")]
+                if let Some(console) = console.as_ref().filter(|_| !args.no_open) {
+                    web::launch::open(&console.launch_url);
+                }
             }
         }
         router.negotiate_all().await;
@@ -414,6 +418,9 @@ fn web_watching(
         .await?;
         logfmt::info(&format!("console at {}", console.public_url));
         eprintln!("portway: console at {}", console.url);
+        if !args.no_open {
+            web::launch::open(&console.launch_url);
+        }
         tokio::select! {
             () = terminate() => {}
             () = hung_up() => {}

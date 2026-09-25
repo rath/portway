@@ -195,8 +195,9 @@ pub async fn handle(app: Arc<App>, request: Request<Incoming>) -> Response<WebBo
     }
 }
 
-/// Trade the launch token for the session cookie. The token is checked, never
-/// stored by the page, and never needed again.
+/// Trade the launch token, or the one-time launch code a browser this run
+/// opened was handed, for the session cookie. Either is checked, never stored
+/// by the page, and never needed again.
 async fn open_session(app: &App, request: Request<Incoming>) -> Response<WebBody> {
     let body = match Limited::new(request.into_body(), MAX_BODY).collect().await {
         Ok(collected) => collected.to_bytes(),
@@ -206,7 +207,7 @@ async fn open_session(app: &App, request: Request<Incoming>) -> Response<WebBody
         .ok()
         .and_then(|value| value.get("token")?.as_str().map(str::to_owned));
     match token {
-        Some(token) if app.auth.token_ok(&token) => {
+        Some(token) if app.auth.token_ok(&token) || app.auth.launch_ok(&token) => {
             let mut response = respond(StatusCode::NO_CONTENT, None, WebBody::empty());
             if let Ok(cookie) = HeaderValue::from_str(&app.auth.set_cookie()) {
                 response.headers_mut().insert(header::SET_COOKIE, cookie);

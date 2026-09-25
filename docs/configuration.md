@@ -383,6 +383,7 @@ Choose mode and operations with CLI arguments:
 | `--tui` | Start a dashboard or attach to an existing local instance; optional build feature |
 | `--web` | Serve the dashboard in a browser, or attach to an existing local instance; combines with `--daemon`; optional build feature |
 | `--web-host HOST`, `--web-port PORT` | Where the console listens; default `127.0.0.1` and `8790`, `0` for a free port |
+| `--no-open` | Print the console's link without opening it in the default browser |
 | `--report --since SPAN` | Read a report; default window is 24h |
 | `--model NAME` | Filter a report by recorded route name |
 | `--retention-days N` | Delete older rows at startup and daily; default `0` keeps all rows |
