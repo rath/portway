@@ -9,7 +9,9 @@ import { human, humanCount, humanTime, ratio } from "./format.js";
 const optional = (value) => (value == null ? "not measured" : humanTime(value));
 
 /**
- * The cells, in draw order. `column` is the picker column (eventline.js)
+ * The cells, in draw order. Only a status, a mark, a saving and the model
+ * are toned: the figures read in the text color, so the table is a table
+ * and not a line of the terminal. `column` is the picker column (eventline.js)
  * that shows or hides the cell; `read` gives `{ text, tone, title }` or null
  * for a blank cell; `cap` bounds the width in characters (longer text ends
  * in an ellipsis and keeps its full value in the tooltip). A cell that is
@@ -45,17 +47,17 @@ export const CELLS = [
     key: "dial", column: "route", label: "dial", numeric: true, note: "handshake of a fresh connection; blank when a pooled one was reused",
     read: (e) => (e.handshake == null ? null : {
       text: humanTime(e.handshake),
-      tone: "time",
+      tone: null,
       title: `fresh connection: dns ${optional(e.dns)}, tcp ${optional(e.tcp)}, tls ${optional(e.tls)}`,
     }),
   },
   {
     key: "raw", column: "sizes", label: "raw", numeric: true, note: "request body as the agent sent it",
-    read: (e) => (e.body_len === 0 ? null : { text: human(e.body_len), tone: "raw" }),
+    read: (e) => (e.body_len === 0 ? null : { text: human(e.body_len), tone: null }),
   },
   {
     key: "wire", column: "sizes", label: "wire", numeric: true, note: "request body as it went upstream",
-    read: (e) => (e.body_len === 0 ? null : { text: human(e.wire_len), tone: "wire", title: e.coding ?? "identity" }),
+    read: (e) => (e.body_len === 0 ? null : { text: human(e.wire_len), tone: null, title: e.coding ?? "identity" }),
   },
   {
     key: "saved", column: "sizes", label: "saved", numeric: true, note: "upload saved by the coding",
@@ -63,29 +65,29 @@ export const CELLS = [
   },
   {
     key: "upload", column: "sizes", label: "↑ time", numeric: true, note: "until the upstream acknowledged the body",
-    read: (e) => (e.body_len === 0 || e.upload == null ? null : { text: humanTime(e.upload), tone: "time" }),
+    read: (e) => (e.body_len === 0 || e.upload == null ? null : { text: humanTime(e.upload), tone: null }),
   },
   {
     key: "ttfb", always: true, column: "ttfb", label: "ttfb", numeric: true, note: "first byte of the answer",
-    read: (e) => ({ text: humanTime(e.ttfb), tone: "time" }),
+    read: (e) => ({ text: humanTime(e.ttfb), tone: null }),
   },
   {
     key: "down", always: true, column: "down", label: "down", numeric: true, note: "response bytes, decoded",
-    read: (e) => ({ text: human(e.received), tone: "raw", title: `${human(e.received_wire)} on the wire (${e.upstream_encoding})` }),
+    read: (e) => ({ text: human(e.received), tone: null, title: `${human(e.received_wire)} on the wire (${e.upstream_encoding})` }),
   },
   {
     key: "agent", column: "down", label: "to agent", numeric: true, note: "what the agent got, when it differs",
     read: (e) => (e.received_agent > 0 && e.received_agent !== e.received
-      ? { text: human(e.received_agent), tone: "wire", title: `${ratio(e.received, e.received_agent)} (${e.agent_encoding ?? "identity"})` }
+      ? { text: human(e.received_agent), tone: null, title: `${ratio(e.received, e.received_agent)} (${e.agent_encoding ?? "identity"})` }
       : null),
   },
   {
     key: "download", column: "down", label: "↓ time", numeric: true, note: "first byte to the last",
-    read: (e) => (e.download == null ? null : { text: humanTime(e.download), tone: "time" }),
+    read: (e) => (e.download == null ? null : { text: humanTime(e.download), tone: null }),
   },
   {
     key: "prompt", column: "tokens", label: "tok in", numeric: true, note: "prompt tokens the engine counted",
-    read: (e) => (e.usage ? { text: humanCount(e.usage.prompt), tone: "raw", title: String(e.usage.prompt) } : null),
+    read: (e) => (e.usage ? { text: humanCount(e.usage.prompt), tone: null, title: String(e.usage.prompt) } : null),
   },
   {
     key: "cached", column: "tokens", label: "cached", numeric: true, note: "of those, read from the cache",
@@ -95,7 +97,7 @@ export const CELLS = [
     key: "completion", column: "tokens", label: "tok out", numeric: true, note: "completion tokens, reasoning included",
     read: (e) => (e.usage ? {
       text: humanCount(e.usage.completion),
-      tone: "wire",
+      tone: null,
       title: e.usage.reasoning != null ? `${e.usage.completion} (${e.usage.reasoning} reasoning)` : String(e.usage.completion),
     } : null),
   },

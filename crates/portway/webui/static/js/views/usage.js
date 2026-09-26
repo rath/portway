@@ -95,7 +95,7 @@ export class UsageView {
         h("h2", { class: "window-title", text: table.title }),
         body),
       h("section", { class: "panel" },
-        h("h2", { text: "what these numbers are not" }),
+        h("h2", { class: "panel-head", text: "What these numbers are not" }),
         h("ul", { class: "notes" }, table.notes.map((note) => h("li", { text: note }))),
         h("p", { class: "note", text: `re-read every ${REFRESH_MS / 1000}s while this view is open` })));
   }

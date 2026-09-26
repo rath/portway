@@ -1,5 +1,5 @@
-// The dashboard: header chips, the four HUD tiles, the model table, the two
-// charts, the event list and the in-flight strip. Each part renders from
+// The dashboard: the header's figures, the stat strip, the model table, the
+// event list, the in-flight rail and the two charts. Each part renders from
 // `ctx.state` when the scheduler says it is dirty.
 
 import { $, fill, h } from "../dom.js";
@@ -18,16 +18,16 @@ export function renderHeader(ctx) {
   const header = state.header;
   $("#listen").textContent = header.listen || "—";
   const chip = (label, value, tone) =>
-    h("span", { class: "chip" }, h("span", { class: "label", text: label }), h("span", { class: tone ? `t-${tone}` : "", text: value }));
+    h("span", { class: "chip" }, h("span", { class: "label", text: label }), h("span", { class: `value${tone ? ` t-${tone}` : ""}`, text: value }));
   const chips = [
-    chip("mode", header.mode === "attached" ? "attached" : header.mode, header.mode === "attached" ? "time" : "good"),
-    chip("up", uptime(ctx.uptime()), "time"),
+    header.mode === "attached" ? chip("mode", "attached", "time") : null,
+    chip("up", uptime(ctx.uptime())),
     header.window_s != null
-      ? chip("watching", span(header.window_s), "good")
-      : chip("coding", header.coding || "-", "good"),
+      ? chip("watching", span(header.window_s))
+      : chip("coding", header.coding || "-"),
     chip("models", String(state.models.length)),
   ];
-  if (state.generation > 0) chips.push(chip("reloads", String(state.generation), "wire"));
+  if (state.generation > 0) chips.push(chip("reloads", String(state.generation)));
   fill($("#chips"), chips);
   const control = header.control || {};
   $("#reload").hidden = !control.reload;
@@ -39,19 +39,30 @@ export function renderHeader(ctx) {
   $("#stop").title = header.mode === "attached" ? "Stop the daemon this console is watching (q)" : "Stop the forwarder (q)";
 }
 
-// --------------------------------------------------------------------- hud
+// ------------------------------------------------------------------- stats
 
-function stat(label, value, tone, small) {
+/** A figure in the strip: a label, the value with an aside, and a line of the figures behind it. */
+function stat(label, value, aside, sub) {
   return h("div", { class: "stat" },
     h("span", { class: "label", text: label }),
-    h("span", { class: `value${tone ? ` t-${tone}` : ""}` }, value, small ? h("small", { text: ` ${small}` }) : null));
+    h("span", { class: "value" }, h("span", { text: value }), aside ? h("small", { text: aside }) : null),
+    h("span", { class: "sub" }, sub));
 }
 
-function tile(title, lead, stats) {
-  return h("section", { class: "panel tile", "aria-label": title },
-    h("h2", { text: title }),
-    lead,
-    h("div", { class: "stats" }, stats));
+/** `name value`, the value toned when it is worth a look; `null` leaves the pair out. */
+function part(name, value, tone) {
+  return [h("span", { text: `${name} ` }), h("b", { class: tone ? `t-${tone}` : "", text: value })];
+}
+
+/** The parts of a sub line, separated by a middle dot. */
+function parts(...pairs) {
+  const out = [];
+  for (const pair of pairs) {
+    if (!pair) continue;
+    if (out.length) out.push(h("i", { text: "·" }));
+    out.push(pair);
+  }
+  return out;
 }
 
 export function renderHud(ctx) {
@@ -59,37 +70,37 @@ export function renderHud(ctx) {
   const reuse = c.seen ? `${Math.floor((c.reused * 100) / c.seen)}%` : "-";
   const quantile = (pair) => `${maybeTime(pair?.p50)} / ${maybeTime(pair?.p95)}`;
   const saved = Math.max(0, t.body_bytes - t.wire_bytes);
-  const lead = (label, value, tone, small) => {
-    const element = stat(label, value, tone, small);
-    element.classList.add("lead");
-    return element;
-  };
+  const trouble = c.client_errors + c.server_errors + c.truncated + t.aborts + t.upstream_errors;
+  const alert = (count, tone) => (count > 0 ? tone : null);
   fill($("#hud"),
-    tile("requests", lead("total", String(t.requests), null, `${t.in_flight} live`), [
-      stat("2xx", String(c.ok), "good"),
-      stat("4xx", String(c.client_errors), c.client_errors > 0 ? "time" : "dim"),
-      stat("5xx", String(c.server_errors), c.server_errors > 0 ? "bad" : "dim"),
-      stat("cut", String(c.truncated), "dim"),
-      stat("aborts", String(t.aborts), "dim"),
-      stat("up-err", String(t.upstream_errors), t.upstream_errors > 0 ? "bad" : "dim"),
-      stat("reuse", reuse, "good"),
-    ]),
-    tile("upload", lead("saved", human(saved), "good", ratio(t.body_bytes, t.wire_bytes)), [
-      stat("raw", human(t.body_bytes), "raw"),
-      stat("wire", human(t.wire_bytes), "wire"),
-      stat("encoded", `${t.encoded}/${t.requests}`),
-      stat("415-retry", String(t.retried_identity), t.retried_identity > 0 ? "time" : "dim"),
-    ]),
-    tile("download", lead("decoded", human(t.down_bytes), "raw", ratio(t.down_bytes, t.down_wire_bytes)), [
-      stat("wire", human(t.down_wire_bytes), "wire"),
-      t.agent_bytes > 0 ? stat("agent", human(t.agent_bytes), "good", ratio(t.down_bytes, t.agent_bytes)) : null,
-      stat("idle conns", String(t.idle_conns)),
-    ]),
-    tile("latency", lead("ttfb p50 / p95", quantile(l.ttfb), "time"), [
-      stat("upload p50 / p95", quantile(l.upload), "time"),
-      stat("handshake avg", maybeTime(l.handshake_mean), "time"),
-      stat("samples", String(l.ttfb?.n ?? 0), "dim"),
-    ]),
+    stat("Requests", String(t.requests), t.in_flight > 0 ? `${t.in_flight} live` : null, parts(
+      part("2xx", String(c.ok)),
+      part("reused", reuse),
+    )),
+    stat("Trouble", String(trouble), null, parts(
+      part("4xx", String(c.client_errors), alert(c.client_errors, "time")),
+      part("5xx", String(c.server_errors), alert(c.server_errors, "bad")),
+      part("cut", String(c.truncated), alert(c.truncated, "time")),
+      part("aborts", String(t.aborts)),
+      part("upstream", String(t.upstream_errors), alert(t.upstream_errors, "bad")),
+    )),
+    stat("Upload saved", human(saved), ratio(t.body_bytes, t.wire_bytes), parts(
+      part("raw", human(t.body_bytes)),
+      part("wire", human(t.wire_bytes)),
+      part("encoded", `${t.encoded}/${t.requests}`),
+      part("415 retries", String(t.retried_identity), alert(t.retried_identity, "time")),
+    )),
+    stat("Download", human(t.down_bytes), ratio(t.down_bytes, t.down_wire_bytes), parts(
+      part("wire", human(t.down_wire_bytes)),
+      t.agent_bytes > 0 ? part("to agent", `${human(t.agent_bytes)} ${ratio(t.down_bytes, t.agent_bytes)}`) : null,
+      part("idle conns", String(t.idle_conns)),
+    )),
+    stat("TTFB p50 / p95", quantile(l.ttfb), null, parts(
+      part("samples", String(l.ttfb?.n ?? 0)),
+    )),
+    stat("Upload p50 / p95", quantile(l.upload), null, parts(
+      part("handshake avg", maybeTime(l.handshake_mean)),
+    )),
   );
 }
 
@@ -127,14 +138,14 @@ export function renderModels(ctx) {
       [model.coding_label, model.coding ? "good" : "dim"],
       [String(model.requests)],
       [String(model.in_flight), model.in_flight > 0 ? "good" : "dim"],
-      [human(model.body), "raw"],
-      [human(model.wire), "wire"],
+      [human(model.body)],
+      [human(model.wire)],
       [human(model.saved), "good"],
-      [human(model.down), "raw"],
+      [human(model.down)],
       [String(model.idle)],
       [String(model.errors), model.errors > 0 ? "bad" : "dim"],
       [String(model.aborts), "dim"],
-      [model.status, "time"],
+      [model.status, "dim"],
     ];
     const selected = state.filterMode === model.name;
     return h("tr", {
@@ -469,14 +480,28 @@ export class EventList {
     const below = state.follow ? 0 : Math.max(0, length - last);
     const position = $("#position");
     fill(position, state.follow
-      ? h("span", { class: "follow", text: "FOLLOW" })
-      : h("span", { class: "paused", text: below > 0 ? `PAUSED · ${below} below` : "PAUSED" }));
-    const mode = state.filterMode === "all" ? "all" : state.filterMode;
-    $("#counts").textContent = `${length} lines · filter ${mode}${state.query ? ` · “${state.query}”` : ""}`;
+      ? h("span", { class: "follow", text: "Following" })
+      : h("span", { class: "paused", text: below > 0 ? `Paused · ${below} below` : "Paused" }));
+    const mode = state.filterMode === "all" ? "" : ` · ${state.filterMode}`;
+    $("#counts").textContent = `${length} lines${mode}${state.query ? ` · “${state.query}”` : ""}`;
   }
 }
 
 // ----------------------------------------------------------------- flights
+
+/** The figures under a flight's path: age first, then what the phase has to show. */
+function flightMeta(flight, times, described) {
+  const { age } = times;
+  const items = [h("b", { text: humanTime(age) })];
+  if (flight.phase === "stream") {
+    items.push(h("span", { text: `${flight.status} · ttfb ${humanTime(flight.ttfb ?? 0)} · ↓${human(flight.received)}` }));
+  } else if (flight.phase === "upload") {
+    items.push(h("span", { text: `${human(flight.wire_len)} of ${human(flight.body_len)}` }));
+  }
+  if (flight.retries > 0) items.push(h("span", { text: `retried ${flight.retries}×` }));
+  if (described.warn) items.push(h("span", { class: `badge ${described.warn === "stalled" ? "bad" : "warn"}`, text: described.warn }));
+  return items;
+}
 
 export function renderFlights(ctx) {
   const { state } = ctx;
@@ -486,24 +511,27 @@ export function renderFlights(ctx) {
   const open = state.flightsOpen;
   $("#flights-toggle").setAttribute("aria-expanded", open ? "true" : "false");
   rows.hidden = !open;
+  const count = $("#flights-count");
+  const oldest = $("#flights-oldest");
   if (!flights.available) {
-    $("#flights-title").textContent = "IN FLIGHT · n/a";
+    count.textContent = "n/a";
+    oldest.textContent = "";
     fill(rows, h("div", {
       class: "note",
       text: "In-flight requests are visible only in the console of the process serving them: run --web on the forwarder itself, or --daemon --web.",
     }));
     return;
   }
-  const oldest = flights.list.length ? ` · oldest ${humanTime(flights.oldest(now))}` : "";
-  const more = flights.more ? ` (+${flights.more} not listed)` : "";
-  $("#flights-title").textContent = `IN FLIGHT · ${flights.total}${more}${oldest}`;
+  count.textContent = flights.more ? `${flights.total} (+${flights.more} not listed)` : String(flights.total);
+  oldest.textContent = flights.list.length ? `oldest ${humanTime(flights.oldest(now))}` : "";
   if (!open) return;
   if (!flights.list.length) {
-    fill(rows, h("div", { class: "note", text: "nothing in flight" }));
+    fill(rows, h("div", { class: "note", text: "Nothing in flight. A request appears here from the moment it is counted until its record joins the list." }));
     return;
   }
   fill(rows, flights.list.map((flight) => {
-    const described = describe(flight, flights.times(flight, now));
+    const times = flights.times(flight, now);
+    const described = describe(flight, times);
     return h("div", {
       class: "flight",
       role: "button",
@@ -514,22 +542,9 @@ export function renderFlights(ctx) {
         if (event.key === "Enter") ctx.openDetail({ type: "flight", id: flight.id });
       },
     },
-    h("span", { class: "flight-model t-model", text: flight.model }),
-    h("span", { class: "flight-method t-dim", text: flight.method }),
-    h("span", { class: `flight-path${flight.route_known ? "" : " t-bold"}`, title: `${flight.method} ${flight.path}`, text: flight.path }),
-    h("span", { class: flight.phase === "stream" ? "t-good" : "t-time", text: described.text }),
-    described.warn ? h("span", { class: `badge ${described.warn === "stalled" ? "bad" : "warn"}`, text: described.warn }) : h("span"));
+    h("span", { class: "flight-model", text: flight.model }),
+    h("span", { class: `phase phase-${flight.phase}`, text: flight.phase }),
+    h("span", { class: `flight-path${flight.route_known ? "" : " t-bold"}`, title: `${flight.method} ${flight.path}`, text: `${flight.method} ${flight.path}` }),
+    h("span", { class: "flight-meta" }, flightMeta(flight, times, described)));
   }));
-}
-
-// ---------------------------------------------------------------- key strip
-
-const KEYS = [
-  ["q", "stop"], ["↑↓/jk", "scroll"], ["g/G", "top/live"], ["↵", "detail"], ["e", "trouble"],
-  ["m", "model"], ["u", "usage"], ["t", "buckets"], ["c", "columns"], ["/", "search"], ["⌘K", "commands"], ["?", "keys"],
-];
-
-export function renderKeys(ctx) {
-  const keys = ctx.state.shortcuts ? KEYS : [["⌘K", "commands"], ["esc", "close"]];
-  fill($("#keys"), keys.map(([key, what]) => h("span", {}, h("kbd", { text: key }), ` ${what}`)));
 }

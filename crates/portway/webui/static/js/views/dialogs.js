@@ -23,7 +23,7 @@ export function renderDetail(ctx) {
     const flight = ctx.state.flights.get(target.id);
     if (!flight) {
       fill(dialog);
-      dialogFrame(dialog, "request in flight", h("p", { class: "note", text: "This request has finished; its record will appear in the list." }));
+      dialogFrame(dialog, "Request in flight", h("p", { class: "note", text: "This request has finished; its record will appear in the list." }));
       open(dialog);
       return;
     }
@@ -44,7 +44,7 @@ export function renderDetail(ctx) {
       ["received", `${human(flight.received_wire)} on the wire -> ${human(flight.received)} decoded`],
       ["retries", String(flight.retries)],
     ];
-    dialogFrame(dialog, "request in flight", fieldList(fields), [
+    dialogFrame(dialog, "Request in flight", fieldList(fields), [
       h("span", { class: "note", text: "live · becomes the finished record when it ends" }),
     ]);
     open(dialog);
@@ -57,12 +57,12 @@ export function renderDetail(ctx) {
     return;
   }
   if (event.kind !== "request") {
-    dialogFrame(dialog, "log record", fieldList([["when", event.stamp], ["level", event.level], ["message", event.message]]));
+    dialogFrame(dialog, "Log record", fieldList([["when", event.stamp], ["level", event.level], ["message", event.message]]));
     open(dialog);
     return;
   }
   const line = lineText(eventLine(event, new Set(COLUMNS.map((column) => column.name))));
-  dialogFrame(dialog, "request", [
+  dialogFrame(dialog, "Request", [
     fieldList(detailFields(event)),
     h("pre", { class: "trouble-list", "aria-label": "The line as printed" }, segments(eventLine(event, ctx.state.columns))),
   ], [
@@ -107,7 +107,7 @@ const HELP = [
 
 export function openHelp() {
   const dialog = $("#help");
-  dialogFrame(dialog, "keys", h("dl", { class: "keylist" }, HELP.flatMap(([key, what]) => [h("dt", { text: key }), h("dd", { text: what })])),
+  dialogFrame(dialog, "Keys", h("dl", { class: "keylist" }, HELP.flatMap(([key, what]) => [h("dt", { text: key }), h("dd", { text: what })])),
     [h("span", { class: "note", text: "Single-key shortcuts can be turned off under Appearance." })]);
   open(dialog);
 }
@@ -124,7 +124,7 @@ export function openColumns(ctx) {
     }),
     h("span", { class: "name", text: column.name }),
     h("span", { class: "t-dim", text: column.note })));
-  dialogFrame(dialog, "columns", picks, [h("span", { class: "note", text: "kept for this browser" })]);
+  dialogFrame(dialog, "Columns", picks, [h("span", { class: "note", text: "kept for this browser" })]);
   open(dialog);
 }
 
@@ -161,7 +161,7 @@ export function openStop(ctx) {
     },
     text: attached ? "Stop the daemon" : "Stop",
   });
-  dialogFrame(dialog, "stop", body, [cancel, confirm]);
+  dialogFrame(dialog, attached ? "Stop the daemon" : "Stop the forwarder", body, [cancel, confirm]);
   dialog.onkeydown = (event) => {
     if (event.key === "q" && !event.metaKey && !event.ctrlKey) {
       event.preventDefault();
@@ -188,7 +188,7 @@ export function openCosts(table) {
       h("td", { class: "t-good", text: "total" }),
       ["input", "cache_read", "output", "total"].map((part) => h("td", { class: "t-good", text: money(table.total.charge, part) }))));
   }
-  dialogFrame(dialog, "costs", [
+  dialogFrame(dialog, "Costs", [
     h("p", { class: "note", text: "cost by source: what the window cost, not the rates that produced it" }),
     h("div", { class: "table-wrap" }, h("table", { class: "data" },
       h("thead", {}, h("tr", {}, ["model", "prompt", "cached", "output", "total$"].map((name) => h("th", { text: name })))),

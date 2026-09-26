@@ -13,7 +13,7 @@ import { EventStore } from "./ring.js";
 import { Bars, History, SCALES, Traffic } from "./series.js";
 import { SYSTEM, THEMES, byId, resolve } from "./themes.js";
 import { AppearanceView } from "./views/appearance.js";
-import { EventList, renderCharts, renderFlights, renderHeader, renderHud, renderKeys, renderModels } from "./views/dashboard.js";
+import { EventList, renderCharts, renderFlights, renderHeader, renderHud, renderModels } from "./views/dashboard.js";
 import { openColumns, openHelp, openPalette, openStop, renderDetail } from "./views/dialogs.js";
 import { HistoryView } from "./views/history.js";
 import { InsightsView } from "./views/insights.js";
@@ -95,13 +95,12 @@ function flush() {
   if (parts.has("events") && dashboard) list.render();
   if (parts.has("flights") && dashboard) renderFlights(ctx);
   if (parts.has("detail")) renderDetail(ctx);
-  if (parts.has("keys")) renderKeys(ctx);
   if (parts.has("insights") && state.view === "insights") views.insights.render();
   if (parts.has("title")) renderTitle();
 }
 
 function renderAll() {
-  invalidate("header", "hud", "models", "charts", "events", "flights", "detail", "keys", "insights", "title");
+  invalidate("header", "hud", "models", "charts", "events", "flights", "detail", "insights", "title");
 }
 
 // ------------------------------------------------------------------ context
@@ -164,7 +163,6 @@ const ctx = {
   setShortcuts(on) {
     state.shortcuts = on;
     prefs.setFlag("shortcuts", on);
-    invalidate("keys");
   },
   async setNotify(on) {
     if (on && "Notification" in window && Notification.permission === "default") {
@@ -549,7 +547,7 @@ function paletteCommands() {
     { name: "Load older events", hint: "list", run: () => loadOlder() },
     { name: "Follow the newest line", hint: "G", run: () => list.follow() },
     { name: "Jump to the oldest line", hint: "g", run: () => list.oldest() },
-    { name: state.flightsOpen ? "Collapse the in-flight strip" : "Expand the in-flight strip", hint: "flights", run: () => toggleFlights() },
+    { name: state.flightsOpen ? "Collapse the in-flight list" : "Expand the in-flight list", hint: "flights", run: () => toggleFlights() },
     { name: `${state.notify ? "Turn off" : "Turn on"} desktop notifications`, hint: "notify", run: () => ctx.setNotify(!state.notify) },
     { name: `${state.shortcuts ? "Turn off" : "Turn on"} single-key shortcuts`, hint: "keys", run: () => ctx.setShortcuts(!state.shortcuts) },
     { name: "Choose columns", hint: "c", run: () => openColumns(ctx) },
@@ -666,6 +664,7 @@ $("#copy-listen").addEventListener("click", async () => {
 $("#reload").addEventListener("click", () => reloadConfig());
 $("#stop").addEventListener("click", () => openStop(ctx));
 $("#open-palette").addEventListener("click", () => openPalette(paletteCommands()));
+$("#open-help").addEventListener("click", () => openHelp());
 $("#columns-button").addEventListener("click", () => openColumns(ctx));
 $("#export-csv").addEventListener("click", () => exportEvents("csv"));
 $("#export-json").addEventListener("click", () => exportEvents("json"));
@@ -690,7 +689,6 @@ async function boot() {
   $("#gate").hidden = true;
   state.stopped = false;
   setConn("connecting");
-  renderKeys(ctx);
   let signedIn = false;
   try {
     signedIn = await signIn();

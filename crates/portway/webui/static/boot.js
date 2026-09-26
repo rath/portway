@@ -16,6 +16,6 @@
   root.setAttribute("data-theme-choice", known);
   root.setAttribute("data-theme", known === "system" ? (dark ? "portway-dark" : "portway-light") : known);
   root.setAttribute("data-density", read("density", "comfortable") === "compact" ? "compact" : "comfortable");
-  root.setAttribute("data-font", read("font", "mono") === "sans" ? "sans" : "mono");
+  root.setAttribute("data-font", read("font", "sans") === "mono" ? "mono" : "sans");
   root.setAttribute("data-motion", read("motion", "system") === "reduce" ? "reduce" : "system");
 })();

@@ -128,10 +128,10 @@ export class HistoryView {
         h("p", { class: "window-title", text: `portway — ${report.db}` }),
         h("p", { class: "window-title", text: `window  ${report.window}  (${report.span}, ${scope})` })),
       rows.length
-        ? [table("volume", volumeHead, volume, "portway-volume.csv"), table("timing", timingHead, timing, "portway-timing.csv")]
+        ? [table("Volume", volumeHead, volume, "portway-volume.csv"), table("Timing", timingHead, timing, "portway-timing.csv")]
         : h("section", { class: "panel" }, h("p", { class: "note", text: report.model ? `no requests for model ${report.model} in this window` : "no requests recorded in this window" })),
       h("section", { class: "panel" },
-        h("h2", { text: "trouble (last 20 in the window)" }),
+        h("h2", { class: "panel-head", text: "Trouble, last 20 in the window" }),
         report.trouble.length
           ? h("pre", { class: "trouble-list" }, report.trouble.map((line) => h("div", {
             class: line.kind === "log" ? (line.level === "ERROR" ? "t-bad" : "t-time") : line.status >= 500 ? "t-bad" : "t-time",

@@ -44,10 +44,10 @@ export class InsightsView {
     fill(this.root,
       h("p", { class: "note", text: "Collected by this page once a second since it opened; a reload of the page starts over." }),
       h("div", { class: "insights" },
-        panel("ttfb p50 / p95", h("span", { class: "legend" }, "p50 ", h("i", { class: "swatch raw" }), " p95 (dashed)"), this.latency),
-        panel("upload saved", h("span", { class: "legend", text: "share of raw bytes that did not go on the wire" }), this.saved),
-        panel("share by model", this.shareControls, this.share),
-        panel("about", null, h("p", { class: "note", text: "Percentiles are the dashboard's rolling window (the last 512 samples, nearest rank); History has the recorder's exact ones for any window." }))));
+        panel("TTFB p50 / p95", h("span", { class: "legend" }, "p50 ", h("i", { class: "swatch raw" }), " p95 (dashed)"), this.latency),
+        panel("Upload saved", h("span", { class: "legend", text: "share of raw bytes that did not go on the wire" }), this.saved),
+        panel("Share by model", this.shareControls, this.share),
+        panel("About", null, h("p", { class: "note", text: "Percentiles are the dashboard's rolling window (the last 512 samples, nearest rank); History has the recorder's exact ones for any window." }))));
     this.bind(this.latency, "latency");
     this.bind(this.saved, "saved");
   }
