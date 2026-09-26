@@ -3,7 +3,22 @@ name: CI
 on:
   push:
     branches: [main]
+    paths: &build_paths
+      # Only a change that can alter what the build produces, or what the checks
+      # read, is worth a runner. Docs, the console's screenshots and the local
+      # deploy scripts cannot break CI, so they do not start it.
+      #
+      # Keep this list honest: a path missing here does not fail a check, it
+      # makes the check silently never run for that path.
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rustfmt.toml"
+      - "scripts/check.sh"
+      - "scripts/bench.py"
+      - ".github/workflows/ci.yml"
   pull_request:
+    paths: *build_paths
 
 permissions:
   contents: read
