@@ -139,6 +139,19 @@ pub fn compress(body: &[u8], base: &Base, level: i32) -> std::io::Result<Vec<u8>
         .map_err(zstd_error)?;
     cctx.set_parameter(CParameter::ChecksumFlag(true))
         .map_err(zstd_error)?;
+    // `ref_prefix` only *allows* a base this large; the match finder still
+    // searches no further back than `windowLog` (20 = 1 MiB at level 11), so
+    // past ~4 MiB the far end of the base stops matching and the frame swells
+    // to the size of the body. LDM is what reaches it, and it works with a
+    // prefix — unlike `loadDictionary`/`CDict`, which silently disables it.
+    let needed = base.body.len() + body.len();
+    let window_log = needed.ilog2() + 1;
+    cctx.set_parameter(CParameter::WindowLog(
+        window_log.min(MAX_WINDOW_BYTES.ilog2()),
+    ))
+    .map_err(zstd_error)?;
+    cctx.set_parameter(CParameter::EnableLongDistanceMatching(true))
+        .map_err(zstd_error)?;
     cctx.ref_prefix(&base.body).map_err(zstd_error)?;
 
     let mut out = Vec::with_capacity(40 + compress_bound(body.len()));
@@ -191,6 +204,25 @@ mod tests {
         let mut wrong = zstd::bulk::Decompressor::with_dictionary(&noise(3 << 20, 2)).unwrap();
         assert!(wrong.decompress(&wire[40..], body.len()).is_err());
         assert!(zstd::bulk::decompress(&wire[40..], body.len()).is_err());
+    }
+
+    /// A base past `windowLog`'s default (level 11 uses 20, i.e. 1 MiB) puts its
+    /// far end out of the match finder's reach, and the frame grows to roughly
+    /// the size of the body. `ref_prefix` accepts a large base either way, so
+    /// nothing else fails: only the ratio collapses.
+    #[test]
+    fn far_matches_stay_reachable_past_the_default_window() {
+        for mb in [3, 6] {
+            let previous = noise(mb << 20, 1);
+            let mut body = previous.clone();
+            body.extend_from_slice(b"one more turn");
+            let wire = compress(&body, &base_of(&previous), 11).unwrap();
+            assert!(
+                wire.len() < 4096,
+                "{mb} MiB base: {} bytes — far matches unreachable (windowLog unset?)",
+                wire.len()
+            );
+        }
     }
 
     #[test]
