@@ -10,6 +10,7 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Cell, Clear, Padding, Paragraph, Row, Sparkline, Table};
 
 use crate::board::{self, compression_status};
+use crate::flights::{FlightView, Phase};
 use crate::forwarder::Coding;
 use crate::logfmt::{self, Level, human, human_count, human_time};
 use crate::spend;
@@ -31,6 +32,7 @@ const MODEL: Color = Color::Magenta;
 const HUD_HEIGHT: u16 = 5;
 const FOOTER_HEIGHT: u16 = 1;
 const EVENTS_MIN: u16 = 4;
+const FLIGHTS_SHOWN: usize = 5;
 /// Two borders plus four rows of drawing: two apiece for the up and down
 /// sparklines, and enough for the bars to show a difference in height rather
 /// than just presence.
@@ -63,17 +65,27 @@ pub struct Panes {
     pub hud: Rect,
     pub models: Option<Rect>,
     pub charts: Option<(Rect, Charts)>,
+    pub flights: Option<Rect>,
     pub events: Rect,
     pub footer: Rect,
 }
 
 /// Split `area`, dropping the charts first and then the model table when the
 /// terminal is too short. `None` means there is no room for a dashboard at all.
-pub fn panes(area: Rect, models: usize) -> Option<Panes> {
+pub fn panes(area: Rect, models: usize, flights: usize) -> Option<Panes> {
     if area.width < MIN_WIDTH || area.height < HUD_HEIGHT + FOOTER_HEIGHT + EVENTS_MIN {
         return None;
     }
     let mut spare = area.height - (HUD_HEIGHT + FOOTER_HEIGHT + EVENTS_MIN);
+
+    // Live requests take priority over counters and charts. Keep the oldest
+    // ones visible, with an explicit overflow count rather than silent loss.
+    let flight_height = if flights > 0 && spare >= 4 {
+        (flights.min(FLIGHTS_SHOWN) as u16 + 3).min(spare)
+    } else {
+        0
+    };
+    spare -= flight_height;
 
     let table_height = models as u16 + 3;
     let table = models > 0 && spare >= table_height;
@@ -103,6 +115,9 @@ pub fn panes(area: Rect, models: usize) -> Option<Panes> {
     if charts.is_some() {
         constraints.push(Constraint::Length(chart_height));
     }
+    if flight_height > 0 {
+        constraints.push(Constraint::Length(flight_height));
+    }
     constraints.push(Constraint::Min(EVENTS_MIN));
     constraints.push(Constraint::Length(FOOTER_HEIGHT));
 
@@ -116,18 +131,23 @@ pub fn panes(area: Rect, models: usize) -> Option<Panes> {
         next += 1;
         (rows[next - 1], mode)
     });
+    let flights = (flight_height > 0).then(|| {
+        next += 1;
+        rows[next - 1]
+    });
     Some(Panes {
         hud: rows[0],
         models,
         charts,
+        flights,
         events: rows[next],
         footer: rows[next + 1],
     })
 }
 
 /// Rows the event pane can show, which is what a page of scrolling moves by.
-pub fn events_height(area: Rect, models: usize) -> usize {
-    panes(area, models)
+pub fn events_height(area: Rect, models: usize, flights: usize) -> usize {
+    panes(area, models, flights)
         .map(|panes| panes.events.height.saturating_sub(2) as usize)
         .unwrap_or(1)
         .max(1)
@@ -139,7 +159,7 @@ pub fn draw(frame: &mut Frame, state: &State, header: &Header) {
         usage_screen(frame, state, area);
         return;
     }
-    let Some(panes) = panes(area, state.models.len()) else {
+    let Some(panes) = panes(area, state.models.len(), state.flights.len()) else {
         frame.render_widget(
             // Short enough to survive the truncation it is warning about.
             Paragraph::new("too small")
@@ -157,6 +177,12 @@ pub fn draw(frame: &mut Frame, state: &State, header: &Header) {
     if let Some((area, mode)) = panes.charts {
         draw_charts(frame, state, area, mode);
     }
+    if let Some(area) = panes.flights {
+        frame.render_widget(
+            flights_table(&state.flights, state.totals.in_flight, area),
+            area,
+        );
+    }
     frame.render_widget(events(state, panes.events.width), panes.events);
     frame.render_widget(footer(state), panes.footer);
 
@@ -169,6 +195,104 @@ pub fn draw(frame: &mut Frame, state: &State, header: &Header) {
     {
         popup(frame, area, "request", detail_lines(record));
     }
+}
+
+// ------------------------------------------------------------------- flights
+
+fn flight_phase(flight: &FlightView) -> (&'static str, Color) {
+    match flight.phase {
+        Phase::Prefill if flight.age > 30.0 => ("slow prefill", TIME),
+        Phase::Stream if flight.idle > 60.0 => ("stalled", BAD),
+        Phase::Upload => ("upload", WIRE),
+        Phase::Prefill => ("prefill", TIME),
+        Phase::Stream => ("stream", GOOD),
+    }
+}
+
+fn flights_table(flights: &[FlightView], total: u64, area: Rect) -> Table<'static> {
+    let shown = flights.len().min(area.height.saturating_sub(3) as usize);
+    let total = total.max(flights.len() as u64);
+    let more = total.saturating_sub(shown as u64);
+    let title = if more > 0 {
+        format!(" in flight · {total} · +{more} more ")
+    } else {
+        format!(" in flight · {total} ")
+    };
+    let wide = area.width >= 80;
+    let roomy = area.width >= 120;
+    let mut headers = vec![
+        Cell::from("model"),
+        Cell::from("phase"),
+        number("age"),
+        number("down"),
+    ];
+    let mut widths = vec![
+        Constraint::Length(if wide { 16 } else { 10 }),
+        Constraint::Length(12),
+        Constraint::Length(7),
+        Constraint::Length(7),
+    ];
+    if roomy {
+        headers.extend([
+            number("code"),
+            number("ttfb"),
+            number("idle"),
+            number("retry"),
+        ]);
+        widths.extend([
+            Constraint::Length(4),
+            Constraint::Length(7),
+            Constraint::Length(7),
+            Constraint::Length(5),
+        ]);
+    }
+    if wide {
+        headers.push(Cell::from("route"));
+        widths.push(Constraint::Min(12));
+    }
+    let rows = flights.iter().take(shown).map(|flight| {
+        let (phase, shade) = flight_phase(flight);
+        let mut cells = vec![
+            Cell::from(Span::styled(
+                flight.model.clone(),
+                Style::default().fg(MODEL),
+            )),
+            Cell::from(Span::styled(phase, Style::default().fg(shade))),
+            number(human_time(flight.age)),
+            number(human(flight.received)),
+        ];
+        if roomy {
+            cells.extend([
+                number(
+                    flight
+                        .status
+                        .map(|status| status.to_string())
+                        .unwrap_or_else(|| "-".to_string()),
+                ),
+                number(
+                    flight
+                        .ttfb
+                        .map(human_time)
+                        .unwrap_or_else(|| "-".to_string()),
+                ),
+                number(human_time(flight.idle)),
+                number(flight.retries.to_string()),
+            ]);
+        }
+        if wide {
+            cells.push(Cell::from(format!("{} {}", flight.method, flight.path)));
+        }
+        Row::new(cells)
+    });
+    Table::new(rows, widths)
+        .header(Row::new(headers).style(Style::default().fg(DIM)))
+        .column_spacing(1)
+        .block(
+            Block::bordered()
+                .title(title)
+                .border_style(Style::default().fg(DIM))
+                .padding(Padding::horizontal(1)),
+        )
 }
 
 // ----------------------------------------------------------------------- hud
@@ -237,7 +361,14 @@ fn hud<'a>(state: &State, header: &'a Header) -> Paragraph<'a> {
     };
     let mut requests = vec![Span::styled(" REQUESTS ", Style::default().fg(DIM))];
     requests.extend(stat("total", totals.requests.to_string(), Color::Reset));
-    requests.extend(stat("live", totals.in_flight.to_string(), GOOD));
+    if state.flights_available {
+        requests.extend(stat("live", totals.in_flight.to_string(), GOOD));
+    } else {
+        requests.push(Span::styled(
+            "in flight unavailable  ",
+            Style::default().fg(TIME),
+        ));
+    }
     requests.extend(stat("2xx", state.ok.to_string(), GOOD));
     requests.extend(stat(
         "4xx",
@@ -393,7 +524,11 @@ fn models_table(state: &State, width: u16) -> Table<'_> {
             Cell::from(coding_span(view.coding, view.dict)),
             Cell::from(view.requests.to_string()),
             Cell::from(Span::styled(
-                view.in_flight.to_string(),
+                if state.flights_available {
+                    view.in_flight.to_string()
+                } else {
+                    "-".to_string()
+                },
                 Style::default().fg(if view.in_flight > 0 { GOOD } else { DIM }),
             )),
             Cell::from(Span::styled(
@@ -1462,6 +1597,196 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    #[test]
+    fn live_requests_advance_and_leave_before_the_next_sample() {
+        let mut config = crate::cli::Args::default().forwarder_config();
+        config.telemetry = Arc::new(crate::telemetry::Telemetry::default());
+        let router = crate::router::Router::build(
+            &config,
+            &[("alpha".to_string(), "https://example.invalid".to_string())],
+            None,
+        )
+        .unwrap();
+        let registry = router.telemetry().flights();
+        let flight = registry.begin(
+            "alpha",
+            &http::Method::POST,
+            "/v1/messages?secret=hidden",
+            100,
+        );
+        let mut state = State::new();
+        state.tick(&router);
+        assert_eq!(state.flights.len(), 1);
+        assert!(screen(140, 30, &state).contains("upload"));
+
+        let clock = Arc::new(crate::clock::PhaseClock::new());
+        clock.mark_upload_started();
+        flight.attempt(&clock, 50, Coding::Zstd);
+        clock.mark_upload_finished();
+        state.tick(&router);
+        assert_eq!(state.flights[0].phase, Phase::Prefill);
+        assert!(screen(140, 30, &state).contains("prefill"));
+
+        flight.responded(200, 0.5, 50, Coding::Zstd);
+        flight.progress(2048, 1024, 2048);
+        state.tick(&router);
+        let out = screen(140, 30, &state);
+        for text in [
+            "in flight · 1",
+            "stream",
+            "500ms",
+            "2KB",
+            "POST /v1/messages",
+        ] {
+            assert!(out.contains(text), "{out}");
+        }
+        assert!(!out.contains("secret"), "{out}");
+        flight.progress(4096, 2048, 4096);
+        state.tick(&router);
+        assert!(screen(140, 30, &state).contains("4KB"));
+
+        // An unrelated completion cannot remove the live row. The matching
+        // record does, even when the 250ms sampling clock has not fired yet.
+        state.push(Event::Request(Arc::new(record("other", 200))));
+        assert_eq!(state.flights.len(), 1);
+        registry.end(flight.id());
+        let mut completed = record("alpha", 200);
+        completed.flight = Some(flight.id());
+        state.push(Event::Request(Arc::new(completed)));
+        assert!(state.flights.is_empty());
+        assert!(!screen(140, 30, &state).contains("in flight"));
+        assert_eq!(state.len(), 2);
+        state.tick(&router);
+        assert!(state.flights.is_empty());
+
+        // Cancellation has no completion record; the next sample removes it.
+        let cancelled = registry.begin("alpha", &http::Method::GET, "/v1/models", 0);
+        state.tick(&router);
+        assert_eq!(state.flights.len(), 1);
+        registry.end(cancelled.id());
+        state.tick(&router);
+        assert!(state.flights.is_empty());
+    }
+
+    #[test]
+    fn flights_keep_the_oldest_visible_and_preserve_event_scrolling_room() {
+        let registry = crate::flights::Flights::default();
+        for index in 0..8 {
+            registry.begin(
+                &format!("live-{index}"),
+                &http::Method::POST,
+                "/v1/messages",
+                100,
+            );
+        }
+        let mut state = populated();
+        state.flights = registry.views();
+        state.totals.in_flight = state.flights.len() as u64;
+        for (width, height, shown) in [(140, 44, 5), (80, 24, 5), (44, 14, 1)] {
+            let area = Rect::new(0, 0, width, height);
+            state.viewport = events_height(area, state.models.len(), state.flights.len());
+            let out = screen(width, height, &state);
+            assert!(
+                out.contains(&format!("in flight · 8 · +{} more", 8 - shown)),
+                "{out}"
+            );
+            assert!(out.contains("live-0"), "{out}");
+            assert!(out.contains(&format!("live-{}", shown - 1)), "{out}");
+            assert!(!out.contains(&format!("live-{shown}")), "{out}");
+            assert!(out.contains("events"), "{out}");
+            assert!(out.contains("23:41:03 WARNING"), "{out}");
+            let layout = panes(area, state.models.len(), state.flights.len()).unwrap();
+            assert!(layout.events.height >= EVENTS_MIN);
+            assert_eq!(
+                events_height(area, state.models.len(), state.flights.len()),
+                layout.events.height as usize - 2
+            );
+        }
+        state.set_filter(crate::tui::state::Filter::Trouble);
+        state.scroll(-1);
+        assert!(screen(80, 24, &state).contains("live-0"));
+        // At minimum height only the HUD's live count fits; resizing stays safe.
+        for height in [1, 9, 10, 13] {
+            screen(44, height, &state);
+        }
+        state.tick_recorded(&watch::Window::default());
+        assert!(state.flights.is_empty());
+        assert!(!screen(140, 44, &state).contains("in flight"));
+    }
+
+    #[test]
+    fn attached_live_counts_preserve_history_and_failures_clear_the_table() {
+        let mut state = State::new();
+        state.recorded = true;
+        state.push(Event::Request(Arc::new(record("alpha", 200))));
+        state.tick_recorded(&watch::Window::default());
+        let bytes = state.totals.body_bytes;
+        let registry = crate::flights::Flights::default();
+        for _ in 0..205 {
+            registry.begin("alpha", &http::Method::GET, "/v1/models", 0);
+        }
+        let bounded = registry.snapshot(crate::live::MAX_FLIGHTS);
+        let mut snapshot = crate::live::Snapshot {
+            version: 1,
+            instance: "a".repeat(32),
+            listen: "127.0.0.1:8789".parse().unwrap(),
+            total: bounded.total,
+            models: bounded.models,
+            flights: bounded.flights,
+        };
+        state.apply_live(Some(&snapshot));
+        assert_eq!(state.totals.requests, 1);
+        assert_eq!(state.totals.body_bytes, bytes);
+        assert_eq!(state.models[0].view.in_flight, 205);
+        let out = screen(140, 44, &state);
+        assert!(out.contains("live 205"), "{out}");
+        assert!(out.contains("in flight · 205 · +200 more"), "{out}");
+
+        state.apply_live(None);
+        assert!(state.flights.is_empty());
+        assert_eq!(state.models[0].view.in_flight, 0);
+        assert!(screen(44, 14, &state).contains("in flight unavailable"));
+        // Recorded events and filters keep working while the socket is down.
+        state.push(Event::Request(Arc::new(record("alpha", 500))));
+        state.tick_recorded(&watch::Window::default());
+        state.apply_live(None);
+        state.set_filter(crate::tui::state::Filter::Trouble);
+        assert_eq!(state.totals.requests, 2);
+        assert!(screen(140, 44, &state).contains("500"));
+
+        snapshot.instance = "b".repeat(32);
+        snapshot.total = 0;
+        snapshot.models.clear();
+        snapshot.flights.clear();
+        state.apply_live(Some(&snapshot));
+        let out = screen(140, 44, &state);
+        assert!(!out.contains("in flight unavailable"), "{out}");
+        assert!(out.contains("live 0"), "{out}");
+        assert_eq!(state.totals.requests, 2);
+    }
+
+    #[test]
+    fn flights_flag_slow_prefill_and_stalled_streams_at_the_web_thresholds() {
+        let registry = crate::flights::Flights::default();
+        let flight = registry.begin("alpha", &http::Method::GET, "/v1/models", 0);
+        let mut view = flight.view();
+        view.age = 30.0;
+        assert_eq!(flight_phase(&view).0, "prefill");
+        view.age = 30.1;
+        assert_eq!(flight_phase(&view).0, "slow prefill");
+        let mut state = State::new();
+        state.flights.push(view.clone());
+        assert!(screen(44, 14, &state).contains("slow prefill"));
+
+        view.phase = Phase::Stream;
+        view.idle = 60.0;
+        assert_eq!(flight_phase(&view).0, "stream");
+        view.idle = 60.1;
+        assert_eq!(flight_phase(&view), ("stalled", BAD));
+        state.flights = vec![view];
+        assert!(screen(44, 14, &state).contains("stalled"));
     }
 
     /// The model table's header row, which is where the shed columns show.

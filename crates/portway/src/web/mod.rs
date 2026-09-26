@@ -1,8 +1,8 @@
 //! `--web`: the dashboard in a browser.
 //!
 //! Everything the terminal dashboard shows, computed by the same code, plus
-//! what a terminal cannot hold: the requests still in flight, the recorded
-//! history, and the controls a daemon otherwise needs a second shell for.
+//! the recorded history and the controls a daemon otherwise needs a second
+//! shell for.
 //! The server is one hyper listener of its own beside the forwarder's; the
 //! page is a handful of static files compiled into the binary.
 

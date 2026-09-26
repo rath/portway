@@ -2,9 +2,9 @@
 //!
 //! Two dedicated OS threads, never the tokio runtime: crossterm's input poll
 //! blocks, and nothing here may ever sit in front of a request. The only
-//! contact with the forwarder is a `Receiver<Event>` and a read-only sample of
-//! the per-model counters, both lock-free from the request path's point of
-//! view.
+//! contact with the forwarder is a `Receiver<Event>` and read-only samples of
+//! the per-model counters and flight registry. The registry lock is held only
+//! while cloning its entries; rendering never holds it.
 //!
 //! Input gets a thread of its own because crossterm's reader **cannot be
 //! trusted to return**: on a hung-up tty its `read()` comes back `Ok(0)`
@@ -72,7 +72,10 @@ impl Drop for TerminalGuard {
 /// request path, or the window of a forwarder it is watching instead.
 pub enum Feed {
     Live(Arc<Router>),
-    Recorded(Arc<Mutex<watch::Window>>),
+    Recorded {
+        window: Arc<Mutex<watch::Window>>,
+        live: tokio::sync::watch::Receiver<Option<Arc<crate::live::Snapshot>>>,
+    },
 }
 
 /// The file a session leaves its dashboard settings in, beside the database.
@@ -293,7 +296,7 @@ fn run(
     state.prices = settings.prices.clone();
     state.columns = settings.columns;
     state.db = db.map(Path::to_path_buf);
-    state.recorded = matches!(feed, Feed::Recorded(_));
+    state.recorded = matches!(feed, Feed::Recorded { .. });
     // Whatever is already queued — a watching dashboard starts with an hour of
     // it — is on the first frame rather than the one after it.
     for event in events.try_iter() {
@@ -316,7 +319,7 @@ fn run(
         if dirty {
             let size = terminal.size()?;
             let area = Rect::new(0, 0, size.width, size.height);
-            state.viewport = view::events_height(area, state.models.len());
+            state.viewport = view::events_height(area, state.models.len(), state.flights.len());
             // The write that notices a terminal that went away.
             terminal.draw(|frame| view::draw(frame, &state, header))?;
             dirty = false;
@@ -345,7 +348,11 @@ fn run(
 fn tick(state: &mut State, feed: &Feed) {
     match feed {
         Feed::Live(router) => state.tick(router),
-        Feed::Recorded(window) => state.tick_recorded(&window.lock().unwrap()),
+        Feed::Recorded { window, live } => {
+            state.tick_recorded(&window.lock().unwrap());
+            let snapshot = live.borrow().clone();
+            state.apply_live(snapshot.as_deref());
+        }
     }
     state.refresh_usage();
 }
@@ -435,8 +442,8 @@ fn key_press(key: KeyEvent, state: &mut State, settings: &Settings) -> bool {
 
     match key.code {
         KeyCode::Char('q') => {
-            // Quitting drops every live relay, which aborts those generations.
-            if confirming || state.totals.in_flight == 0 {
+            // An attached viewer owns no relays and can always leave.
+            if state.recorded || confirming || state.totals.in_flight == 0 {
                 return true;
             }
             state.confirm_quit = true;
@@ -539,6 +546,11 @@ mod tests {
         // Ctrl-C never waits for a confirmation.
         let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
         assert!(key_press(ctrl_c, &mut state, &Settings::default()));
+
+        state.recorded = true;
+        state.totals.in_flight = 200;
+        assert!(key(KeyCode::Char('q'), &mut state));
+        assert!(!state.confirm_quit);
     }
 
     #[test]

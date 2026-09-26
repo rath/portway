@@ -1,6 +1,5 @@
-// Requests the forwarder has counted and not finished relaying: the part of
-// the traffic the terminal dashboard never sees. The server sends the list
-// when it changes; ages move on here, from the moment it was read.
+// Requests the forwarder has counted and not finished relaying. The server
+// sends the list when it changes; ages move on here, from the moment it was read.
 
 import { human, humanTime } from "./format.js";
 

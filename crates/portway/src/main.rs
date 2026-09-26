@@ -20,7 +20,7 @@ use portway::tui::view::Header;
 use portway::watch;
 #[cfg(feature = "web")]
 use portway::web;
-use portway::{daemon, logfmt, report, server, store, telemetry};
+use portway::{daemon, live, logfmt, report, server, store, telemetry};
 #[cfg(feature = "tui")]
 type Settings = tui::Settings;
 #[cfg(not(feature = "tui"))]
@@ -158,6 +158,16 @@ async fn run(
         config.port,
         router.models().len()
     );
+    // Available in every CLI build, without starting the web console. A local
+    // observer failure must never stop forwarding.
+    let _live =
+        match live::Server::start(_dir, listener.local_addr()?, Arc::clone(router.telemetry())) {
+            Ok(server) => Some(server),
+            Err(error) => {
+                logfmt::warn(&format!("live snapshots unavailable: {error}"));
+                None
+            }
+        };
 
     if !args.tui {
         #[cfg(feature = "web")]
@@ -349,8 +359,12 @@ fn watching(
         .enable_all()
         .build()?;
     runtime.block_on(async {
+        let live = live::Client::start(dir.to_path_buf(), config.host.clone(), config.port);
         let (dashboard, quit) = tui::start(
-            tui::Feed::Recorded(watch.window()),
+            tui::Feed::Recorded {
+                window: watch.window(),
+                live: live.snapshots(),
+            },
             receiver,
             header,
             settings,

@@ -8,6 +8,7 @@ pub mod cli;
 pub mod config;
 pub mod control;
 pub mod daemon;
+pub mod live;
 pub mod logfmt;
 pub mod report;
 pub mod request_log;

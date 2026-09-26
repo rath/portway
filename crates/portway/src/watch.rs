@@ -11,7 +11,8 @@
 //! recorder's own path and nothing is ever written, migrated or created. A
 //! window is all a database holds — a request has no row until its relay ends
 //! — so what describes *now* (in flight, pooled idle connections, the coding
-//! this process negotiated) is not here at all.
+//! this process negotiated) is not here at all. The attached TUI supplements
+//! these rows through the independent `live` socket client.
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -81,16 +82,17 @@ pub fn forwarder_on(host: &str, port: u16) -> bool {
         "::" | "[::]" => "::1",
         other => other,
     };
-    let Ok(address) = format!("{host}:{port}").parse() else {
+    let Ok(ip) = host.trim_start_matches('[').trim_end_matches(']').parse() else {
         return false;
     };
+    let address = std::net::SocketAddr::new(ip, port);
     let Ok(mut socket) = std::net::TcpStream::connect_timeout(&address, PROBE) else {
         return false;
     };
     let _ = socket.set_read_timeout(Some(PROBE));
     let _ = socket.set_write_timeout(Some(PROBE));
     let request = format!(
-        "GET {stats} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n",
+        "GET {stats} HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n\r\n",
         stats = crate::router::STATS_PATH,
     );
     if socket.write_all(request.as_bytes()).is_err() {

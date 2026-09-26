@@ -181,6 +181,13 @@ pub struct Flights {
     map: Mutex<BTreeMap<u64, Arc<Flight>>>,
 }
 
+/// Counts from one registry read, with a bounded list of the oldest flights.
+pub struct Snapshot {
+    pub total: u64,
+    pub models: BTreeMap<String, u64>,
+    pub flights: Vec<FlightView>,
+}
+
 impl Flights {
     /// Enter a request that has just been counted.
     pub fn begin(&self, model: &str, method: &Method, path: &str, body_len: u64) -> Arc<Flight> {
@@ -238,6 +245,28 @@ impl Flights {
             .cloned()
             .collect();
         flights.iter().map(|flight| flight.view()).collect()
+    }
+
+    /// Count every flight, but only clone and inspect the oldest `limit`.
+    /// Per-flight clocks are read after releasing the registry lock.
+    pub fn snapshot(&self, limit: usize) -> Snapshot {
+        let (total, models, flights) = {
+            let map = self.map.lock().expect("flights");
+            let mut models = BTreeMap::new();
+            for flight in map.values() {
+                *models.entry(flight.model.clone()).or_default() += 1;
+            }
+            (
+                map.len() as u64,
+                models,
+                map.values().take(limit).cloned().collect::<Vec<_>>(),
+            )
+        };
+        Snapshot {
+            total,
+            models,
+            flights: flights.iter().map(|flight| flight.view()).collect(),
+        }
     }
 }
 

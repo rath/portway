@@ -105,14 +105,54 @@ cargo build --release --locked --features tui
 
 With a free port, the dashboard starts and observes its own forwarder. With an
 existing Portway on that port, it watches the same data directory's recorded
-window. A viewer neither owns the listener nor writes the database. Its
-configuration supplies any prices used for estimates. To attach with default
+window and reads current requests from its local Unix socket. A viewer neither
+owns the listener nor writes the database. Its configuration supplies any prices used for estimates. To attach with default
 host, port and data directory, `portway --tui` needs no upstream configuration.
 
 The dashboard displays request/byte totals, route counters, body sizes, socket
 throughput, latency, and recent events. Live counters are per running instance;
 a viewer reconstructs its window from recorded rows. Usage and costs are read
 from the database for today, yesterday, seven days, or thirty days.
+
+An **in flight** table above the events refreshes every 250ms, both when the
+dashboard owns the forwarder and when it attaches to a local server: model,
+phase (upload, prefill, stream), elapsed time and received bytes. Wider terminals also show the method and path; at 120 columns,
+the status, time to first byte, idle time and retry count appear. Prefill over
+30s is marked `slow prefill`; a stream idle for over 60s is marked `stalled`.
+In an owning dashboard, completed requests leave as their event arrives. In an
+attached viewer, completed or cancelled requests leave on the next successful
+snapshot.
+
+The table shows up to five requests, oldest first, and counts additional
+requests in its title. It takes priority over charts and model counters, while
+keeping room for events. Below 14 terminal rows, only the HUD's `live` count
+fits. The table disappears when no requests are active. Event filters and
+scrolling do not hide active requests. Attach keeps historical request counts,
+bytes, charts and events sourced from SQLite; live snapshots supplement the
+HUD and existing model rows without changing the database schema.
+
+Every CLI build serves `<data-dir>/portway.live.sock`, with mode `0600` and
+same-UID peer checks. Each connection returns one versioned JSON snapshot with
+a process instance ID, the actual listening address, total and per-model counts,
+and at most the oldest 200 requests. The table's additional count includes
+requests beyond that limit. No bodies, headers or query strings are sent.
+Attach checks the server address/port and replaces the entire snapshot, including
+after a server restart; it never matches live IDs to historical DB records.
+
+Socket queries run separately from terminal rendering and database reads. They
+do not overlap, time out after 500ms, and retry every second after failure. A
+failure clears the previous list and shows `in flight unavailable`, distinct
+from a successful `live 0`; history and keyboard input remain available.
+Responses are limited to 1MiB and the server permits eight concurrent clients,
+each with a 500ms deadline. Socket setup failures warn without stopping
+forwarding. The permanent `portway.live.lock` file controls socket ownership;
+do not remove it while a server is running. Only its lock holder cleans up a
+stale socket.
+
+Use the same `--data-dir`, host and port as the server. Older servers still
+provide recorded history; restart them with the new binary to enable live
+attach. An attached viewer's `q` only closes the viewer, even during active
+requests. Web attach continues to show recorded history only.
 
 | Key | Action |
 | --- | --- |
@@ -177,7 +217,7 @@ are kept in `portway.web` (mode 0600) in the data directory. The log only ever
 contains the address without the token.
 
 The console shows everything the terminal dashboard shows, computed by the
-same code, with these additions:
+same code, with these views and additions:
 
 | View | What it adds |
 | --- | --- |
@@ -311,7 +351,8 @@ to ordinary compression according to the [retry protocol](protocol.md#errors-and
 | Dashboard needs a terminal | Run `--tui` directly in a terminal; use `--report` for redirected output. |
 | `--web` is an unrecognized argument | Rebuild or install with `--features web`. |
 | The console asks for the printed address | The session belongs to one run: open the link the current run printed, or `portway --status --data-dir …` for a daemon's. |
-| The console shows no requests in flight | An attached console reads another instance's database; flights are only visible in the serving process's own console. |
+| The web console shows no requests in flight | Web attach reads another instance's database; use an attached TUI or the serving process's own console for live flights. |
+| TUI says `in flight unavailable` | Check the same data directory, host/port and user; restart an older server with the new binary and check its log for socket setup warnings. Recorded history remains available. |
 | Dashboard has no prices or an empty history | Pass its price-bearing config and the serving instance's data directory; also check the selected date window. |
 | Health is OK but requests fail | Local health does not check upstream reachability, model availability, or credentials. Test a real request. |
 | Compression or DCZ is absent | Follow [compression checks](#check-compression); a working API alone does not imply support. |

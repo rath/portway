@@ -19,7 +19,9 @@ pub use crate::board::{
     BARS, ModelRow, SAMPLES, SCALES, Series, TRAFFIC_SECONDS, Totals, Traffic, mean, percentile,
 };
 use crate::board::{Board, push_capped};
+use crate::flights::FlightView;
 use crate::logfmt::{self, Level};
+use crate::router::Router;
 use crate::spend;
 use crate::telemetry::{Event, RequestRecord};
 
@@ -234,6 +236,10 @@ pub struct State {
     pub scale: usize,
     /// The numbers: counters, samples and charts, shared with the web console.
     pub board: Board,
+    /// Oldest first, sampled from the owning forwarder every 250ms.
+    pub flights: Vec<FlightView>,
+    /// False only when an attached viewer cannot obtain a current snapshot.
+    pub flights_available: bool,
     /// The database the usage screen reads the day back out of. `None` leaves
     /// it with nothing to draw but the reason.
     pub db: Option<PathBuf>,
@@ -270,6 +276,8 @@ impl State {
             confirm_quit: false,
             scale: SCALES[0],
             board: Board::new(),
+            flights: Vec::new(),
+            flights_available: true,
             db: None,
             usage_open: false,
             usage_range: spend::Range::Today,
@@ -292,7 +300,12 @@ impl State {
                 level,
                 message,
             },
-            Event::Request(record) => Entry::Request(record),
+            Event::Request(record) => {
+                if let Some(id) = record.flight {
+                    self.flights.retain(|flight| flight.id != id);
+                }
+                Entry::Request(record)
+            }
         };
         let seq = self.next_seq;
         self.next_seq += 1;
@@ -306,6 +319,30 @@ impl State {
             }
         }
         self.entries.push_back(Row { seq, entry });
+    }
+
+    pub fn tick(&mut self, router: &Router) {
+        self.board.tick(router);
+        self.flights = router.telemetry().flights().views();
+        self.flights_available = true;
+    }
+
+    pub fn tick_recorded(&mut self, window: &crate::watch::Window) {
+        self.board.tick_recorded(window);
+        self.flights.clear();
+    }
+
+    /// DB records have no flight IDs. Replace the live list as a whole, also
+    /// across server restarts, and leave every historical counter untouched.
+    pub fn apply_live(&mut self, snapshot: Option<&crate::live::Snapshot>) {
+        self.flights_available = snapshot.is_some();
+        self.flights = snapshot.map_or_else(Vec::new, |snapshot| snapshot.flights.clone());
+        self.totals.in_flight = snapshot.map_or(0, |snapshot| snapshot.total);
+        for model in &mut self.models {
+            model.view.in_flight = snapshot
+                .and_then(|snapshot| snapshot.models.get(&model.name).copied())
+                .unwrap_or(0);
+        }
     }
 
     // ----------------------------------------------------------- usage screen

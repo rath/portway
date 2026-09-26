@@ -192,8 +192,11 @@ portway --stop
 ```
 
 A dashboard attached to a daemon can be closed without stopping forwarding.
+Both dashboards show requests still in flight when they own the forwarder.
+An attached TUI also reads live requests from the same data directory over a
+local Unix socket; no web console or additional TCP port is needed.
 `--web` serves the same dashboard in a browser at `http://127.0.0.1:8790/`, plus
-the requests still in flight, history, search and export, reload and stop
+history, search and export, reload and stop
 controls, and a choice of themes; `--daemon --web` hosts it in the daemon. A
 foreground `--web` opens it in the default browser; with `--no-open`, or from a
 daemon, open the printed link, which carries the run's token. With
