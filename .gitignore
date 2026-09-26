@@ -1,2 +1,5 @@
 /target/
 /portway.toml
+/.zigcache/
+/.zigglobal/
+/target-local/
