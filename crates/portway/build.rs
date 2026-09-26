@@ -26,7 +26,8 @@ fn main() {
     // where the count is missing but a hash usually is.
     let count = git(&["rev-list", "--count", "HEAD"]);
     let hash = git(&["rev-parse", "--short=7", "HEAD"]);
-    let dirty = git(&["status", "--porcelain", "--untracked-files=no"]).is_some_and(|s| !s.is_empty());
+    let dirty =
+        git(&["status", "--porcelain", "--untracked-files=no"]).is_some_and(|s| !s.is_empty());
 
     let base = std::env::var("CARGO_PKG_VERSION").unwrap_or_else(|_| "0.0.0".into());
     let version = match (count, hash) {

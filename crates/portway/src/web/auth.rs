@@ -218,7 +218,11 @@ mod tests {
         for good in ["sender-host:8790", "SENDER-HOST:8790", "sender-host.:8790"] {
             assert!(auth.host_allowed(Some(good)), "{good}");
         }
-        for bad in ["sender-host:8791", "sender-host.lan:8790", "evil.example:8790"] {
+        for bad in [
+            "sender-host:8791",
+            "sender-host.lan:8790",
+            "evil.example:8790",
+        ] {
             assert!(!auth.host_allowed(Some(bad)), "{bad}");
         }
     }
