@@ -71,6 +71,10 @@ version may contain breaking changes.
 
 - `--report` failed with `Invalid column type Null` when a request had dialed
   a plain-HTTP upstream (no TLS phase); such a dial now counts as DNS plus TCP.
+- Anthropic answers recorded only `input_tokens` as the prompt, so the cached
+  count exceeded it (a hit rate above 100%) and fresh input was priced at
+  zero. The prompt now adds the cache read and cache write counts Anthropic
+  reports beside it. Rows recorded before the fix keep the old counts.
 
 ### Security
 

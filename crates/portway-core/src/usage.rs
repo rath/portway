@@ -19,6 +19,8 @@ use serde_json::{Map, Value};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Usage {
     /// `prompt_tokens`: the context this turn's prefill read, cache included.
+    /// For Anthropic, `input_tokens` plus the cache read and cache write
+    /// counts it reports beside it.
     pub prompt: u64,
     /// `prompt_tokens_details.cached_tokens`: the part a prefix cache served.
     /// `None` when the engine reported counts without that detail.
@@ -212,7 +214,18 @@ fn read(object: &[u8]) -> Option<Usage> {
     let count = |name: &str| map.get(name).and_then(Value::as_u64);
     // Both counts are required: a body with one of them is not a usage object
     // this process can account for, and half a turn is worse than none.
-    let prompt = count("prompt_tokens").or_else(|| count("input_tokens"))?;
+    let prompt = match count("prompt_tokens") {
+        Some(prompt) => prompt,
+        // Anthropic's `input_tokens` is only what follows the last cache
+        // breakpoint: the part the cache served and the part this turn wrote
+        // into it are reported beside it, not inside it. The Responses API's
+        // `input_tokens` already includes its cache and carries neither field.
+        None => {
+            count("input_tokens")?
+                + count("cache_read_input_tokens").unwrap_or(0)
+                + count("cache_creation_input_tokens").unwrap_or(0)
+        }
+    };
     let completion = count("completion_tokens").or_else(|| count("output_tokens"))?;
     Some(Usage {
         prompt,
@@ -342,6 +355,49 @@ mod tests {
         scanner.push(&stream);
         scanner.push(br#"{"usage":{"prompt_tokens":7,"completion_tokens":3}}"#);
         assert_eq!(scanner.usage().map(|usage| usage.prompt), Some(7));
+    }
+
+    /// Anthropic reports the cached and the newly cached prefix beside
+    /// `input_tokens`; the prompt is all three, so `cached` never exceeds it.
+    #[test]
+    fn an_anthropic_prompt_includes_what_its_cache_served_and_wrote() {
+        let answer = br#"{"type":"message","usage":{"input_tokens":12,"cache_creation_input_tokens":800,"cache_read_input_tokens":17000,"output_tokens":431}}"#;
+        assert_eq!(
+            scan_all(&[answer]),
+            Some(Usage {
+                prompt: 17_812,
+                cached: Some(17_000),
+                completion: 431,
+                reasoning: None,
+            })
+        );
+
+        // A stream: `message_start` opens with a placeholder output count, and
+        // the closing `message_delta` carries the cumulative totals.
+        let stream = [
+            &br#"event: message_start
+data: {"type":"message_start","message":{"usage":{"input_tokens":12,"cache_creation_input_tokens":800,"cache_read_input_tokens":17000,"output_tokens":1}}}
+
+"#[..],
+            &br#"event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":12,"cache_creation_input_tokens":800,"cache_read_input_tokens":17000,"output_tokens":431}}
+
+"#[..],
+        ];
+        assert_eq!(
+            scan_all(&stream).map(|usage| (usage.prompt, usage.cached, usage.completion)),
+            Some((17_812, Some(17_000), 431))
+        );
+    }
+
+    /// The Responses API's `input_tokens` already counts its cache.
+    #[test]
+    fn a_responses_prompt_is_not_counted_twice() {
+        let answer = br#"{"usage":{"input_tokens":5000,"input_tokens_details":{"cached_tokens":4096},"output_tokens":20}}"#;
+        assert_eq!(
+            scan_all(&[answer]).map(|usage| (usage.prompt, usage.cached)),
+            Some((5000, Some(4096)))
+        );
     }
 
     #[test]
