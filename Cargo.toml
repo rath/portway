@@ -20,6 +20,16 @@ opt-level = 3
 # `panic` stays at the default unwind on purpose — with `abort`, one malformed
 # upstream response would kill every in-flight stream, and the codegen win is
 # negligible next to fat LTO.
+#
+# `lto` and `codegen-units` are measured, not assumed. On a 12-core host, a
+# clean cross-build for aarch64 takes 58s here against 29s for `thin`, but the
+# artifact is 8.20 MB against 9.92 MB, and on the accept path fat is ~28% faster
+# (0.093 ms median against 0.119 ms). `codegen-units = 1` is NOT the reason a
+# build looks single-threaded: most of the wall time is fat LTO's single
+# final-optimization pass, where all IR from every crate is merged. Raising it
+# to 16 with fat kept only shaved 3s off the build while growing the binary 6.5%,
+# so it buys nothing. The build is automated by deploy.sh, so its duration is not
+# a human's wait — spend it on the request path instead.
 [profile.release]
 opt-level = 3
 lto = "fat"
