@@ -13,7 +13,7 @@ pub enum Mode {
 #[derive(Debug, Clone, Parser)]
 #[command(
     name = "portway",
-    version,
+    version = crate::VERSION,
     about = "A compression-first HTTP forwarder"
 )]
 pub struct Args {

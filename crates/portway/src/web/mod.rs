@@ -165,7 +165,7 @@ impl Console {
             "mode": header.mode.name(),
             "window_s": header.window.map(|window| window.as_secs()),
             "pid": std::process::id(),
-            "version": env!("CARGO_PKG_VERSION"),
+            "version": crate::VERSION,
             "started_unix": started_unix,
             "uptime_s": 0.0,
             "control": {"reload": true, "stop": true},

@@ -127,7 +127,7 @@ pub async fn handle(app: Arc<App>, request: Request<Incoming>) -> Response<WebBo
             StatusCode::OK,
             &json!({
                 "console": "portway",
-                "version": env!("CARGO_PKG_VERSION"),
+                "version": crate::VERSION,
                 "session": session,
             }),
         ),
