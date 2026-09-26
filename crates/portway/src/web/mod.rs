@@ -87,6 +87,9 @@ pub struct Options {
     /// `--web-allow-host`: names the host check accepts besides `localhost`
     /// and IP literals.
     pub allow: Vec<String>,
+    /// `--web-base-path`: the URL prefix the console is published under
+    /// (`/` for the root, the default). Already normalized by the CLI parser.
+    pub base: String,
     pub feed: Feed,
     pub events: Receiver<Event>,
     pub header: Header,
@@ -125,6 +128,7 @@ impl Console {
             host,
             port,
             allow,
+            base,
             feed,
             events,
             header,
@@ -140,9 +144,16 @@ impl Console {
             .local_addr()
             .map_err(|err| format!("--web {host}:{port}: {err}"))?;
         let names = address::allowed_names(&host, &allow);
+        // The printed link must name the prefix, or it would point at the
+        // proxy's root, where nothing answers.
+        let prefix = if base == "/" {
+            String::new()
+        } else {
+            base.clone()
+        };
         let public_urls: Vec<String> = address::authorities(&host, &listener, local, &names)
             .iter()
-            .map(|authority| format!("http://{authority}/"))
+            .map(|authority| format!("http://{authority}{prefix}/"))
             .collect();
         let auth = auth::Auth::new(local.port(), names).map_err(|err| format!("entropy: {err}"))?;
         let urls: Vec<String> = public_urls
@@ -182,6 +193,7 @@ impl Console {
             prices,
             streams: AtomicUsize::new(0),
             closing: closed.clone(),
+            base,
         });
         let server = tokio::spawn(http::serve(listener, app, closed));
         crate::store::ensure_dir(&dir)?;

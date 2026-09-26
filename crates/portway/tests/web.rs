@@ -49,13 +49,10 @@ struct Launched {
 fn parse_console(line: &str) -> Option<Launched> {
     let url = line.split_once("console at ")?.1.trim().to_string();
     let (base, token) = url.split_once("#token=")?;
-    let port = base
-        .trim_start_matches("http://")
-        .trim_end_matches('/')
-        .rsplit_once(':')?
-        .1
-        .parse()
-        .ok()?;
+    // The authority ends at the first `/` after the scheme, so a base path
+    // (`/portway/`) does not get mistaken for part of the port.
+    let authority = base.trim_start_matches("http://").split('/').next()?;
+    let port = authority.rsplit_once(':')?.1.parse().ok()?;
     Some(Launched {
         port,
         token: token.to_string(),
@@ -550,5 +547,107 @@ async fn a_daemon_hosts_its_console_and_another_attaches() {
     );
     assert!(!log.contains(&console.token), "the token reached the log");
     assert!(!recorded_text(&dir).contains(&console.token));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `--web-base-path`: served under a prefix a proxy strips, the console must
+/// keep the browser inside that prefix for its assets and API calls, while a
+/// request that is not under the prefix is refused rather than served.
+#[tokio::test]
+async fn a_base_path_keeps_the_console_inside_its_prefix() {
+    let upstream = upstream(Health::Json(vec!["zstd"]), Reply::Ok).await;
+    let dir = data_dir("base-path");
+    let mut child = Command::new(BIN)
+        .arg("--config")
+        .arg(config(&dir, &upstream.base))
+        .arg("--data-dir")
+        .arg(&dir)
+        .args(["--web", "--web-port", "0", "--web-base-path", "portway/"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("the binary runs");
+    let stderr = child.stderr.take().unwrap();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut sent = false;
+        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            if !sent && let Some(launched) = parse_console(&line) {
+                let _ = sender.send(launched);
+                sent = true;
+            }
+        }
+    });
+    let mut child = Reap(child);
+    let launched = receiver
+        .recv_timeout(Duration::from_secs(20))
+        .expect("the console line on stderr");
+    // `portway/` was normalized to `/portway`, and the printed link names it.
+    assert!(
+        launched.url.contains("/portway/#token="),
+        "{}",
+        launched.url
+    );
+
+    let mut page = Page::new(launched.port);
+    // The page is served under the prefix, with its assets pointing into it.
+    let html = page.get("/portway/").await;
+    assert_eq!(html.status, StatusCode::OK, "{:?}", html.status);
+    let body = String::from_utf8_lossy(&html.body).to_string();
+    assert!(body.contains(r#"href="/portway/css/app.css""#), "{body}");
+    assert!(body.contains(r#"src="/portway/js/app.js""#), "{body}");
+    assert!(!body.contains(r#"href="/css/"#), "{body}");
+
+    // An asset under the prefix answers; the same path without it does not.
+    assert_eq!(
+        page.get("/portway/css/app.css").await.status,
+        StatusCode::OK
+    );
+    assert_eq!(page.get("/css/app.css").await.status, StatusCode::NOT_FOUND);
+
+    // `/portway` and `/portway/` are one page, not a redirect or a 404.
+    assert_eq!(page.get("/portway").await.status, StatusCode::OK);
+
+    // The JS carries the prefixed API paths.
+    let js = page.get("/portway/js/api.js").await;
+    let js = String::from_utf8_lossy(&js.body).to_string();
+    assert!(js.contains(r#""/portway/api/health""#), "{js}");
+    assert!(!js.contains(r#""/api/health""#), "{js}");
+
+    // The API itself answers under the prefix, and only under it.
+    assert_eq!(page.get("/portway/api/health").await.status, StatusCode::OK);
+    assert_eq!(page.get("/api/health").await.status, StatusCode::NOT_FOUND);
+
+    // A longer name that merely shares the prefix is not the console.
+    assert_eq!(page.get("/portwayx/").await.status, StatusCode::NOT_FOUND);
+
+    // Signing in still works through the prefixed endpoint. `sign_in` posts to
+    // the root, which this console does not serve, so the prefixed call is
+    // spelled out here and the cookie carried forward by hand.
+    let answer = page
+        .send(
+            "POST",
+            "/portway/api/session",
+            &[
+                ("x-portway-console", "1"),
+                ("content-type", "application/json"),
+                ("origin", &format!("http://127.0.0.1:{}", page.port)),
+            ],
+            &format!("{{\"token\":\"{}\"}}", launched.token),
+        )
+        .await;
+    assert_eq!(answer.status, StatusCode::NO_CONTENT);
+    let cookie = answer.headers["set-cookie"].to_str().unwrap().to_string();
+    page.cookie = Some(cookie.split(';').next().unwrap().to_string());
+    let snapshot = page.get("/portway/api/snapshot").await;
+    assert_eq!(snapshot.status, StatusCode::OK, "{:?}", snapshot.body);
+    assert_eq!(snapshot.json()["header"]["mode"], "live");
+
+    // The prefixed paths the browser was handed are exactly what sign-in used.
+    assert!(js.contains(r#""/portway/api/session""#), "{js}");
+    assert!(js.contains(r#""/portway/api/snapshot""#), "{js}");
+
+    unsafe { libc::kill(child.0.id() as i32, libc::SIGTERM) };
+    assert!(exited(&mut child, Duration::from_secs(10)).is_some());
     let _ = std::fs::remove_dir_all(&dir);
 }

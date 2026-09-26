@@ -46,6 +46,21 @@ const STOP_GRACE: Duration = Duration::from_millis(150);
 const CSP: &str = "default-src 'self'; img-src 'self'; frame-ancestors 'none'; \
                    base-uri 'none'; form-action 'none'";
 
+/// The path with `base` taken off, or `None` when it is not under `base`.
+/// `base` is `/` for the root, where every path is already inside it.
+fn strip_base(path: &str, base: &str) -> Option<String> {
+    if base == "/" {
+        return Some(path.to_owned());
+    }
+    match path.strip_prefix(base) {
+        // `/portway` and `/portway/` are both the console's root.
+        Some("") | Some("/") => Some("/".to_owned()),
+        Some(rest) if rest.starts_with('/') => Some(rest.to_owned()),
+        // `/portwayx` is a different path, not the console.
+        _ => None,
+    }
+}
+
 pub struct App {
     pub auth: Auth,
     pub shared: Arc<Shared>,
@@ -56,6 +71,10 @@ pub struct App {
     pub prices: Prices,
     pub streams: AtomicUsize,
     pub closing: watch::Receiver<bool>,
+    /// The URL prefix the console is published under, `/` at the root.
+    /// Incoming paths are stripped of it; served HTML and JS have it
+    /// substituted back in, so the browser never leaves the prefix.
+    pub base: String,
 }
 
 /// Accept until `closing` turns true, then drop every connection with it.
@@ -97,12 +116,18 @@ pub async fn handle(app: Arc<App>, request: Request<Incoming>) -> Response<WebBo
         return error(StatusCode::FORBIDDEN, "host not allowed");
     }
     let host = host.unwrap_or_default();
-    let path = request.uri().path().to_owned();
+    // The proxy strips the prefix before forwarding, but the console is also
+    // reachable directly, and a request outside the prefix must not be served
+    // as if it were inside it. `/` is kept as the prefix itself.
+    let path = match strip_base(request.uri().path(), &app.base) {
+        Some(path) => path,
+        None => return error(StatusCode::NOT_FOUND, "not found"),
+    };
     let method = request.method().clone();
 
     if !path.starts_with("/api/") {
         return match method {
-            Method::GET | Method::HEAD => asset(&path, &request),
+            Method::GET | Method::HEAD => asset(&path, &request, &app.base),
             _ => error(StatusCode::METHOD_NOT_ALLOWED, "method not allowed"),
         };
     }
@@ -421,7 +446,7 @@ async fn stop(app: &App) -> Response<WebBody> {
     }
 }
 
-fn asset(path: &str, request: &Request<Incoming>) -> Response<WebBody> {
+fn asset(path: &str, request: &Request<Incoming>, base: &str) -> Response<WebBody> {
     let Some(file) = assets::get(path) else {
         return error(StatusCode::NOT_FOUND, "no such file");
     };
@@ -440,7 +465,10 @@ fn asset(path: &str, request: &Request<Incoming>) -> Response<WebBody> {
             if request.method() == Method::HEAD {
                 WebBody::empty()
             } else {
-                WebBody::full(Bytes::from_static(file.content.as_bytes()))
+                match rebased(file, base) {
+                    Rebased::Static => WebBody::full(Bytes::from_static(file.content.as_bytes())),
+                    Rebased::Text(text) => WebBody::full(Bytes::from(text)),
+                }
             },
         )
     };
@@ -450,6 +478,50 @@ fn asset(path: &str, request: &Request<Incoming>) -> Response<WebBody> {
         headers.insert(header::ETAG, etag);
     }
     response
+}
+
+/// A served file whose body may need the base path put back in.
+enum Rebased {
+    /// Content is served verbatim.
+    Static,
+    /// Content had its root-absolute references moved under the base path.
+    Text(String),
+}
+
+/// Rewrite a file's root-absolute references (`href="/`, `src="/`, `/api/`)
+/// to sit under `base`, so a browser that loaded the page at `/portway/`
+/// keeps asking for `/portway/css/app.css` and `/portway/api/health`.
+///
+/// Only `index.html` and the two JS files that carry absolute paths are
+/// touched; everything else is static and returned as-is. At the root (`/`)
+/// this is a no-op and the original bytes are used.
+fn rebased(file: &assets::Asset, base: &str) -> Rebased {
+    if base == "/" || !needs_rebase(file.path) {
+        return Rebased::Static;
+    }
+    // Each entry is (what to look for, what to write instead). `{}` is where
+    // the base path goes. The anchors keep their own quote and slash, so the
+    // result reads `href="/portway/css/app.css"` and `` `/portway/api/events` ``.
+    //
+    // Order matters only in that a rewritten `"/api/` never contains another
+    // anchor, so the passes cannot feed each other.
+    const ANCHORS: [(&str, &str); 5] = [
+        (r#"href="/"#, r#"href="{}/"#),
+        (r#"src="/"#, r#"src="{}/"#),
+        (r#""/api/"#, r#""{}/api/"#),
+        (r#"`/api/"#, r#"`{}/api/"#),
+        (r#""/favicon"#, r#""{}/favicon"#),
+    ];
+    let mut text = file.content.to_owned();
+    for (anchor, shape) in ANCHORS {
+        text = text.replace(anchor, &shape.replace("{}", base));
+    }
+    Rebased::Text(text)
+}
+
+/// Whether a file is known to carry root-absolute references.
+fn needs_rebase(path: &str) -> bool {
+    matches!(path, "index.html" | "js/api.js" | "js/app.js")
 }
 
 /// One query parameter, percent-decoded.
@@ -559,5 +631,79 @@ mod tests {
             &sse("x", None, "a\nb")[..],
             b"event: x\ndata: a\ndata: b\n\n"
         );
+    }
+
+    #[test]
+    fn the_base_path_comes_off_a_request_and_nothing_else_does() {
+        assert_eq!(strip_base("/portway", "/portway").unwrap(), "/");
+        assert_eq!(strip_base("/portway/", "/portway").unwrap(), "/");
+        assert_eq!(
+            strip_base("/portway/api/health", "/portway").unwrap(),
+            "/api/health"
+        );
+        assert_eq!(
+            strip_base("/portway/css/app.css", "/portway").unwrap(),
+            "/css/app.css"
+        );
+        assert_eq!(
+            strip_base("/portway/js/views/usage.js", "/portway").unwrap(),
+            "/js/views/usage.js"
+        );
+        // A longer name that merely starts the same is not the console.
+        assert!(strip_base("/portwayx", "/portway").is_none());
+        assert!(strip_base("/portwayx/api/health", "/portway").is_none());
+        assert!(strip_base("/", "/portway").is_none());
+        assert!(strip_base("/css/app.css", "/portway").is_none());
+        // At the root everything is inside already.
+        assert_eq!(strip_base("/css/app.css", "/").unwrap(), "/css/app.css");
+        assert_eq!(strip_base("/", "/").unwrap(), "/");
+    }
+
+    #[test]
+    fn served_references_move_under_the_base_path() {
+        let html = assets::get("/index.html").unwrap();
+        let Rebased::Text(text) = rebased(html, "/portway") else {
+            panic!("index.html should be rebased");
+        };
+        assert!(text.contains(r#"href="/portway/css/app.css""#), "{text}");
+        assert!(text.contains(r#"href="/portway/css/tokens.css""#), "{text}");
+        assert!(text.contains(r#"src="/portway/boot.js""#), "{text}");
+        assert!(text.contains(r#"src="/portway/js/app.js""#), "{text}");
+        assert!(text.contains(r#"href="/portway/favicon.svg""#), "{text}");
+        // Nothing is left pointing at the proxy's root.
+        assert!(!text.contains(r#"href="/css/"#), "{text}");
+        assert!(!text.contains(r#"src="/js/"#), "{text}");
+
+        let api = assets::get("/js/api.js").unwrap();
+        let Rebased::Text(text) = rebased(api, "/portway") else {
+            panic!("api.js should be rebased");
+        };
+        assert!(text.contains(r#""/portway/api/health""#), "{text}");
+        assert!(text.contains(r#""/portway/api/session""#), "{text}");
+        assert!(text.contains("`/portway/api/events"), "{text}");
+        assert!(text.contains("`/portway/api/stream"), "{text}");
+        assert!(!text.contains(r#""/api/"#), "{text}");
+
+        let app = assets::get("/js/app.js").unwrap();
+        let Rebased::Text(text) = rebased(app, "/portway") else {
+            panic!("app.js should be rebased");
+        };
+        assert!(text.contains(r#""/portway/favicon-alert.svg""#), "{text}");
+        assert!(text.contains(r#""/portway/favicon.svg""#), "{text}");
+        assert!(!text.contains(r#""/favicon-"#), "{text}");
+    }
+
+    #[test]
+    fn the_root_serves_its_files_byte_for_byte() {
+        // The default deployment must not change: no rebase at `/`.
+        for path in ["/index.html", "/js/api.js", "/js/app.js", "/css/app.css"] {
+            let file = assets::get(path).unwrap();
+            assert!(matches!(rebased(file, "/"), Rebased::Static), "{path}");
+            let untouched = assets::get("/css/app.css").unwrap();
+            assert!(matches!(rebased(untouched, "/"), Rebased::Static));
+        }
+        // A file with no absolute references is never rewritten either.
+        let css = assets::get("/css/app.css").unwrap();
+        assert!(matches!(rebased(css, "/portway"), Rebased::Static));
     }
 }

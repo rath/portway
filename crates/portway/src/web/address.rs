@@ -42,6 +42,50 @@ pub fn normalize(name: &str) -> String {
     name.strip_suffix('.').unwrap_or(name).to_ascii_lowercase()
 }
 
+/// The value already parsed by the CLI, or `/` when the flag was not given.
+/// The parser rejects bad values before this runs, so a `None` here only ever
+/// means "serve at the root".
+pub fn base_or_root(base: Option<&str>) -> String {
+    base.unwrap_or("/").to_owned()
+}
+
+/// A `--web-base-path` value: the URL prefix a reverse proxy publishes the
+/// console under, such as `/portway`. Accepts `portway`, `/portway` and
+/// `/portway/` alike and returns `/portway`; `/` and an empty string both mean
+/// the root, returned as `/`.
+///
+/// Case is preserved — a URL path is not a host name — but the value is
+/// otherwise kept to what a single path segment hierarchy can express:
+/// no empty or `.`/`..` segments, and no query, fragment or whitespace.
+pub fn base_path(text: &str) -> Result<String, String> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() || trimmed == "/" {
+        return Ok("/".to_string());
+    }
+    if trimmed
+        .chars()
+        .any(|c| c.is_whitespace() || matches!(c, '?' | '#'))
+    {
+        return Err(format!(
+            "{text:?} is not a URL path prefix (no whitespace, '?' or '#')"
+        ));
+    }
+    let inner = trimmed.trim_matches('/');
+    if inner.is_empty() {
+        return Ok("/".to_string());
+    }
+    let segments: Vec<&str> = inner.split('/').collect();
+    if segments
+        .iter()
+        .any(|segment| segment.is_empty() || *segment == "." || *segment == "..")
+    {
+        return Err(format!(
+            "{text:?} has an empty or relative path segment (no '//', '.' or '..')"
+        ));
+    }
+    Ok(format!("/{inner}"))
+}
+
 /// The names the host check accepts beyond `localhost` and IP literals:
 /// `--web-host` when it is a name, then each `--web-allow-host`.
 pub fn allowed_names(host: &str, allow: &[String]) -> Vec<String> {
@@ -201,6 +245,42 @@ mod tests {
 
     fn at(text: &str) -> SocketAddr {
         text.parse().unwrap()
+    }
+
+    #[test]
+    fn a_base_path_is_a_normalized_url_prefix() {
+        for same in [
+            "/portway",
+            "portway",
+            "/portway/",
+            "//portway//",
+            " /portway ",
+        ] {
+            assert_eq!(base_path(same).unwrap(), "/portway", "{same}");
+        }
+        assert_eq!(base_path("").unwrap(), "/");
+        assert_eq!(base_path("/").unwrap(), "/");
+        assert_eq!(base_path("///").unwrap(), "/");
+        assert_eq!(base_path("/a/b").unwrap(), "/a/b");
+        assert_eq!(base_path("a/b/").unwrap(), "/a/b");
+        // Case is preserved: a URL path is not a host name.
+        assert_eq!(base_path("/PortWay").unwrap(), "/PortWay");
+    }
+
+    #[test]
+    fn a_base_path_rejects_what_a_prefix_cannot_carry() {
+        for bad in [
+            "/portway?x=1",
+            "/portway#frag",
+            "/port way",
+            "/portway/..",
+            "/portway/../etc",
+            "/./portway",
+            "/portway/./x",
+            "/portway//x",
+        ] {
+            assert!(base_path(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]

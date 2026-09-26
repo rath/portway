@@ -78,6 +78,19 @@ pub struct Args {
         requires = "web"
     )]
     pub web_allow_host: Vec<String>,
+    /// Serve the console under this URL prefix instead of the root, for a
+    /// reverse proxy that publishes it at a subpath, such as
+    /// `--web-base-path /portway`. The proxy still strips the prefix before
+    /// forwarding; the console then emits its own assets and API calls under
+    /// that same prefix, so the browser stays inside it.
+    #[cfg(feature = "web")]
+    #[arg(
+        long,
+        value_name = "PATH",
+        value_parser = crate::web::address::base_path,
+        requires = "web"
+    )]
+    pub web_base_path: Option<String>,
     /// Print the console's link without opening a browser.
     #[cfg(feature = "web")]
     #[arg(long, requires = "web")]

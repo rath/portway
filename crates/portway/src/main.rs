@@ -196,6 +196,7 @@ async fn run(
                     host: args.web_host.clone(),
                     port: args.web_port,
                     allow: args.web_allow_host.clone(),
+                    base: web::address::base_or_root(args.web_base_path.as_deref()),
                     feed: web::Feed::Live(Arc::clone(&router_state)),
                     events,
                     header: web::Header {
@@ -427,6 +428,7 @@ fn web_watching(
             host: args.web_host.clone(),
             port: args.web_port,
             allow: args.web_allow_host.clone(),
+            base: web::address::base_or_root(args.web_base_path.as_deref()),
             feed: web::Feed::Recorded(watch.window()),
             events: receiver,
             header: web::Header {
