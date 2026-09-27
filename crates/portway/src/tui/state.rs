@@ -240,6 +240,8 @@ pub struct State {
     pub flights: Vec<FlightView>,
     /// False only when an attached viewer cannot obtain a current snapshot.
     pub flights_available: bool,
+    /// The `f` dialog listing them, which holds the keyboard while it is up.
+    pub flights_open: bool,
     /// The database the usage screen reads the day back out of. `None` leaves
     /// it with nothing to draw but the reason.
     pub db: Option<PathBuf>,
@@ -278,6 +280,7 @@ impl State {
             board: Board::new(),
             flights: Vec::new(),
             flights_available: true,
+            flights_open: false,
             db: None,
             usage_open: false,
             usage_range: spend::Range::Today,

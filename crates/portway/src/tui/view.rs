@@ -32,7 +32,13 @@ const MODEL: Color = Color::Magenta;
 const HUD_HEIGHT: u16 = 5;
 const FOOTER_HEIGHT: u16 = 1;
 const EVENTS_MIN: u16 = 4;
-const FLIGHTS_SHOWN: usize = 5;
+/// The in-flight dialog at its widest: every column, and a chat completions
+/// route beside them. A wider terminal gets margin, not a longer blank route.
+const FLIGHTS_WIDTH: u16 = 110;
+/// Where the dialog has room for the route, and then for the status, ttfb,
+/// idle and retry columns in front of it too.
+const FLIGHTS_WIDE: u16 = 80;
+const FLIGHTS_ROOMY: u16 = 100;
 /// Two borders plus four rows of drawing: two apiece for the up and down
 /// sparklines, and enough for the bars to show a difference in height rather
 /// than just presence.
@@ -65,27 +71,21 @@ pub struct Panes {
     pub hud: Rect,
     pub models: Option<Rect>,
     pub charts: Option<(Rect, Charts)>,
-    pub flights: Option<Rect>,
     pub events: Rect,
     pub footer: Rect,
 }
 
 /// Split `area`, dropping the charts first and then the model table when the
 /// terminal is too short. `None` means there is no room for a dashboard at all.
-pub fn panes(area: Rect, models: usize, flights: usize) -> Option<Panes> {
+///
+/// Requests in flight take no part: they come and go several times a turn,
+/// and a pane sized by them pushed everything under it up and down with every
+/// one. They live in the `f` dialog, over a layout that holds still.
+pub fn panes(area: Rect, models: usize) -> Option<Panes> {
     if area.width < MIN_WIDTH || area.height < HUD_HEIGHT + FOOTER_HEIGHT + EVENTS_MIN {
         return None;
     }
     let mut spare = area.height - (HUD_HEIGHT + FOOTER_HEIGHT + EVENTS_MIN);
-
-    // Live requests take priority over counters and charts. Keep the oldest
-    // ones visible, with an explicit overflow count rather than silent loss.
-    let flight_height = if flights > 0 && spare >= 4 {
-        (flights.min(FLIGHTS_SHOWN) as u16 + 3).min(spare)
-    } else {
-        0
-    };
-    spare -= flight_height;
 
     let table_height = models as u16 + 3;
     let table = models > 0 && spare >= table_height;
@@ -115,9 +115,6 @@ pub fn panes(area: Rect, models: usize, flights: usize) -> Option<Panes> {
     if charts.is_some() {
         constraints.push(Constraint::Length(chart_height));
     }
-    if flight_height > 0 {
-        constraints.push(Constraint::Length(flight_height));
-    }
     constraints.push(Constraint::Min(EVENTS_MIN));
     constraints.push(Constraint::Length(FOOTER_HEIGHT));
 
@@ -131,23 +128,18 @@ pub fn panes(area: Rect, models: usize, flights: usize) -> Option<Panes> {
         next += 1;
         (rows[next - 1], mode)
     });
-    let flights = (flight_height > 0).then(|| {
-        next += 1;
-        rows[next - 1]
-    });
     Some(Panes {
         hud: rows[0],
         models,
         charts,
-        flights,
         events: rows[next],
         footer: rows[next + 1],
     })
 }
 
 /// Rows the event pane can show, which is what a page of scrolling moves by.
-pub fn events_height(area: Rect, models: usize, flights: usize) -> usize {
-    panes(area, models, flights)
+pub fn events_height(area: Rect, models: usize) -> usize {
+    panes(area, models)
         .map(|panes| panes.events.height.saturating_sub(2) as usize)
         .unwrap_or(1)
         .max(1)
@@ -159,7 +151,7 @@ pub fn draw(frame: &mut Frame, state: &State, header: &Header) {
         usage_screen(frame, state, area);
         return;
     }
-    let Some(panes) = panes(area, state.models.len(), state.flights.len()) else {
+    let Some(panes) = panes(area, state.models.len()) else {
         frame.render_widget(
             // Short enough to survive the truncation it is warning about.
             Paragraph::new("too small")
@@ -177,16 +169,12 @@ pub fn draw(frame: &mut Frame, state: &State, header: &Header) {
     if let Some((area, mode)) = panes.charts {
         draw_charts(frame, state, area, mode);
     }
-    if let Some(area) = panes.flights {
-        frame.render_widget(
-            flights_table(&state.flights, state.totals.in_flight, area),
-            area,
-        );
-    }
     frame.render_widget(events(state, panes.events.width), panes.events);
     frame.render_widget(footer(state), panes.footer);
 
-    if state.help {
+    if state.flights_open {
+        flights_dialog(frame, state, area);
+    } else if state.help {
         popup(frame, area, "keys", help_lines());
     } else if state.picker {
         popup(frame, area, "columns", column_lines(state));
@@ -199,27 +187,125 @@ pub fn draw(frame: &mut Frame, state: &State, header: &Header) {
 
 // ------------------------------------------------------------------- flights
 
+/// Past these a prefill reads `slow prefill` and an idle stream `stalled`: the
+/// web console's thresholds (`flights.js`), so the two never disagree about
+/// the same request.
+const SLOW_PREFILL: f64 = 30.0;
+const STALLED: f64 = 60.0;
+
+fn is_slow(flight: &FlightView) -> bool {
+    flight.phase == Phase::Prefill && flight.age > SLOW_PREFILL
+}
+
+fn is_stalled(flight: &FlightView) -> bool {
+    flight.phase == Phase::Stream && flight.idle > STALLED
+}
+
 fn flight_phase(flight: &FlightView) -> (&'static str, Color) {
+    if is_slow(flight) {
+        return ("slow prefill", TIME);
+    }
+    if is_stalled(flight) {
+        return ("stalled", BAD);
+    }
     match flight.phase {
-        Phase::Prefill if flight.age > 30.0 => ("slow prefill", TIME),
-        Phase::Stream if flight.idle > 60.0 => ("stalled", BAD),
         Phase::Upload => ("upload", WIRE),
         Phase::Prefill => ("prefill", TIME),
         Phase::Stream => ("stream", GOOD),
     }
 }
 
-fn flights_table(flights: &[FlightView], total: u64, area: Rect) -> Table<'static> {
-    let shown = flights.len().min(area.height.saturating_sub(3) as usize);
-    let total = total.max(flights.len() as u64);
-    let more = total.saturating_sub(shown as u64);
-    let title = if more > 0 {
-        format!(" in flight · {total} · +{more} more ")
+/// The flights that are worth a word in the HUD while the dialog is closed:
+/// `1 stalled` in red, or `2 slow` when nothing has stalled. `None` while
+/// every one of them is moving.
+fn flight_alarm(flights: &[FlightView]) -> Option<(String, Color)> {
+    let stalled = flights.iter().filter(|flight| is_stalled(flight)).count();
+    let slow = flights.iter().filter(|flight| is_slow(flight)).count();
+    match (stalled, slow) {
+        (0, 0) => None,
+        (0, slow) => Some((format!("{slow} slow"), TIME)),
+        (stalled, 0) => Some((format!("{stalled} stalled"), BAD)),
+        (stalled, slow) => Some((format!("{stalled} stalled, {slow} slow"), BAD)),
+    }
+}
+
+/// `f`: every request in flight, oldest first, redrawn with each 250ms sample.
+///
+/// A dialog rather than a pane, so the list can fill and empty without moving
+/// the dashboard under it. It is as tall as its rows, up to two thirds of the
+/// terminal, and its title counts the ones that did not fit.
+fn flights_dialog(frame: &mut Frame, state: &State, area: Rect) {
+    let flights = &state.flights;
+    let width = area.width.min(FLIGHTS_WIDTH);
+    // Two borders and the header row around the rows, or one line of message.
+    let body = if flights.is_empty() {
+        1
     } else {
-        format!(" in flight · {total} ")
+        flights.len() + 1
     };
-    let wide = area.width >= 80;
-    let roomy = area.width >= 120;
+    // Laid out where it would sit centred at its tallest, and grown down from
+    // there: a request arriving or leaving moves the bottom border, never the
+    // title and header the eye is on.
+    let margin = area.height / 6;
+    let room = area.height - 2 * margin;
+    let height = (body + 2).min(room as usize) as u16;
+    let shown = flights.len().min(height.saturating_sub(3) as usize);
+    // An owning dashboard holds every flight and drops one the moment its
+    // event lands, up to a sample before the counter follows. A viewer's
+    // snapshot is capped, and its count is the one that knows what was left
+    // out.
+    let total = if state.recorded {
+        state.totals.in_flight.max(flights.len() as u64)
+    } else {
+        flights.len() as u64
+    };
+    let more = total.saturating_sub(shown as u64);
+    let title = if !state.flights_available {
+        "in flight".to_string()
+    } else if more > 0 {
+        format!("in flight · {total} · +{more} more")
+    } else {
+        format!("in flight · {total}")
+    };
+    let block = Block::bordered()
+        .title_top(titled(&title))
+        .title_bottom(
+            Line::from(Span::styled(" f / esc close ", Style::default().fg(DIM))).right_aligned(),
+        )
+        .border_style(Style::default().fg(WIRE))
+        .padding(Padding::horizontal(1));
+    let box_area = Rect {
+        x: area.x + (area.width - width) / 2,
+        y: area.y + margin,
+        width,
+        height,
+    };
+    frame.render_widget(Clear, box_area);
+
+    let message = if !state.flights_available {
+        // The HUD says the same: a failed snapshot is not an empty one.
+        Some(Span::styled(
+            "unavailable: the server did not answer",
+            Style::default().fg(TIME),
+        ))
+    } else if flights.is_empty() {
+        Some(Span::styled("nothing in flight", Style::default().fg(DIM)))
+    } else {
+        None
+    };
+    match message {
+        Some(message) => frame.render_widget(Paragraph::new(message).block(block), box_area),
+        None => frame.render_widget(
+            flights_table(&flights[..shown], width).block(block),
+            box_area,
+        ),
+    }
+}
+
+/// The rows of the dialog, with the columns its `width` has room for.
+fn flights_table(flights: &[FlightView], width: u16) -> Table<'static> {
+    let wide = width >= FLIGHTS_WIDE;
+    let roomy = width >= FLIGHTS_ROOMY;
     let mut headers = vec![
         Cell::from("model"),
         Cell::from("phase"),
@@ -250,7 +336,7 @@ fn flights_table(flights: &[FlightView], total: u64, area: Rect) -> Table<'stati
         headers.push(Cell::from("route"));
         widths.push(Constraint::Min(12));
     }
-    let rows = flights.iter().take(shown).map(|flight| {
+    let rows = flights.iter().map(|flight| {
         let (phase, shade) = flight_phase(flight);
         let mut cells = vec![
             Cell::from(Span::styled(
@@ -287,12 +373,6 @@ fn flights_table(flights: &[FlightView], total: u64, area: Rect) -> Table<'stati
     Table::new(rows, widths)
         .header(Row::new(headers).style(Style::default().fg(DIM)))
         .column_spacing(1)
-        .block(
-            Block::bordered()
-                .title(title)
-                .border_style(Style::default().fg(DIM))
-                .padding(Padding::horizontal(1)),
-        )
 }
 
 // ----------------------------------------------------------------------- hud
@@ -363,6 +443,14 @@ fn hud<'a>(state: &State, header: &'a Header) -> Paragraph<'a> {
     requests.extend(stat("total", totals.requests.to_string(), Color::Reset));
     if state.flights_available {
         requests.extend(stat("live", totals.in_flight.to_string(), GOOD));
+        // The one thing about the flights that cannot wait for `f`: something
+        // stopped moving. It goes between the count and the gap after it.
+        if let Some((alarm, shade)) = flight_alarm(&state.flights) {
+            requests.insert(
+                requests.len() - 1,
+                Span::styled(format!(" ({alarm})"), Style::default().fg(shade)),
+            );
+        }
     } else {
         requests.push(Span::styled(
             "in flight unavailable  ",
@@ -1330,7 +1418,7 @@ fn footer(state: &State) -> Paragraph<'static> {
     if state.confirm_quit {
         return Paragraph::new(Line::from(Span::styled(
             format!(
-                " {} request(s) still streaming — press q again to cut them off ",
+                " {} request(s) still streaming — press q again to cut them off, f to see them ",
                 state.totals.in_flight
             ),
             Style::default().fg(BAD).add_modifier(Modifier::BOLD),
@@ -1341,6 +1429,7 @@ fn footer(state: &State) -> Paragraph<'static> {
         ("↑↓/jk", "scroll"),
         ("g/G", "top/live"),
         ("↵", "detail"),
+        ("f", "flights"),
         ("e", "trouble"),
         ("m", "model"),
         ("u", "usage"),
@@ -1511,6 +1600,7 @@ fn help_lines() -> Vec<Line<'static>> {
         ("PgDn / PgUp", "move by a page"),
         ("g / G", "oldest line / back to following"),
         ("Enter", "details of the highlighted request"),
+        ("f", "requests in flight, live"),
         ("e", "only 4xx/5xx, cut streams and warnings"),
         ("m", "cycle the model filter"),
         ("u", "tokens and cost per model, by window"),
@@ -1599,6 +1689,29 @@ mod tests {
             .join("\n")
     }
 
+    /// The in-flight dialog alone, cut out of the dashboard around it.
+    fn dialog(screen: &str) -> String {
+        let rows: Vec<Vec<char>> = screen.lines().map(|row| row.chars().collect()).collect();
+        let (top, left) = rows
+            .iter()
+            .enumerate()
+            .find_map(|(at, row)| {
+                let text: String = row.iter().collect();
+                let byte = text.find("┌ in flight")?;
+                Some((at, text[..byte].chars().count()))
+            })
+            .unwrap_or_else(|| panic!("the dialog is not up:\n{screen}"));
+        let right = left + rows[top][left..].iter().position(|c| *c == '┐').unwrap();
+        let bottom = (top..rows.len())
+            .find(|at| rows[*at].get(left) == Some(&'└'))
+            .unwrap();
+        rows[top..=bottom]
+            .iter()
+            .map(|row| row[left..=right].iter().collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     #[test]
     fn live_requests_advance_and_leave_before_the_next_sample() {
         let mut config = crate::cli::Args::default().forwarder_config();
@@ -1617,9 +1730,10 @@ mod tests {
             100,
         );
         let mut state = State::new();
+        state.flights_open = true;
         state.tick(&router);
         assert_eq!(state.flights.len(), 1);
-        assert!(screen(140, 30, &state).contains("upload"));
+        assert!(dialog(&screen(140, 30, &state)).contains("upload"));
 
         let clock = Arc::new(crate::clock::PhaseClock::new());
         clock.mark_upload_started();
@@ -1627,12 +1741,12 @@ mod tests {
         clock.mark_upload_finished();
         state.tick(&router);
         assert_eq!(state.flights[0].phase, Phase::Prefill);
-        assert!(screen(140, 30, &state).contains("prefill"));
+        assert!(dialog(&screen(140, 30, &state)).contains("prefill"));
 
         flight.responded(200, 0.5, 50, Coding::Zstd);
         flight.progress(2048, 1024, 2048);
         state.tick(&router);
-        let out = screen(140, 30, &state);
+        let out = dialog(&screen(140, 30, &state));
         for text in [
             "in flight · 1",
             "stream",
@@ -1645,7 +1759,7 @@ mod tests {
         assert!(!out.contains("secret"), "{out}");
         flight.progress(4096, 2048, 4096);
         state.tick(&router);
-        assert!(screen(140, 30, &state).contains("4KB"));
+        assert!(dialog(&screen(140, 30, &state)).contains("4KB"));
 
         // An unrelated completion cannot remove the live row. The matching
         // record does, even when the 250ms sampling clock has not fired yet.
@@ -1656,7 +1770,10 @@ mod tests {
         completed.flight = Some(flight.id());
         state.push(Event::Request(Arc::new(completed)));
         assert!(state.flights.is_empty());
-        assert!(!screen(140, 30, &state).contains("in flight"));
+        let out = dialog(&screen(140, 30, &state));
+        assert!(out.contains("in flight · 0"), "{out}");
+        assert!(out.contains("nothing in flight"), "{out}");
+        assert!(!out.contains("POST /v1/messages"), "{out}");
         assert_eq!(state.len(), 2);
         state.tick(&router);
         assert!(state.flights.is_empty());
@@ -1670,8 +1787,11 @@ mod tests {
         assert!(state.flights.is_empty());
     }
 
+    /// Closed, the dialog costs the dashboard nothing: requests coming and
+    /// going move no pane. Open, it lists the oldest first, as many as the
+    /// terminal has rows for, and counts the rest.
     #[test]
-    fn flights_keep_the_oldest_visible_and_preserve_event_scrolling_room() {
+    fn flights_wait_in_a_dialog_and_leave_the_layout_alone() {
         let registry = crate::flights::Flights::default();
         for index in 0..8 {
             registry.begin(
@@ -1682,38 +1802,69 @@ mod tests {
             );
         }
         let mut state = populated();
+        // Everything under the HUD, whose clock and `live` count move anyway.
+        let below_hud = |screen: String| {
+            screen
+                .lines()
+                .skip(HUD_HEIGHT as usize)
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        };
+        let idle = below_hud(screen(140, 44, &state));
         state.flights = registry.views();
         state.totals.in_flight = state.flights.len() as u64;
-        for (width, height, shown) in [(140, 44, 5), (80, 24, 5), (44, 14, 1)] {
-            let area = Rect::new(0, 0, width, height);
-            state.viewport = events_height(area, state.models.len(), state.flights.len());
-            let out = screen(width, height, &state);
-            assert!(
-                out.contains(&format!("in flight · 8 · +{} more", 8 - shown)),
-                "{out}"
-            );
+        let busy = screen(140, 44, &state);
+        assert!(busy.contains("live 8"), "{busy}");
+        assert!(!busy.contains("live-0"), "{busy}");
+        assert_eq!(below_hud(busy), idle);
+
+        state.flights_open = true;
+        for (width, height, shown) in [(140, 44, 8), (80, 24, 8), (44, 10, 5)] {
+            let out = dialog(&screen(width, height, &state));
+            if shown < 8 {
+                assert!(
+                    out.contains(&format!("in flight · 8 · +{} more", 8 - shown)),
+                    "{out}"
+                );
+                assert!(!out.contains(&format!("live-{shown}")), "{out}");
+            } else {
+                assert!(out.contains("in flight · 8"), "{out}");
+                assert!(!out.contains("more"), "{out}");
+            }
             assert!(out.contains("live-0"), "{out}");
             assert!(out.contains(&format!("live-{}", shown - 1)), "{out}");
-            assert!(!out.contains(&format!("live-{shown}")), "{out}");
-            assert!(out.contains("events"), "{out}");
-            assert!(out.contains("23:41:03 WARNING"), "{out}");
-            let layout = panes(area, state.models.len(), state.flights.len()).unwrap();
-            assert!(layout.events.height >= EVENTS_MIN);
-            assert_eq!(
-                events_height(area, state.models.len(), state.flights.len()),
-                layout.events.height as usize - 2
-            );
+            assert!(out.contains("f / esc close"), "{out}");
         }
+        // Open, it holds still too: a request arriving or leaving moves the
+        // bottom border, not the title a reader is on.
+        let title_row = |state: &State| {
+            screen(140, 44, state)
+                .lines()
+                .position(|line| line.contains("┌ in flight"))
+        };
+        let full = title_row(&state);
+        let all = std::mem::take(&mut state.flights);
+        state.flights = all[..1].to_vec();
+        assert_eq!(title_row(&state), full);
+        state.flights.clear();
+        assert_eq!(title_row(&state), full);
+        state.flights = all;
+
+        // The route is where a wide dialog puts its spare room; a narrow one
+        // keeps model, phase, age and bytes.
+        assert!(dialog(&screen(140, 44, &state)).contains("POST /v1/messages"));
+        assert!(!dialog(&screen(44, 24, &state)).contains("POST"));
+
+        // Filters and scrolling are the event pane's; the flights ignore them.
         state.set_filter(crate::tui::state::Filter::Trouble);
         state.scroll(-1);
-        assert!(screen(80, 24, &state).contains("live-0"));
-        // At minimum height only the HUD's live count fits; resizing stays safe.
-        for height in [1, 9, 10, 13] {
-            screen(44, height, &state);
+        assert!(dialog(&screen(80, 24, &state)).contains("live-0"));
+        for (width, height) in [(1, 1), (44, 1), (44, 9), (44, 10), (44, 13), (200, 5)] {
+            screen(width, height, &state);
         }
         state.tick_recorded(&watch::Window::default());
         assert!(state.flights.is_empty());
-        assert!(!screen(140, 44, &state).contains("in flight"));
+        assert!(dialog(&screen(140, 44, &state)).contains("nothing in flight"));
     }
 
     #[test]
@@ -1742,11 +1893,23 @@ mod tests {
         assert_eq!(state.models[0].view.in_flight, 205);
         let out = screen(140, 44, &state);
         assert!(out.contains("live 205"), "{out}");
-        assert!(out.contains("in flight · 205 · +200 more"), "{out}");
+        // The snapshot's count, not its capped list: 27 rows fit, and the
+        // title owns up to the other 178.
+        state.flights_open = true;
+        let out = dialog(&screen(140, 44, &state));
+        assert!(out.contains("in flight · 205 · +178 more"), "{out}");
 
         state.apply_live(None);
         assert!(state.flights.is_empty());
         assert_eq!(state.models[0].view.in_flight, 0);
+        // A failed snapshot is not an empty one, in the dialog or the HUD.
+        let out = dialog(&screen(44, 14, &state));
+        assert!(
+            out.contains("unavailable: the server did not answer"),
+            "{out}"
+        );
+        assert!(!out.contains("nothing in flight"), "{out}");
+        state.flights_open = false;
         assert!(screen(44, 14, &state).contains("in flight unavailable"));
         // Recorded events and filters keep working while the socket is down.
         state.push(Event::Request(Arc::new(record("alpha", 500))));
@@ -1778,15 +1941,32 @@ mod tests {
         assert_eq!(flight_phase(&view).0, "slow prefill");
         let mut state = State::new();
         state.flights.push(view.clone());
-        assert!(screen(44, 14, &state).contains("slow prefill"));
+        state.totals.in_flight = 1;
+        state.flights_open = true;
+        assert!(dialog(&screen(44, 14, &state)).contains("slow prefill"));
+        // Closed, the dialog still gets the word out: the HUD says which
+        // requests stopped moving beside the count they are part of.
+        state.flights_open = false;
+        let out = screen(44, 14, &state);
+        assert!(out.contains("live 1 (1 slow)"), "{out}");
+        let slow = view.clone();
 
         view.phase = Phase::Stream;
         view.idle = 60.0;
         assert_eq!(flight_phase(&view).0, "stream");
+        state.flights = vec![view.clone()];
+        assert!(!screen(44, 14, &state).contains("live 1 ("));
         view.idle = 60.1;
         assert_eq!(flight_phase(&view), ("stalled", BAD));
-        state.flights = vec![view];
-        assert!(screen(44, 14, &state).contains("stalled"));
+        state.flights = vec![view.clone()];
+        state.flights_open = true;
+        assert!(dialog(&screen(44, 14, &state)).contains("stalled"));
+        state.flights_open = false;
+        assert!(screen(44, 14, &state).contains("live 1 (1 stalled)"));
+
+        state.flights = vec![view, slow];
+        state.totals.in_flight = 2;
+        assert!(screen(80, 24, &state).contains("live 2 (1 stalled, 1 slow)"));
     }
 
     /// The model table's header row, which is where the shed columns show.
@@ -2071,7 +2251,9 @@ mod tests {
     fn the_popups_render_over_the_dashboard() {
         let mut state = populated();
         state.help = true;
-        assert!(screen(140, 44, &state).contains("cycle the model filter"));
+        let out = screen(140, 44, &state);
+        assert!(out.contains("cycle the model filter"), "{out}");
+        assert!(out.contains("requests in flight, live"), "{out}");
 
         state.help = false;
         state.detail = true;

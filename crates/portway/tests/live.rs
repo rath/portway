@@ -18,6 +18,28 @@ async fn within<F: Future>(future: F) -> F::Output {
         .expect("operation timed out")
 }
 
+/// Read the terminal until `text` has been drawn on it, failing if the viewer
+/// exits first.
+#[cfg(feature = "tui")]
+async fn drawn(master: &mut std::fs::File, viewer: &mut Process, screen: &mut Vec<u8>, text: &str) {
+    within(async {
+        loop {
+            let mut bytes = [0; 16384];
+            match std::io::Read::read(master, &mut bytes) {
+                Ok(read) => screen.extend_from_slice(&bytes[..read]),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(error) => panic!("terminal: {error}"),
+            }
+            if String::from_utf8_lossy(screen).contains(text) {
+                break;
+            }
+            assert!(viewer.0.try_wait().unwrap().is_none());
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+}
+
 struct Process(Child);
 impl Drop for Process {
     fn drop(&mut self) {
@@ -282,23 +304,13 @@ async fn attached_q_leaves_server_and_request_running() {
     // Close the master before reaping the child on failure. Darwin can wait
     // for terminal output to drain even while the child is exiting.
     let mut master = master;
-    within(async {
-        let mut screen = Vec::new();
-        loop {
-            let mut bytes = [0; 16384];
-            match std::io::Read::read(&mut master, &mut bytes) {
-                Ok(read) => screen.extend_from_slice(&bytes[..read]),
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
-                Err(error) => panic!("terminal: {error}"),
-            }
-            if String::from_utf8_lossy(&screen).contains("prefill") {
-                break;
-            }
-            assert!(viewer.0.try_wait().unwrap().is_none());
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-    })
-    .await;
+    let mut screen = Vec::new();
+    // The in-flight list is a dialog: once the dashboard is up, `f` opens it
+    // and `f` closes it again, and then `q` is the viewer's quit.
+    drawn(&mut master, &mut viewer, &mut screen, "events").await;
+    std::io::Write::write_all(&mut master, b"f").unwrap();
+    drawn(&mut master, &mut viewer, &mut screen, "prefill").await;
+    std::io::Write::write_all(&mut master, b"f").unwrap();
     std::io::Write::write_all(&mut master, b"q").unwrap();
     let status = within(async {
         loop {

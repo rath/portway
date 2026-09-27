@@ -114,19 +114,21 @@ throughput, latency, and recent events. Live counters are per running instance;
 a viewer reconstructs its window from recorded rows. Usage and costs are read
 from the database for today, yesterday, seven days, or thirty days.
 
-An **in flight** table above the events refreshes every 250ms, both when the
-dashboard owns the forwarder and when it attaches to a local server: model,
-phase (upload, prefill, stream), elapsed time and received bytes. Wider terminals also show the method and path; at 120 columns,
-the status, time to first byte, idle time and retry count appear. Prefill over
-30s is marked `slow prefill`; a stream idle for over 60s is marked `stalled`.
-In an owning dashboard, completed requests leave as their event arrives. In an
-attached viewer, completed or cancelled requests leave on the next successful
-snapshot.
+Press `f` for the **in flight** dialog, which refreshes every 250ms, both when
+the dashboard owns the forwarder and when it attaches to a local server: model,
+phase (upload, prefill, stream), elapsed time and received bytes. At 80
+columns the method and path appear; at 100, the status, time to first byte,
+idle time and retry count. Prefill over 30s is marked `slow prefill`; a stream
+idle for over 60s is marked `stalled`. In an owning dashboard, completed
+requests leave as their event arrives. In an attached viewer, completed or
+cancelled requests leave on the next successful snapshot.
 
-The table shows up to five requests, oldest first, and counts additional
-requests in its title. It takes priority over charts and model counters, while
-keeping room for events. Below 14 terminal rows, only the HUD's `live` count
-fits. The table disappears when no requests are active. Event filters and
+The dialog lists requests oldest first, as many as fit in two thirds of the
+terminal's height, and counts the rest in its title. Its top edge stays fixed
+while requests arrive and leave, and the dashboard layout never changes with
+the number of active requests. While it is open it takes the keyboard: `f`,
+`Esc` or `q` close it. With it closed, the HUD's `live` count flags stalled
+and slow requests, for example `live 3 (1 stalled)`. Event filters and
 scrolling do not hide active requests. Attach keeps historical request counts,
 bytes, charts and events sourced from SQLite; live snapshots supplement the
 HUD and existing model rows without changing the database schema.
@@ -160,6 +162,7 @@ requests. Web attach continues to show recorded history only.
 | `↑` / `↓`, `j` / `k`, mouse wheel | Scroll events |
 | `PgUp` / `PgDn`, `g` / `G` | Page, oldest, or live end |
 | `Enter` | Request details |
+| `f` | Requests in flight |
 | `e` / `m` | Trouble-only filter / model filter |
 | `t` | Throughput bucket width |
 | `u` | Usage and cost view |

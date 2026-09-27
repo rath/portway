@@ -319,7 +319,7 @@ fn run(
         if dirty {
             let size = terminal.size()?;
             let area = Rect::new(0, 0, size.width, size.height);
-            state.viewport = view::events_height(area, state.models.len(), state.flights.len());
+            state.viewport = view::events_height(area, state.models.len());
             // The write that notices a terminal that went away.
             terminal.draw(|frame| view::draw(frame, &state, header))?;
             dirty = false;
@@ -411,6 +411,18 @@ fn key_press(key: KeyEvent, state: &mut State, settings: &Settings) -> bool {
         return false;
     }
 
+    // So does the in-flight dialog: it is watched rather than worked, so the
+    // keys that would reach under it could only move things nobody can see.
+    if state.flights_open {
+        if matches!(
+            key.code,
+            KeyCode::Char('f') | KeyCode::Esc | KeyCode::Char('q')
+        ) {
+            state.flights_open = false;
+        }
+        return false;
+    }
+
     // While the usage screen is up it holds the keyboard, the way the picker
     // does: `u`, `esc` and `q` put the dashboard back, the arrows move its
     // window, and no other keystroke means something underneath a screen that
@@ -457,6 +469,12 @@ fn key_press(key: KeyEvent, state: &mut State, settings: &Settings) -> bool {
         // A log line has no record to show, so Enter stays a no-op there
         // rather than arming a popup that appears on the next scroll.
         KeyCode::Enter => state.detail = !state.detail && state.selected().is_some(),
+        KeyCode::Char('f') => {
+            state.flights_open = true;
+            state.help = false;
+            state.picker = false;
+            state.detail = false;
+        }
         KeyCode::Char('e') => {
             let next = if state.filter == Filter::Trouble {
                 Filter::All
@@ -551,6 +569,46 @@ mod tests {
         state.totals.in_flight = 200;
         assert!(key(KeyCode::Char('q'), &mut state));
         assert!(!state.confirm_quit);
+    }
+
+    /// `f` puts the in-flight list up over the dashboard. It is the one popup
+    /// at a time, it holds the keyboard, and `q` closes it rather than quitting
+    /// — including from a quit confirmation, where it is the look before the
+    /// leap.
+    #[test]
+    fn f_puts_the_flights_up_and_holds_the_keyboard() {
+        let mut state = noisy();
+        state.help = true;
+        assert!(!key(KeyCode::Char('f'), &mut state));
+        assert!(state.flights_open);
+        assert!(!state.help, "one popup at a time");
+
+        // Keys meant for the pane under it go nowhere.
+        key(KeyCode::Up, &mut state);
+        assert!(state.follow);
+        key(KeyCode::Char('e'), &mut state);
+        assert_eq!(state.filter, Filter::All);
+        key(KeyCode::Enter, &mut state);
+        assert!(!state.detail);
+
+        state.totals.in_flight = 1;
+        assert!(!key(KeyCode::Char('q'), &mut state));
+        assert!(!state.flights_open);
+        assert!(!state.confirm_quit, "closing is not a first quit");
+        for close in [KeyCode::Char('f'), KeyCode::Esc] {
+            key(KeyCode::Char('f'), &mut state);
+            assert!(state.flights_open);
+            key(close, &mut state);
+            assert!(!state.flights_open);
+        }
+
+        assert!(!key(KeyCode::Char('q'), &mut state));
+        assert!(state.confirm_quit);
+        assert!(!key(KeyCode::Char('f'), &mut state));
+        assert!(!state.confirm_quit);
+        assert!(state.flights_open);
+        let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        assert!(key_press(ctrl_c, &mut state, &Settings::default()));
     }
 
     #[test]
