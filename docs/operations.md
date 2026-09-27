@@ -116,22 +116,26 @@ from the database for today, yesterday, seven days, or thirty days.
 
 Press `f` for the **in flight** dialog, which refreshes every 250ms, both when
 the dashboard owns the forwarder and when it attaches to a local server: model,
-phase (upload, prefill, stream), elapsed time and received bytes. At 80
-columns the method and path appear; at 100, the status, time to first byte,
-idle time and retry count. Prefill over 30s is marked `slow prefill`; a stream
-idle for over 60s is marked `stalled`. In an owning dashboard, completed
-requests leave as their event arrives. In an attached viewer, completed or
-cancelled requests leave on the next successful snapshot.
+phase (upload, prefill, stream), elapsed time and received bytes. From about 70
+columns the method and path appear; from about 100, the status, time to first
+byte, idle time and retry count. The dialog is as wide as those columns, not
+the terminal: a long model name or route widens it into the spare room, and one
+that still does not fit ends in `…`. Prefill over 30s is marked `slow prefill`;
+a stream idle for over 60s is marked `stalled`. In an owning dashboard,
+completed requests leave as their event arrives. In an attached viewer,
+completed or cancelled requests leave on the next successful snapshot.
 
 The dialog lists requests oldest first, as many as fit in two thirds of the
-terminal's height, and counts the rest in its title. Its top edge stays fixed
-while requests arrive and leave, and the dashboard layout never changes with
-the number of active requests. While it is open it takes the keyboard: `f`,
-`Esc` or `q` close it. With it closed, the HUD's `live` count flags stalled
-and slow requests, for example `live 3 (1 stalled)`. Event filters and
-scrolling do not hide active requests. Attach keeps historical request counts,
-bytes, charts and events sourced from SQLite; live snapshots supplement the
-HUD and existing model rows without changing the database schema.
+terminal's height, and counts the rest in its title. It is placed as though it
+held eight rows, just above the middle of the screen, so up to eight requests
+can arrive and leave without moving its title; past that it is centred. The
+dashboard layout never changes with the number of active requests. While it is
+open it takes the keyboard: `f`, `Esc` or `q` close it. With it closed, the
+HUD's `live` count flags stalled and slow requests, for example
+`live 3 (1 stalled)`. Event filters and scrolling do not hide active requests.
+Attach keeps historical request counts, bytes, charts and events sourced from
+SQLite; live snapshots supplement the HUD and existing model rows without
+changing the database schema.
 
 Every CLI build serves `<data-dir>/portway.live.sock`, with mode `0600` and
 same-UID peer checks. Each connection returns one versioned JSON snapshot with

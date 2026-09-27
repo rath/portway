@@ -32,13 +32,6 @@ const MODEL: Color = Color::Magenta;
 const HUD_HEIGHT: u16 = 5;
 const FOOTER_HEIGHT: u16 = 1;
 const EVENTS_MIN: u16 = 4;
-/// The in-flight dialog at its widest: every column, and a chat completions
-/// route beside them. A wider terminal gets margin, not a longer blank route.
-const FLIGHTS_WIDTH: u16 = 110;
-/// Where the dialog has room for the route, and then for the status, ttfb,
-/// idle and retry columns in front of it too.
-const FLIGHTS_WIDE: u16 = 80;
-const FLIGHTS_ROOMY: u16 = 100;
 /// Two borders plus four rows of drawing: two apiece for the up and down
 /// sparklines, and enough for the bars to show a difference in height rather
 /// than just presence.
@@ -215,6 +208,22 @@ fn flight_phase(flight: &FlightView) -> (&'static str, Color) {
     }
 }
 
+fn flight_route(flight: &FlightView) -> String {
+    format!("{} {}", flight.method, flight.path)
+}
+
+/// `text` in `width` columns, ending in an ellipsis when it did not fit: a
+/// route cut short otherwise reads as a different, shorter route.
+fn clipped(text: &str, width: u16) -> String {
+    let width = width as usize;
+    if text.chars().count() <= width {
+        return text.to_string();
+    }
+    let mut cut: String = text.chars().take(width.saturating_sub(1)).collect();
+    cut.push('…');
+    cut
+}
+
 /// The flights that are worth a word in the HUD while the dialog is closed:
 /// `1 stalled` in red, or `2 slow` when nothing has stalled. `None` while
 /// every one of them is moving.
@@ -233,23 +242,28 @@ fn flight_alarm(flights: &[FlightView]) -> Option<(String, Color)> {
 ///
 /// A dialog rather than a pane, so the list can fill and empty without moving
 /// the dashboard under it. It is as tall as its rows, up to two thirds of the
-/// terminal, and its title counts the ones that did not fit.
+/// terminal, and as wide as its columns; its title counts the rows that did
+/// not fit.
 fn flights_dialog(frame: &mut Frame, state: &State, area: Rect) {
     let flights = &state.flights;
-    let width = area.width.min(FLIGHTS_WIDTH);
-    // Two borders and the header row around the rows, or one line of message.
+    // The header row over the rows, or one line of message.
     let body = if flights.is_empty() {
         1
     } else {
         flights.len() + 1
     };
-    // Laid out where it would sit centred at its tallest, and grown down from
-    // there: a request arriving or leaving moves the bottom border, never the
-    // title and header the eye is on.
-    let margin = area.height / 6;
-    let room = area.height - 2 * margin;
-    let height = (body + 2).min(room as usize) as u16;
+    let tallest = area.height - 2 * (area.height / 6);
+    let height = (body + 2).min(tallest as usize) as u16;
     let shown = flights.len().min(height.saturating_sub(3) as usize);
+    let columns = FlightColumns::fit(
+        &flights[..shown],
+        area.width.saturating_sub(2 * FLIGHTS_GUTTER),
+    );
+    let width = columns.width().min(area.width);
+    // Placed as though it held `FLIGHTS_SETTLED` rows, so up to there a
+    // request arriving or leaving moves the bottom border, not the title and
+    // header the eye is on. Past that it is simply centred.
+    let placed = height.max((FLIGHTS_SETTLED + 3).min(tallest));
     // An owning dashboard holds every flight and drops one the moment its
     // event lands, up to a sample before the counter follows. A viewer's
     // snapshot is capped, and its count is the one that knows what was left
@@ -276,7 +290,7 @@ fn flights_dialog(frame: &mut Frame, state: &State, area: Rect) {
         .padding(Padding::horizontal(1));
     let box_area = Rect {
         x: area.x + (area.width - width) / 2,
-        y: area.y + margin,
+        y: area.y + (area.height - placed) / 2,
         width,
         height,
     };
@@ -296,27 +310,110 @@ fn flights_dialog(frame: &mut Frame, state: &State, area: Rect) {
     match message {
         Some(message) => frame.render_widget(Paragraph::new(message).block(block), box_area),
         None => frame.render_widget(
-            flights_table(&flights[..shown], width).block(block),
+            flights_table(&flights[..shown], &columns).block(block),
             box_area,
         ),
     }
 }
 
-/// The rows of the dialog, with the columns its `width` has room for.
-fn flights_table(flights: &[FlightView], width: u16) -> Table<'static> {
-    let wide = width >= FLIGHTS_WIDE;
-    let roomy = width >= FLIGHTS_ROOMY;
+/// Dashboard left showing either side of the dialog, so it reads as one.
+const FLIGHTS_GUTTER: u16 = 2;
+/// The rows the dialog is placed as though it had, however few it has.
+const FLIGHTS_SETTLED: u16 = 8;
+/// A model name and a route most traffic fits (`POST /v1/messages`): the
+/// dialog keeps its width from one request to the next, and only a longer
+/// name widens it, as far as the cap and the terminal allow.
+const FLIGHTS_MODEL: (u16, u16) = (16, 28);
+const FLIGHTS_ROUTE: (u16, u16) = (17, 40);
+/// Phase, age and bytes down, which every dialog has after the model.
+const FLIGHTS_CORE: [u16; 3] = [12, 7, 7];
+/// Status, ttfb, idle and retries, for a dialog with room for them.
+const FLIGHTS_ROOMY: [u16; 4] = [4, 7, 7, 5];
+
+/// The dialog's columns: which of them it has room for, and how wide the two
+/// that hold names are.
+struct FlightColumns {
+    model: u16,
+    roomy: bool,
+    route: Option<u16>,
+}
+
+impl FlightColumns {
+    /// The most of the table that fits in `room`, sized to what it holds. The
+    /// columns are chosen at the narrowest names, so a long one arriving
+    /// widens the dialog into the spare room rather than trading a column
+    /// for it.
+    fn fit(flights: &[FlightView], room: u16) -> Self {
+        let (model, route) = (FLIGHTS_MODEL.0, Some(FLIGHTS_ROUTE.0));
+        let mut columns = [
+            Self {
+                model,
+                roomy: true,
+                route,
+            },
+            Self {
+                model,
+                roomy: false,
+                route,
+            },
+        ]
+        .into_iter()
+        .find(|columns| columns.width() <= room)
+        // Too narrow for either: a shorter model, and no route.
+        .unwrap_or(Self {
+            model: 10,
+            roomy: false,
+            route: None,
+        });
+        let longest = |text: fn(&FlightView) -> String| {
+            flights
+                .iter()
+                .map(|flight| text(flight).chars().count())
+                .max()
+                .unwrap_or(0) as u16
+        };
+        let mut spare = room.saturating_sub(columns.width());
+        let grow = longest(|flight| flight.model.clone())
+            .min(FLIGHTS_MODEL.1)
+            .saturating_sub(columns.model)
+            .min(spare);
+        columns.model += grow;
+        spare -= grow;
+        if let Some(route) = &mut columns.route {
+            *route += longest(flight_route)
+                .min(FLIGHTS_ROUTE.1)
+                .saturating_sub(*route)
+                .min(spare);
+        }
+        columns
+    }
+
+    fn widths(&self) -> Vec<u16> {
+        let mut widths = vec![self.model];
+        widths.extend(FLIGHTS_CORE);
+        if self.roomy {
+            widths.extend(FLIGHTS_ROOMY);
+        }
+        widths.extend(self.route);
+        widths
+    }
+
+    /// Across the whole dialog: the columns, a space between each, and a
+    /// border and a column of padding either side.
+    fn width(&self) -> u16 {
+        let widths = self.widths();
+        widths.iter().sum::<u16>() + widths.len() as u16 - 1 + 4
+    }
+}
+
+/// The rows of the dialog, in the columns it has room for.
+fn flights_table(flights: &[FlightView], columns: &FlightColumns) -> Table<'static> {
+    let roomy = columns.roomy;
     let mut headers = vec![
         Cell::from("model"),
         Cell::from("phase"),
         number("age"),
         number("down"),
-    ];
-    let mut widths = vec![
-        Constraint::Length(if wide { 16 } else { 10 }),
-        Constraint::Length(12),
-        Constraint::Length(7),
-        Constraint::Length(7),
     ];
     if roomy {
         headers.extend([
@@ -325,22 +422,20 @@ fn flights_table(flights: &[FlightView], width: u16) -> Table<'static> {
             number("idle"),
             number("retry"),
         ]);
-        widths.extend([
-            Constraint::Length(4),
-            Constraint::Length(7),
-            Constraint::Length(7),
-            Constraint::Length(5),
-        ]);
     }
-    if wide {
+    if columns.route.is_some() {
         headers.push(Cell::from("route"));
-        widths.push(Constraint::Min(12));
     }
+    let widths: Vec<Constraint> = columns
+        .widths()
+        .into_iter()
+        .map(Constraint::Length)
+        .collect();
     let rows = flights.iter().map(|flight| {
         let (phase, shade) = flight_phase(flight);
         let mut cells = vec![
             Cell::from(Span::styled(
-                flight.model.clone(),
+                clipped(&flight.model, columns.model),
                 Style::default().fg(MODEL),
             )),
             Cell::from(Span::styled(phase, Style::default().fg(shade))),
@@ -365,8 +460,8 @@ fn flights_table(flights: &[FlightView], width: u16) -> Table<'static> {
                 number(flight.retries.to_string()),
             ]);
         }
-        if wide {
-            cells.push(Cell::from(format!("{} {}", flight.method, flight.path)));
+        if let Some(width) = columns.route {
+            cells.push(Cell::from(clipped(&flight_route(flight), width)));
         }
         Row::new(cells)
     });
@@ -1850,8 +1945,7 @@ mod tests {
         assert_eq!(title_row(&state), full);
         state.flights = all;
 
-        // The route is where a wide dialog puts its spare room; a narrow one
-        // keeps model, phase, age and bytes.
+        // A narrow dialog keeps model, phase, age and bytes.
         assert!(dialog(&screen(140, 44, &state)).contains("POST /v1/messages"));
         assert!(!dialog(&screen(44, 24, &state)).contains("POST"));
 
@@ -1865,6 +1959,82 @@ mod tests {
         state.tick_recorded(&watch::Window::default());
         assert!(state.flights.is_empty());
         assert!(dialog(&screen(140, 44, &state)).contains("nothing in flight"));
+    }
+
+    #[test]
+    fn the_flights_dialog_fits_its_columns_and_sits_over_the_middle() {
+        let registry = crate::flights::Flights::default();
+        for index in 0..20 {
+            registry.begin(
+                &format!("live-{index}"),
+                &http::Method::POST,
+                "/v1/messages",
+                100,
+            );
+        }
+        let mut state = populated();
+        state.flights_open = true;
+        let all = registry.views();
+        // Rows above the box, rows below it, and columns either side.
+        let margins = |width: u16, height: u16, state: &State| {
+            let screen = screen(width, height, state);
+            let rows: Vec<&str> = screen.lines().collect();
+            let top = rows
+                .iter()
+                .position(|row| row.contains("┌ in flight"))
+                .unwrap();
+            let out = dialog(&screen);
+            let left = rows[top]
+                .split("┌ in flight")
+                .next()
+                .unwrap()
+                .chars()
+                .count();
+            let across = out.lines().next().unwrap().chars().count();
+            let below = height as usize - top - out.lines().count();
+            (top, below, left, width as usize - left - across)
+        };
+
+        // As wide as its columns, and no wider: the route ends at the border,
+        // and a wide terminal gets dashboard either side, not a blank route.
+        state.flights = all[..8].to_vec();
+        let out = dialog(&screen(140, 44, &state));
+        assert!(
+            out.lines().nth(2).unwrap().ends_with("POST /v1/messages │"),
+            "{out}"
+        );
+        for (width, height) in [(140, 44), (100, 30), (80, 24)] {
+            let (top, below, left, right) = margins(width, height, &state);
+            assert!(left >= FLIGHTS_GUTTER as usize, "{width}x{height}");
+            assert!(left.abs_diff(right) <= 1, "{width}x{height}");
+            // Eight rows is as many as it is placed for: centred.
+            assert!(top >= HUD_HEIGHT as usize, "{width}x{height}");
+            assert!(top.abs_diff(below) <= 1, "{width}x{height}");
+        }
+        // Fewer keep the title where eight put it, a little above the middle;
+        // more than that are centred as they come.
+        let (eight, ..) = margins(140, 44, &state);
+        state.flights.truncate(1);
+        let (top, below, ..) = margins(140, 44, &state);
+        assert_eq!(top, eight);
+        assert!(top < below);
+        state.flights = all.clone();
+        let (top, below, ..) = margins(140, 44, &state);
+        assert!(top < eight, "{top}");
+        assert!(top.abs_diff(below) <= 1);
+
+        // A long name widens it into the spare room, and one that still does
+        // not fit says so rather than passing for a shorter route.
+        state.flights = all[..1].to_vec();
+        state.flights[0].model = "claude-haiku-4-5-20251001".to_string();
+        state.flights[0].path = "/v1/messages/count_tokens".to_string();
+        let out = dialog(&screen(140, 44, &state));
+        assert!(out.contains("claude-haiku-4-5-20251001"), "{out}");
+        assert!(out.contains("POST /v1/messages/count_tokens │"), "{out}");
+        let out = dialog(&screen(80, 24, &state));
+        assert!(out.contains("claude-haiku-4-5-20251001"), "{out}");
+        assert!(out.contains("POST /v1/message… │"), "{out}");
+        assert!(!out.contains("POST /v1/messages "), "{out}");
     }
 
     #[test]
