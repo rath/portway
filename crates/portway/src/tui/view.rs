@@ -7,7 +7,7 @@ use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Cell, Clear, Padding, Paragraph, Row, Sparkline, Table};
+use ratatui::widgets::{Block, BorderType, Cell, Clear, Padding, Paragraph, Row, Sparkline, Table};
 
 use crate::board::{self, compression_status};
 use crate::flights::{FlightView, Phase};
@@ -166,6 +166,15 @@ pub fn draw(frame: &mut Frame, state: &State, header: &Header) {
     frame.render_widget(footer(state), panes.footer);
 
     if state.flights_open {
+        // Keep the live dashboard visible, but reserve color and emphasis for
+        // the dialog. Clear below restores normal styles inside its bounds.
+        frame.buffer_mut().set_style(
+            area,
+            Style::default()
+                .fg(DIM)
+                .bg(Color::Reset)
+                .remove_modifier(Modifier::all()),
+        );
         flights_dialog(frame, state, area);
     } else if state.help {
         popup(frame, area, "keys", help_lines());
@@ -253,8 +262,9 @@ fn flights_dialog(frame: &mut Frame, state: &State, area: Rect) {
         flights.len() + 1
     };
     let tallest = area.height - 2 * (area.height / 6);
-    let height = (body + 2).min(tallest as usize) as u16;
-    let shown = flights.len().min(height.saturating_sub(3) as usize);
+    // Two borders and one blank row above and below the content.
+    let height = (body + 4).min(tallest as usize) as u16;
+    let shown = flights.len().min(height.saturating_sub(5) as usize);
     let columns = FlightColumns::fit(
         &flights[..shown],
         area.width.saturating_sub(2 * FLIGHTS_GUTTER),
@@ -263,7 +273,7 @@ fn flights_dialog(frame: &mut Frame, state: &State, area: Rect) {
     // Placed as though it held `FLIGHTS_SETTLED` rows, so up to there a
     // request arriving or leaving moves the bottom border, not the title and
     // header the eye is on. Past that it is simply centred.
-    let placed = height.max((FLIGHTS_SETTLED + 3).min(tallest));
+    let placed = height.max((FLIGHTS_SETTLED + 5).min(tallest));
     // An owning dashboard holds every flight and drops one the moment its
     // event lands, up to a sample before the counter follows. A viewer's
     // snapshot is capped, and its count is the one that knows what was left
@@ -282,12 +292,23 @@ fn flights_dialog(frame: &mut Frame, state: &State, area: Rect) {
         format!("in flight · {total}")
     };
     let block = Block::bordered()
-        .title_top(titled(&title))
+        .border_type(BorderType::Double)
+        .title_top(Line::styled(
+            format!(" {title} "),
+            Style::default().fg(WIRE).add_modifier(Modifier::BOLD),
+        ))
         .title_bottom(
-            Line::from(Span::styled(" f / esc close ", Style::default().fg(DIM))).right_aligned(),
+            Line::from(vec![
+                Span::styled(
+                    " f / esc",
+                    Style::default().fg(WIRE).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(" close ", Style::default().fg(DIM)),
+            ])
+            .right_aligned(),
         )
         .border_style(Style::default().fg(WIRE))
-        .padding(Padding::horizontal(1));
+        .padding(Padding::uniform(1));
     let box_area = Rect {
         x: area.x + (area.width - width) / 2,
         y: area.y + (area.height - placed) / 2,
@@ -1792,13 +1813,13 @@ mod tests {
             .enumerate()
             .find_map(|(at, row)| {
                 let text: String = row.iter().collect();
-                let byte = text.find("┌ in flight")?;
+                let byte = text.find("╔ in flight")?;
                 Some((at, text[..byte].chars().count()))
             })
             .unwrap_or_else(|| panic!("the dialog is not up:\n{screen}"));
-        let right = left + rows[top][left..].iter().position(|c| *c == '┐').unwrap();
+        let right = left + rows[top][left..].iter().position(|c| *c == '╗').unwrap();
         let bottom = (top..rows.len())
-            .find(|at| rows[*at].get(left) == Some(&'└'))
+            .find(|at| rows[*at].get(left) == Some(&'╚'))
             .unwrap();
         rows[top..=bottom]
             .iter()
@@ -1914,7 +1935,7 @@ mod tests {
         assert_eq!(below_hud(busy), idle);
 
         state.flights_open = true;
-        for (width, height, shown) in [(140, 44, 8), (80, 24, 8), (44, 10, 5)] {
+        for (width, height, shown) in [(140, 44, 8), (80, 24, 8), (44, 10, 3)] {
             let out = dialog(&screen(width, height, &state));
             if shown < 8 {
                 assert!(
@@ -1935,7 +1956,7 @@ mod tests {
         let title_row = |state: &State| {
             screen(140, 44, state)
                 .lines()
-                .position(|line| line.contains("┌ in flight"))
+                .position(|line| line.contains("╔ in flight"))
         };
         let full = title_row(&state);
         let all = std::mem::take(&mut state.flights);
@@ -1948,6 +1969,49 @@ mod tests {
         // A narrow dialog keeps model, phase, age and bytes.
         assert!(dialog(&screen(140, 44, &state)).contains("POST /v1/messages"));
         assert!(!dialog(&screen(44, 24, &state)).contains("POST"));
+
+        // The backdrop loses emphasis without losing content; the dialog
+        // keeps its semantic colors, and closing it restores every cell.
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        state.flights_open = false;
+        terminal
+            .draw(|frame| draw(frame, &state, &header()))
+            .unwrap();
+        let dashboard = terminal.backend().buffer().clone();
+        state.flights_open = true;
+        terminal
+            .draw(|frame| draw(frame, &state, &header()))
+            .unwrap();
+        let overlay = terminal.backend().buffer();
+        let top = overlay
+            .content()
+            .iter()
+            .position(|c| c.symbol() == "╔")
+            .unwrap();
+        let bottom = overlay
+            .content()
+            .iter()
+            .position(|c| c.symbol() == "╝")
+            .unwrap();
+        for (index, cell) in overlay.content().iter().enumerate() {
+            let inside = (top / 80..=bottom / 80).contains(&(index / 80))
+                && (top % 80..=bottom % 80).contains(&(index % 80));
+            if !inside {
+                assert_eq!(cell.symbol(), dashboard.content()[index].symbol());
+                assert_eq!(cell.fg, DIM);
+                assert_eq!(cell.bg, Color::Reset);
+                assert!(cell.modifier.is_empty());
+            }
+        }
+        assert!(overlay.content().iter().any(|c| c.fg == MODEL));
+        assert_eq!(overlay.content()[top + 2].fg, WIRE);
+        assert!(overlay.content()[top + 2].modifier.contains(Modifier::BOLD));
+        state.flights_open = false;
+        terminal
+            .draw(|frame| draw(frame, &state, &header()))
+            .unwrap();
+        assert_eq!(terminal.backend().buffer(), &dashboard);
+        state.flights_open = true;
 
         // Filters and scrolling are the event pane's; the flights ignore them.
         state.set_filter(crate::tui::state::Filter::Trouble);
@@ -1981,11 +2045,11 @@ mod tests {
             let rows: Vec<&str> = screen.lines().collect();
             let top = rows
                 .iter()
-                .position(|row| row.contains("┌ in flight"))
+                .position(|row| row.contains("╔ in flight"))
                 .unwrap();
             let out = dialog(&screen);
             let left = rows[top]
-                .split("┌ in flight")
+                .split("╔ in flight")
                 .next()
                 .unwrap()
                 .chars()
@@ -2000,7 +2064,7 @@ mod tests {
         state.flights = all[..8].to_vec();
         let out = dialog(&screen(140, 44, &state));
         assert!(
-            out.lines().nth(2).unwrap().ends_with("POST /v1/messages │"),
+            out.lines().nth(3).unwrap().ends_with("POST /v1/messages ║"),
             "{out}"
         );
         for (width, height) in [(140, 44), (100, 30), (80, 24)] {
@@ -2030,10 +2094,10 @@ mod tests {
         state.flights[0].path = "/v1/messages/count_tokens".to_string();
         let out = dialog(&screen(140, 44, &state));
         assert!(out.contains("claude-haiku-4-5-20251001"), "{out}");
-        assert!(out.contains("POST /v1/messages/count_tokens │"), "{out}");
+        assert!(out.contains("POST /v1/messages/count_tokens ║"), "{out}");
         let out = dialog(&screen(80, 24, &state));
         assert!(out.contains("claude-haiku-4-5-20251001"), "{out}");
-        assert!(out.contains("POST /v1/message… │"), "{out}");
+        assert!(out.contains("POST /v1/message… ║"), "{out}");
         assert!(!out.contains("POST /v1/messages "), "{out}");
     }
 
@@ -2063,11 +2127,11 @@ mod tests {
         assert_eq!(state.models[0].view.in_flight, 205);
         let out = screen(140, 44, &state);
         assert!(out.contains("live 205"), "{out}");
-        // The snapshot's count, not its capped list: 27 rows fit, and the
-        // title owns up to the other 178.
+        // The snapshot's count, not its capped list: 25 rows fit, and the
+        // title owns up to the other 180.
         state.flights_open = true;
         let out = dialog(&screen(140, 44, &state));
-        assert!(out.contains("in flight · 205 · +178 more"), "{out}");
+        assert!(out.contains("in flight · 205 · +180 more"), "{out}");
 
         state.apply_live(None);
         assert!(state.flights.is_empty());

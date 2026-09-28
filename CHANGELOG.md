@@ -9,6 +9,8 @@ version may contain breaking changes.
 
 ### Fixed
 
+- The TUI's in-flight dialog stands apart from the dashboard with a muted
+  backdrop, double border, clearer title and close keys, and vertical padding.
 - `--reload` publishes the price table with the routes it rebuilds, so editing a
   rate in `portway.toml` reprices a running console — including for records it
   has already written — instead of waiting for a restart. An attached viewer
