@@ -61,8 +61,8 @@ completion state, and any token counts the upstream reported. Log records
 hold a level and a message. Log messages can include upstream host names and
 error text.
 
-Portway never records request or response bodies, header values, credentials,
-cookies, query strings, or dictionary contents. A URL path is recorded as
+Request recording never stores request or response bodies, header values,
+credentials, cookies, query strings, or dictionary contents. A URL path is recorded as
 sent, so do not put secrets or personal identifiers in paths.
 
 When Portway creates the data directory, it creates it with mode 0700. A
@@ -71,6 +71,14 @@ existing one to 0600, even inside a directory it did not create; the WAL
 sidecar files share that mode. The daemon's pid and log files are created with
 mode 0600, and so is `portway.web`, which holds the web console's address and
 token while it runs.
+
+Remote TUI attach stores its console session cookie separately in
+`<data-dir>/remote-sessions.json`, with mode 0600. It does not persist the
+console token entered at the hidden prompt. Sessions are scoped to the console's
+scheme, host, port and URL prefix, and become invalid when that daemon restarts.
+The saved cookie grants console access, including its control API, even though
+the remote TUI only reads data. See [remote attach](docs/operations.md#remote-terminal-dashboard)
+for authentication and removing saved sessions.
 
 ## Deployment boundaries
 

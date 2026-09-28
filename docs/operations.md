@@ -48,8 +48,9 @@ pid and log path. The process forks before creating a runtime or recorder thread
 router and the price table, and renegotiates upstream capabilities. Routes and
 rates are published only after the new router has been built and probed, so the
 console a daemon hosts reprices on the reload itself: an edited rate needs no
-restart. An attached viewer is a separate process reading its own `--config`;
-restart that one to change what it shows.
+restart. A locally attached TUI reads its own `--config`; restart that viewer
+to load changed prices. A remote TUI (`--tui --attach URL`) uses the console's
+prices and picks up the daemon's reload without restarting the viewer.
 `--stop` sends SIGTERM and waits up to ten seconds. The process flushes recording
 and removes its pid file. Controls do not require upstream configuration.
 
@@ -76,9 +77,11 @@ curl --fail-with-body http://127.0.0.1:8787/v1/models
 
 Stopping terminates forwarding, so choose a quiet moment and let active requests
 finish before a restart. Runtime counters and in-memory dictionaries reset; the
-SQLite history stays in the same data directory. Reopen attached dashboards with
-the updated config to load changed prices, host, or port. For a foreground
-instance, use Ctrl-C and rerun its command.
+SQLite history stays in the same data directory. Reopen locally attached
+dashboards with the updated config to load changed prices, host, or port.
+Remote TUI viewers need the new console token after a daemon restart; they
+do not load local forwarding configuration. For a foreground instance, use
+Ctrl-C and rerun its command.
 
 ## Separate instances
 
@@ -136,7 +139,7 @@ dashboard layout never changes with the number of active requests. While it is
 open it takes the keyboard: `f`, `Esc` or `q` close it. With it closed, the
 HUD's `live` count flags stalled and slow requests, for example
 `live 3 (1 stalled)`. Event filters and scrolling do not hide active requests.
-Attach keeps historical request counts, bytes, charts and events sourced from
+Local attach keeps historical request counts, bytes, charts and events sourced from
 SQLite; live snapshots supplement the HUD and existing model rows without
 changing the database schema.
 
@@ -208,7 +211,10 @@ remote daemon or interrupt its requests.
 and `--event-columns` still works. Remote attach does not load the local
 `portway.toml`, read or create a local database, probe a local daemon, or bind a
 forwarding port. Server options such as `--config`, `--host`, `--port`, and
-`--upstream` cannot be combined with `--attach`.
+`--upstream` cannot be combined with `--attach`. A shell alias or wrapper that
+adds `--config` automatically must omit it for remote attach.
+
+### Dashboard keys and display settings
 
 | Key | Action |
 | --- | --- |
@@ -230,7 +236,8 @@ persists interactive choices in `portway.tui`. Narrow terminals reduce detail
 rather than truncating every field. Ctrl-C, SIGTERM and terminal closure restore
 the terminal. Quitting a viewer leaves the serving process alive.
 
-Both `--tui` and `--event-columns` are absent in builds without the `tui` feature.
+`--tui`, `--attach`, and `--event-columns` are absent in builds without the
+`tui` feature.
 
 ## Optional web console
 

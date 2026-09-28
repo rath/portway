@@ -19,7 +19,12 @@ Use [forward.toml](../examples/forward.toml) for one destination,
 [models.toml](../examples/models.toml) for a model routing table, or
 [receive.toml](../examples/receive.toml) for a receiver.
 
-The standalone binary chooses its configuration in this order:
+Remote TUI attach (`--tui --attach URL`) skips local TOML loading and uses the
+remote console's configuration and prices. Its `--data-dir` holds only viewer
+sessions and display settings; see [remote attach](operations.md#remote-terminal-dashboard).
+
+For forwarding and local dashboards, the standalone binary chooses its
+configuration in this order:
 
 1. If supplied, read exactly `--config PATH`. A missing file is an error.
 2. Otherwise, try `portway.toml` in the **current working directory**.
@@ -369,11 +374,14 @@ absolute) or `$HOME/.config/portway`. Newly created directories have mode 0700.
 The runtime directory contains `db.sqlite3`, `portway.pid` in daemon mode,
 `portway.log` for daemon output, `portway.tui` for saved dashboard settings, and
 `portway.web` (mode 0600) with the running web console's address and token.
+Remote TUI viewers save console sessions in `remote-sessions.json` (mode 0600);
+they do not create a local database. A remote daemon restart invalidates its
+saved session and requires its new console token.
 Old runtime directories are not discovered or automatically migrated.
 
 `--data-dir` chooses storage and, without `--config`, where the search looks
 after the working directory. `--config` chooses TOML and never moves storage.
-`data_dir`, `api_key`, `mode`, `tui`, `web`, and `retention_days` are not TOML root fields.
+`data_dir`, `api_key`, `mode`, `tui`, `attach`, `web`, and `retention_days` are not TOML root fields.
 Choose mode and operations with CLI arguments:
 
 | CLI option | Purpose |

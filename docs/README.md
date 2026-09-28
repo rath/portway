@@ -21,7 +21,8 @@ shows measured savings; the pages below cover setting it up and running it.
 ## Run
 
 - [Operations](operations.md): recording and reports, the daemon, reloading
-  configuration, the terminal dashboard and web console, health checks,
+  configuration, the terminal dashboard and web console,
+  [remote TUI attach](operations.md#remote-terminal-dashboard), health checks,
   [checking compression](operations.md#check-compression), and
   [troubleshooting](operations.md#troubleshooting).
 - [FAQ](faq.md): short answers on whether Portway fits your setup, how

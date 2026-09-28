@@ -20,8 +20,9 @@ version may contain breaking changes.
   backdrop, double border, clearer title and close keys, and vertical padding.
 - `--reload` publishes the price table with the routes it rebuilds, so editing a
   rate in `portway.toml` reprices a running console — including for records it
-  has already written — instead of waiting for a restart. An attached viewer
-  still shows the rates it started with; restart it to pick up its own config.
+  has already written — instead of waiting for a restart. A locally attached
+  TUI still shows the rates it started with; restart it to pick up its own
+  config. Remote TUI attach uses the console's updated prices.
 
 ## [0.1.0] - 2026-09-28
 
