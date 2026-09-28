@@ -28,8 +28,8 @@ opt-level = 3
 # build looks single-threaded: most of the wall time is fat LTO's single
 # final-optimization pass, where all IR from every crate is merged. Raising it
 # to 16 with fat kept only shaved 3s off the build while growing the binary 6.5%,
-# so it buys nothing. The build is automated by deploy.sh, so its duration is not
-# a human's wait — spend it on the request path instead.
+# so it buys nothing. A release build is not rebuilt on every edit, so its
+# duration is rarely anyone's wait — spend it on the request path instead.
 [profile.release]
 opt-level = 3
 lto = "fat"
