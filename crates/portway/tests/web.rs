@@ -12,7 +12,7 @@ use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
 use bytes::Bytes;
-use common::{Health, Reply, upstream};
+use common::{Health, Reply, free_port, upstream};
 use http::{Request, StatusCode};
 use http_body_util::{BodyExt, Full};
 use hyper_util::rt::TokioIo;
@@ -26,11 +26,6 @@ fn data_dir(name: &str) -> PathBuf {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir
-}
-
-fn free_port() -> u16 {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    listener.local_addr().unwrap().port()
 }
 
 fn config(dir: &Path, upstream: &str) -> PathBuf {

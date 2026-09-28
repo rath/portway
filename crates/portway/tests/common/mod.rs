@@ -211,6 +211,39 @@ impl UpstreamMock {
     }
 }
 
+/// A port for a child process to listen on.
+///
+/// Binding port 0 and dropping the listener hands back an ephemeral port, and
+/// the kernel also gives ephemeral ports to outgoing connections: any client
+/// socket a concurrent test opens before the child binds can take it, and the
+/// child fails with "Address already in use". Ports below 32768 are outside the
+/// ephemeral range on Linux (32768-60999) and macOS (49152-65535), so only a
+/// listener can take one. Each is handed out once per process, starting from
+/// an offset of the pid so concurrent test binaries start apart.
+///
+/// A port is checked by connecting, not by binding it: a listener this
+/// process holds even for a moment is copied into any child a concurrent test
+/// forks, and stays open there until that child execs, long enough for the
+/// daemon's own bind to fail.
+pub fn free_port() -> u16 {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    const FIRST: u32 = 20_000;
+    const SPAN: u32 = 12_000;
+    static NEXT: AtomicU32 = AtomicU32::new(0);
+    let offset = std::process::id() % SPAN;
+    for _ in 0..SPAN {
+        let n = NEXT.fetch_add(1, Ordering::Relaxed);
+        let port = (FIRST + (offset + n) % SPAN) as u16;
+        let address = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+        let probe =
+            std::net::TcpStream::connect_timeout(&address, std::time::Duration::from_millis(200));
+        if probe.is_err_and(|err| err.kind() == std::io::ErrorKind::ConnectionRefused) {
+            return port;
+        }
+    }
+    panic!("no free port in {FIRST}..{}", FIRST + SPAN);
+}
+
 /// A base URL nothing listens on, for the connect-failure path.
 pub fn dead_base() -> String {
     "http://127.0.0.1:1".to_string()

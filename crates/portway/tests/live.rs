@@ -1,5 +1,8 @@
 //! The feature-independent CLI socket against real delayed/streaming TCP, plus
 //! an attached terminal that can leave without cancelling the serving process.
+
+mod common;
+
 use std::future::Future;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -64,9 +67,7 @@ impl Server {
         if block_socket {
             std::fs::write(dir.join(live::SOCKET_FILE), "keep").unwrap();
         }
-        let free = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = free.local_addr().unwrap().port();
-        drop(free);
+        let port = common::free_port();
         let child = Command::new(BIN)
             .args(["--config"])
             .arg(dir.join("config.toml"))

@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use bytes::Bytes;
-use common::{Fwd, Health, Reply, upstream};
+use common::{Fwd, Health, Reply, free_port, upstream};
 use portway::store::{DB_FILE, PID_FILE};
 use rusqlite::{Connection, OpenFlags};
 
@@ -29,12 +29,6 @@ fn data_dir(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("portway-daemon-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     dir
-}
-
-/// A port nothing is listening on, for the daemon to bind.
-fn free_port() -> u16 {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    listener.local_addr().unwrap().port()
 }
 
 fn write_config(dir: &Path, upstreams: &str) -> PathBuf {

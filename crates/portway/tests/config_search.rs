@@ -5,11 +5,15 @@
 //! different loopback port; the daemon's `listening on` line betrays which
 //! one was read.
 
-const BIN: &str = env!("CARGO_BIN_EXE_portway");
+mod common;
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
+
+use common::free_port;
+
+const BIN: &str = env!("CARGO_BIN_EXE_portway");
 
 fn sandbox(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("portway-cfg-{}-{name}", std::process::id()));
@@ -23,14 +27,6 @@ fn write(path: &Path, body: &str) {
         std::fs::create_dir_all(parent).unwrap();
     }
     std::fs::write(path, body).unwrap();
-}
-
-fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
 }
 
 fn single(port: u16) -> String {
