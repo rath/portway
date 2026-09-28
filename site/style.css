@@ -51,7 +51,7 @@ code, pre, output, .bytes, [data-counter] {
   font-feature-settings: "liga" 0, "calt" 0;
 }
 code { font-size: 0.9em; }
-p code, li code, dd code { white-space: nowrap; }
+:is(p, li, dd) code:not(pre code) { white-space: nowrap; }
 
 .skip {
   position: absolute; left: var(--gutter); top: -100px;
