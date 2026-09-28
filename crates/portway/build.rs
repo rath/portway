@@ -1,14 +1,22 @@
-//! Stamps the build with a version that moves on every commit.
+//! Stamps the build with a version that names the exact commit it came from.
 //!
 //! `CARGO_PKG_VERSION` alone is useless for a binary that is deployed by hand:
-//! it stays `0.1.0` until someone edits the manifest, so the receiver host and
-//! the sender host both report the same string no matter how far apart their
-//! builds are. Git is the only thing that moves here, so the commit count and
-//! the short hash become the version.
+//! it stays the same between releases, so two hosts report the same string no
+//! matter how far apart their builds are. Releases are tagged `v<version>`, and
+//! `git describe` measures the distance from the latest one:
 //!
-//! The number is monotonic on the default branch (a rewritten history keeps its
-//! count), which makes it usable for "is the receiver older than the sender?".
+//! ```text
+//! 0.1.0                  the tagged release itself
+//! 0.1.0+5.g1a2b3c4       five commits after it, at 1a2b3c4
+//! 0.1.0+5.g1a2b3c4.dirty the same, with uncommitted changes
+//! ```
+//!
+//! Everything after `+` is SemVer build metadata, so a release compares equal
+//! to its own tag. Without a tag in reach (a shallow clone) the hash alone
+//! follows the manifest's version; without git (a source tarball) the
+//! manifest's version is all there is.
 
+use std::path::Path;
 use std::process::Command;
 
 fn git(args: &[&str]) -> Option<String> {
@@ -21,34 +29,70 @@ fn git(args: &[&str]) -> Option<String> {
     (!text.is_empty()).then_some(text)
 }
 
+/// `v0.1.0-5-g1a2b3c4` as the release, the distance, and the hash.
+fn describe() -> Option<(String, u32, String)> {
+    let text = git(&[
+        "describe",
+        "--tags",
+        "--long",
+        "--abbrev=7",
+        "--match",
+        "v[0-9]*",
+    ])?;
+    let mut parts = text.rsplitn(3, '-');
+    let hash = parts.next()?.to_string();
+    let distance = parts.next()?.parse().ok()?;
+    let release = parts.next()?.strip_prefix('v')?.to_string();
+    Some((release, distance, hash))
+}
+
 fn main() {
-    // `--always` keeps this working in a shallow clone and a source tarball,
-    // where the count is missing but a hash usually is.
-    let count = git(&["rev-list", "--count", "HEAD"]);
-    let hash = git(&["rev-parse", "--short=7", "HEAD"]);
+    let manifest = std::env::var("CARGO_PKG_VERSION").unwrap_or_else(|_| "0.0.0".into());
     let dirty =
         git(&["status", "--porcelain", "--untracked-files=no"]).is_some_and(|s| !s.is_empty());
 
-    let base = std::env::var("CARGO_PKG_VERSION").unwrap_or_else(|_| "0.0.0".into());
-    let version = match (count, hash) {
-        (Some(count), Some(hash)) => {
-            // Keep the manifest's major.minor (the human-facing release line)
-            // and let the commit count supply the patch: 0.1.<commits>.
-            let mut parts = base.split('.');
-            let major = parts.next().unwrap_or("0");
-            let minor = parts.next().unwrap_or("0");
-            let mut v = format!("{major}.{minor}.{count}+{hash}");
-            if dirty {
-                v.push_str(".dirty");
+    let mut metadata = Vec::new();
+    let release = match describe() {
+        Some((release, distance, hash)) => {
+            if distance > 0 {
+                metadata.push(distance.to_string());
+                metadata.push(hash);
+            } else if release != manifest {
+                println!(
+                    "cargo:warning=tag v{release} is on a commit whose Cargo.toml says {manifest}"
+                );
             }
-            v
+            release
         }
-        _ => base,
+        None => {
+            if let Some(hash) = git(&["rev-parse", "--short=7", "HEAD"]) {
+                metadata.push(format!("g{hash}"));
+            }
+            manifest
+        }
+    };
+    if dirty {
+        metadata.push("dirty".into());
+    }
+    let version = if metadata.is_empty() {
+        release
+    } else {
+        format!("{release}+{}", metadata.join("."))
     };
 
     println!("cargo:rustc-env=PORTWAY_VERSION={version}");
-    // A new commit must re-run this, or the stamped version goes stale.
-    println!("cargo:rerun-if-changed=../../.git/HEAD");
-    println!("cargo:rerun-if-changed=../../.git/refs/heads");
+    // A new commit or a new tag must re-run this, or the stamped version goes
+    // stale. A path that does not exist would re-run it on every build, so
+    // only the ones this checkout has are watched.
+    for path in [
+        "../../.git/HEAD",
+        "../../.git/refs/heads",
+        "../../.git/refs/tags",
+        "../../.git/packed-refs",
+    ] {
+        if Path::new(path).exists() {
+            println!("cargo:rerun-if-changed={path}");
+        }
+    }
     println!("cargo:rerun-if-env-changed=PORTWAY_VERSION");
 }
