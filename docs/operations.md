@@ -218,6 +218,16 @@ portway --daemon --web --web-host 0.0.0.0 --web-allow-host sender-host
 # portway: console at http://sender-host:8790/#token=…
 ```
 
+To publish the console through a reverse proxy at a subpath, pass the path
+with `--web-base-path`, such as `--web-base-path /portway`. The console then
+emits its assets and API calls under that prefix and answers 404 outside it,
+so the proxy forwards the path unchanged instead of stripping it. The `Host`
+the proxy forwards must be one the console answers to: rewrite it, or name the
+public host with `--web-allow-host`. The console accepts a request only from
+its own origin, `http://` plus that `Host`, so the proxy must also rewrite
+`Origin` to that value, even when the browser reached the proxy over HTTPS.
+Without the `Origin` rewrite every page loads but signing in fails with 403.
+
 `--daemon --web` hosts the console in the daemon without opening a browser. The
 launcher prints the links next to the log path, `--status` prints them again while the console runs, and they
 are kept in `portway.web` (mode 0600) in the data directory. The log only ever
@@ -242,7 +252,8 @@ The keys match the terminal dashboard (`q` asks before stopping; a second `q`
 confirms), with `/` for search, `?` for the key list and ⌘K or Ctrl-K for every
 command. Desktop notifications for trouble in a background tab are opt-in.
 
-`--web`, `--web-host`, `--web-port`, `--web-allow-host` and `--no-open` are absent in builds without
+`--web`, `--web-host`, `--web-port`, `--web-allow-host`, `--web-base-path` and
+`--no-open` are absent in builds without
 the `web` feature. See [security](../SECURITY.md#web-console) before binding the
 console to anything other than loopback.
 

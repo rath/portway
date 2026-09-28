@@ -80,9 +80,9 @@ pub struct Args {
     pub web_allow_host: Vec<String>,
     /// Serve the console under this URL prefix instead of the root, for a
     /// reverse proxy that publishes it at a subpath, such as
-    /// `--web-base-path /portway`. The proxy still strips the prefix before
-    /// forwarding; the console then emits its own assets and API calls under
-    /// that same prefix, so the browser stays inside it.
+    /// `--web-base-path /portway`. The proxy forwards the path unchanged: the
+    /// console takes the prefix off each request itself, emits its own assets
+    /// and API calls under it, and answers 404 outside it.
     #[cfg(feature = "web")]
     #[arg(
         long,
