@@ -1,0 +1,56 @@
+<!doctype html>
+<!--
+  Source of site/og.png, the 1200x630 social preview for https://portway.told.me/.
+  The numbers are the 40-turn replay on the page itself. Render with:
+
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new \
+      --hide-scrollbars --window-size=1200,630 --virtual-time-budget=8000 \
+      --screenshot=site/og.png "file://$PWD/scripts/og-card.html"
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=Fragment+Mono&display=block">
+<style>
+  :root {
+    --ground: #0f1820; --rule: #263846; --ink: #e3eaef; --ink-dim: #97a9b6;
+    --raw: #6f9cf2; --zstd: #9d8ccc; --wire: #2cc3a3;
+    --sans: "Archivo", sans-serif; --mono: "Fragment Mono", monospace;
+  }
+  html, body { margin: 0; width: 1200px; height: 630px; overflow: hidden; }
+  body {
+    background: var(--ground); color: var(--ink); font-family: var(--sans);
+    padding: 64px 72px; box-sizing: border-box;
+    display: flex; flex-direction: column;
+  }
+  .brand { display: flex; align-items: center; gap: 16px; font-size: 34px; font-weight: 700; font-stretch: 110%; }
+  .brand svg { width: 48px; height: 48px; }
+  h1 {
+    margin: 40px 0 0; font-size: 62px; line-height: 1.04; font-weight: 800;
+    font-stretch: 88%; letter-spacing: -0.01em; max-width: 24ch;
+  }
+  .bars { margin-top: auto; display: grid; grid-template-columns: 250px 1fr 140px; gap: 14px 24px; align-items: center; }
+  .bars span { font-size: 24px; color: var(--ink-dim); }
+  .bars b { font-family: var(--mono); font-weight: 400; font-size: 26px; text-align: right; }
+  .bar { height: 22px; border-radius: 3px; }
+  .raw  { background: var(--raw);  width: 100%; }
+  .zstd { background: var(--zstd); width: 22.4%; }
+  .wire { background: var(--wire); width: 0.73%; min-width: 6px; }
+  .wire-n { color: var(--wire); }
+  footer { margin-top: 28px; padding-top: 18px; border-top: 1px solid var(--rule); display: flex; justify-content: space-between; font-size: 22px; color: var(--ink-dim); }
+</style>
+</head>
+<body>
+  <div class="brand">
+    <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7" fill="#1d5fd0"/><path d="M6 23 L12 9 L18 23 L24 9" fill="none" stroke="#fff" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    Portway
+  </div>
+  <h1>Your coding agent resends its whole conversation every turn.</h1>
+  <div class="bars">
+    <span>Sent by the agent</span><div class="bar raw"></div><b>13.2 MiB</b>
+    <span>zstd alone</span><div class="bar zstd"></div><b>3.0 MiB</b>
+    <span>Portway on the wire</span><div class="bar wire"></div><b class="wire-n">99 KiB</b>
+  </div>
+  <footer><span>One 40-turn session, replayed through the real binaries</span><span>portway.told.me</span></footer>
+</body>
+</html>
