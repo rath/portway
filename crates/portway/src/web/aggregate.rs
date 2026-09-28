@@ -94,6 +94,19 @@ impl Shared {
             .send(Frame::Control(Arc::from(control.to_string())));
     }
 
+    /// Seed every subscriber, including one connecting between two flight
+    /// changes. The periodic publisher only emits when progress changes.
+    pub fn flights(&self) -> Option<String> {
+        let inner = self.inner.lock().expect("web board");
+        inner
+            .router
+            .as_ref()
+            .filter(|_| !self.recorded)
+            .map(|router| {
+                api::flights(logfmt::epoch(), &router.telemetry().flights().views()).to_string()
+            })
+    }
+
     /// Everything a page needs to draw its first frame. `header` is fixed at
     /// start and completed here with what moves.
     pub fn snapshot(&self, mut header: Value) -> String {

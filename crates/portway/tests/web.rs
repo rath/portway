@@ -82,11 +82,15 @@ impl Drop for StopDaemon {
 
 /// A foreground `--web`, with stderr read until the console line appears.
 fn spawn_console(dir: &Path, args: &[&str]) -> (Reap, Launched) {
+    spawn_console_port(dir, args, "0")
+}
+
+fn spawn_console_port(dir: &Path, args: &[&str], web_port: &str) -> (Reap, Launched) {
     let mut child = Command::new(BIN)
         .args(args)
         .arg("--data-dir")
         .arg(dir)
-        .args(["--web", "--web-port", "0"])
+        .args(["--web", "--web-port", web_port])
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
@@ -781,3 +785,7 @@ async fn a_base_path_keeps_the_console_inside_its_prefix() {
     assert!(exited(&mut child, Duration::from_secs(10)).is_some());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[cfg(feature = "tui")]
+#[path = "common/remote.rs"]
+mod remote_tests;

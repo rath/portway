@@ -194,8 +194,9 @@ portway --stop
 ```
 
 Builds with `--features tui` or `web` add `--tui` and `--web`, dashboards that
-attach to a running daemon or host the forwarder themselves. The CLI records
-request metadata in SQLite, never bodies, credentials, cookies, or dictionary
+attach to a running daemon or host the forwarder themselves. Use
+`portway --tui --attach https://console.example/portway/` to view a remote
+web console from your local terminal. The CLI records request metadata in SQLite, never bodies, credentials, cookies, or dictionary
 contents. See [operations](docs/operations.md) for the data directory, reload,
 health checks, and the web console.
 

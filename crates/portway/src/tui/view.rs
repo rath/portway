@@ -142,6 +142,17 @@ pub fn draw(frame: &mut Frame, state: &State, header: &Header) {
     let area = frame.area();
     if state.usage_open {
         usage_screen(frame, state, area);
+        if state
+            .remote
+            .as_ref()
+            .is_some_and(|remote| !remote.connected)
+            && area.height > 0
+        {
+            frame.render_widget(
+                footer(state),
+                Rect::new(area.x, area.bottom() - 1, area.width, 1),
+            );
+        }
         return;
     }
     let Some(panes) = panes(area, state.models.len()) else {
@@ -533,21 +544,39 @@ fn hud<'a>(state: &State, header: &'a Header) -> Paragraph<'a> {
         Span::styled(header.listen.clone(), Style::default().fg(WIRE)),
         Span::raw("  "),
     ];
-    title.extend(stat(
-        "up",
-        uptime(
+    let up = state
+        .remote
+        .as_ref()
+        .map(|remote| {
+            remote.uptime
+                + if remote.connected {
+                    remote.sampled.elapsed().as_secs_f64()
+                } else {
+                    0.0
+                }
+        })
+        .map(|up| up as u64)
+        .unwrap_or_else(|| {
             state
                 .coverage
                 .unwrap_or_else(|| state.started.elapsed())
-                .as_secs(),
-        ),
-        TIME,
-    ));
+                .as_secs()
+        });
+    title.extend(stat("up", uptime(up), TIME));
     // A window cannot see the compressor this process never asked for; the
     // slot says what it is instead: how wide the window it reads is.
-    match header.watching {
-        Some(span) => title.extend(stat("watching", logfmt::span(span), GOOD)),
-        None => title.extend(stat("coding", header.coding.clone(), GOOD)),
+    if let Some(remote) = &state.remote {
+        title.extend(stat(
+            "remote",
+            remote.message.clone(),
+            if remote.connected { GOOD } else { TIME },
+        ));
+        title.extend(stat("coding", remote.coding.clone(), GOOD));
+    } else {
+        match header.watching {
+            Some(span) => title.extend(stat("watching", logfmt::span(span), GOOD)),
+            None => title.extend(stat("coding", header.coding.clone(), GOOD)),
+        }
     }
     title.extend(stat("models", state.models.len().to_string(), Color::Reset));
 
@@ -652,18 +681,30 @@ fn hud<'a>(state: &State, header: &'a Header) -> Paragraph<'a> {
         Color::Reset,
     ));
 
-    let quantile = |samples: &_, q| {
-        percentile(samples, q)
-            .map(human_time)
-            .unwrap_or_else(|| "-".to_string())
+    let quantile = |samples: &_, q, remote: Option<f64>| {
+        (if state.remote.is_some() {
+            remote
+        } else {
+            percentile(samples, q)
+        })
+        .map(human_time)
+        .unwrap_or_else(|| "-".to_string())
     };
     let mut latency = vec![Span::styled(" LATENCY  ", Style::default().fg(DIM))];
     latency.extend(stat(
         "ttfb p50/p95",
         format!(
             "{} / {}",
-            quantile(&state.ttfb, 0.5),
-            quantile(&state.ttfb, 0.95)
+            quantile(
+                &state.ttfb,
+                0.5,
+                state.remote.as_ref().and_then(|r| r.latency.ttfb.p50)
+            ),
+            quantile(
+                &state.ttfb,
+                0.95,
+                state.remote.as_ref().and_then(|r| r.latency.ttfb.p95)
+            )
         ),
         TIME,
     ));
@@ -671,16 +712,27 @@ fn hud<'a>(state: &State, header: &'a Header) -> Paragraph<'a> {
         "upload p50/p95",
         format!(
             "{} / {}",
-            quantile(&state.upload, 0.5),
-            quantile(&state.upload, 0.95)
+            quantile(
+                &state.upload,
+                0.5,
+                state.remote.as_ref().and_then(|r| r.latency.upload.p50)
+            ),
+            quantile(
+                &state.upload,
+                0.95,
+                state.remote.as_ref().and_then(|r| r.latency.upload.p95)
+            )
         ),
         TIME,
     ));
     latency.extend(stat(
         "handshake avg",
-        mean(&state.handshake)
-            .map(human_time)
-            .unwrap_or_else(|| "-".to_string()),
+        (match &state.remote {
+            Some(remote) => remote.latency.handshake_mean,
+            None => mean(&state.handshake),
+        })
+        .map(human_time)
+        .unwrap_or_else(|| "-".to_string()),
         TIME,
     ));
 
@@ -767,7 +819,12 @@ fn models_table(state: &State, width: u16) -> Table<'_> {
         }
         if show_status {
             cells.push(Cell::from(Span::styled(
-                compression_status(view),
+                state
+                    .remote
+                    .as_ref()
+                    .and_then(|r| r.statuses.get(&row.name))
+                    .cloned()
+                    .unwrap_or_else(|| compression_status(view)),
                 Style::default().fg(TIME),
             )));
         }
@@ -847,11 +904,17 @@ fn usage_screen(frame: &mut Frame, state: &State, area: Rect) {
     let notes = usage_notes(table);
     // Both ends carry their date: a window that is over ends at a midnight,
     // and `00:00:00` alone would not say which one.
-    let title = format!(
-        "usage — {} .. {}",
-        logfmt::datetime(table.since),
-        logfmt::datetime(table.until)
-    );
+    let title = state
+        .remote
+        .as_ref()
+        .and_then(|r| r.usage_title.clone())
+        .unwrap_or_else(|| {
+            format!(
+                "usage — {} .. {}",
+                logfmt::datetime(table.since),
+                logfmt::datetime(table.until)
+            )
+        });
     let block = Block::bordered()
         .title_top(titled(&title))
         .border_style(Style::default().fg(DIM))
@@ -1531,6 +1594,12 @@ fn events(state: &State, width: u16) -> Paragraph<'static> {
 }
 
 fn footer(state: &State) -> Paragraph<'static> {
+    if let Some(remote) = &state.remote
+        && !remote.connected
+    {
+        return Paragraph::new(format!(" q close · {}", remote.message))
+            .style(Style::default().fg(TIME));
+    }
     if state.confirm_quit {
         return Paragraph::new(Line::from(Span::styled(
             format!(

@@ -211,6 +211,7 @@ impl Filter {
 }
 
 pub struct State {
+    pub remote: Option<crate::remote::wire::RemoteState>,
     pub prices: crate::config::Prices,
     entries: VecDeque<Row>,
     /// Sequence numbers of the entries the current filter admits, in order.
@@ -261,6 +262,7 @@ pub struct State {
 impl State {
     pub fn new() -> Self {
         State {
+            remote: None,
             prices: Default::default(),
             entries: VecDeque::new(),
             filtered: VecDeque::new(),
@@ -292,7 +294,9 @@ impl State {
     }
 
     pub fn push(&mut self, event: Event) {
-        self.board.observe(&event);
+        if self.remote.is_none() {
+            self.board.observe(&event);
+        }
         let entry = match event {
             Event::Log {
                 stamp,
@@ -322,6 +326,168 @@ impl State {
             }
         }
         self.entries.push_back(Row { seq, entry });
+    }
+
+    /// Remote events populate the list only; counters and charts are absolute
+    /// values from the console, not a second tally of its event backlog.
+    pub fn apply_remote(&mut self, update: crate::remote::Update) {
+        use crate::remote::{Update, wire};
+        match update {
+            Update::Snapshot(snapshot) => {
+                self.entries.clear();
+                self.filtered.clear();
+                self.next_seq = 0;
+                self.cursor = 0;
+                self.top = 0;
+                self.detail = false;
+                for event in snapshot.events {
+                    self.push(event.into_event());
+                }
+                let remote = self.remote.as_mut().expect("remote feed");
+                remote.seq = snapshot.seq;
+                remote.generation = snapshot.generation;
+                remote.coding = if snapshot.header.mode == "attached" {
+                    "attached console".into()
+                } else {
+                    snapshot.header.coding
+                };
+                remote.uptime = snapshot.header.uptime_s;
+                remote.sampled = Instant::now();
+                remote.bars_total = snapshot.bars_total;
+                remote.traffic(snapshot.traffic, true);
+                self.board.bars = snapshot
+                    .bars
+                    .into_iter()
+                    .rev()
+                    .take(BARS)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect();
+                self.remote_metrics(snapshot.metrics);
+                self.apply_remote(Update::Flights(snapshot.flights));
+            }
+            Update::Tick(tick) => {
+                let remote = self.remote.as_mut().expect("remote feed");
+                remote.uptime = tick.uptime_s;
+                remote.sampled = Instant::now();
+                wire::append_bars(
+                    &mut self.board.bars,
+                    remote.bars_total,
+                    tick.bars_total,
+                    tick.bars_push,
+                );
+                remote.bars_total = tick.bars_total;
+                remote.traffic(tick.traffic_tail, false);
+                self.remote_metrics(tick.metrics);
+            }
+            Update::Event(event) => {
+                let remote = self.remote.as_mut().expect("remote feed");
+                if event.seq <= remote.seq {
+                    return;
+                }
+                remote.seq = event.seq;
+                if let wire::EventData::Request(record) = &event.data
+                    && let Some(id) = record.flight
+                {
+                    remote.original_flights.retain(|flight| flight.id != id);
+                }
+                self.push(event.into_event());
+            }
+            Update::Flights(flights) => {
+                self.flights_available = flights.is_some();
+                if let Some(flights) = flights {
+                    self.board.totals.in_flight = flights.total;
+                    self.flights = flights
+                        .list
+                        .into_iter()
+                        .take(crate::live::MAX_FLIGHTS)
+                        .map(|flight| flight.0)
+                        .collect();
+                } else {
+                    self.flights.clear();
+                }
+                let remote = self.remote.as_mut().expect("remote feed");
+                remote.original_flights = self.flights.clone();
+                remote.flights_at = Instant::now();
+            }
+            Update::Usage(range, result) => {
+                if !self.usage_open || range != self.usage_range {
+                    return;
+                }
+                match result {
+                    Ok(usage) => {
+                        self.remote.as_mut().expect("remote feed").usage_title = Some(usage.title);
+                        self.usage = Some(usage.table);
+                        self.usage_error = None;
+                    }
+                    Err(error) => {
+                        self.usage = None;
+                        self.usage_error = Some(error);
+                    }
+                }
+            }
+            Update::Connection(connected, message) => {
+                let remote = self.remote.as_mut().expect("remote feed");
+                remote.connected = connected;
+                remote.message = message;
+                if !connected {
+                    remote.original_flights.clear();
+                    self.flights.clear();
+                    self.flights_available = false;
+                }
+            }
+        }
+    }
+
+    fn remote_metrics(&mut self, metrics: crate::remote::wire::Metrics) {
+        self.board.totals = metrics.totals;
+        self.board.seen = metrics.counts.seen;
+        self.board.ok = metrics.counts.ok;
+        self.board.redirected = metrics.counts.redirected;
+        self.board.client_errors = metrics.counts.client_errors;
+        self.board.server_errors = metrics.counts.server_errors;
+        self.board.reused = metrics.counts.reused;
+        self.board.truncated = metrics.counts.truncated;
+        self.board.coverage = metrics
+            .coverage
+            .and_then(|n| Duration::try_from_secs_f64(n).ok());
+        let remote = self.remote.as_mut().expect("remote feed");
+        remote.latency = metrics.latency;
+        remote.statuses.clear();
+        self.board.models = metrics
+            .models
+            .into_iter()
+            .map(|model| {
+                let status = model.status.clone();
+                let row = model.into_row();
+                remote.statuses.insert(row.name.clone(), status);
+                row
+            })
+            .collect();
+        self.board
+            .traffic
+            .load(&remote.traffic.iter().copied().collect::<Vec<_>>());
+    }
+
+    /// The server sends flight updates when progress changes. Ages advance
+    /// from receipt using a monotonic clock, independent of clock skew.
+    pub fn advance_remote(&mut self) {
+        let Some(remote) = &self.remote else { return };
+        if !remote.connected || !self.flights_available {
+            return;
+        }
+        let elapsed = remote.flights_at.elapsed().as_secs_f64();
+        self.flights = remote
+            .original_flights
+            .iter()
+            .cloned()
+            .map(|mut flight| {
+                flight.age += elapsed;
+                flight.idle += elapsed;
+                flight
+            })
+            .collect();
     }
 
     pub fn tick(&mut self, router: &Router) {
@@ -367,6 +533,9 @@ impl State {
     /// Re-read the day while the screen is up: the counts move as answers land,
     /// and a screen that quietly went stale is the one thing it must not be.
     pub fn refresh_usage(&mut self) {
+        if self.remote.is_some() {
+            return;
+        }
         if !self.usage_open
             || self
                 .usage_read
@@ -388,6 +557,11 @@ impl State {
     /// midnight to now, the day before, or a week of days — rather than the
     /// last N hours, half of which would be a different day's traffic.
     fn read_usage(&mut self) {
+        if self.remote.is_some() {
+            self.usage = None;
+            self.usage_error = Some("loading remote usage…".into());
+            return;
+        }
         let Some(db) = self.db.clone() else {
             self.usage = None;
             self.usage_error = Some("no database to read: none was passed in".to_string());

@@ -60,6 +60,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("portway: --tui needs a terminal on stdout");
         std::process::exit(2);
     }
+    #[cfg(feature = "tui")]
+    if let Some(url) = &args.attach {
+        if args.mode != Mode::Forward {
+            return Err("--attach cannot be combined with receive".into());
+        }
+        return portway::remote::run(url, &args);
+    }
     logfmt::init_color();
     // The daemon moves to `/`, and SIGHUP reloads with these same arguments:
     // pin both paths now, so a reload rereads the file this start read

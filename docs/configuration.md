@@ -383,6 +383,7 @@ Choose mode and operations with CLI arguments:
 | `--daemon` | Start in the background |
 | `--status`, `--reload`, `--stop` | Control the daemon in the selected data directory |
 | `--tui` | Start a dashboard or attach to an existing local instance; optional build feature |
+| `--tui --attach URL` | View a remote web console over HTTP/HTTPS; prompts for its token once and remembers the session |
 | `--web` | Serve the dashboard in a browser, or attach to an existing local instance; combines with `--daemon`; optional build feature |
 | `--web-host HOST`, `--web-port PORT` | Where the console listens; default `127.0.0.1` and `8790`, `0` for a free port |
 | `--web-allow-host NAME` | A name the console answers to besides `localhost` and IP addresses; repeat or separate with commas. `--web-host` counts when it is a name |

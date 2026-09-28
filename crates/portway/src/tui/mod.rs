@@ -71,6 +71,10 @@ impl Drop for TerminalGuard {
 /// Where the 250ms sample comes from: the counters this process keeps in the
 /// request path, or the window of a forwarder it is watching instead.
 pub enum Feed {
+    Remote {
+        updates: Mutex<tokio::sync::mpsc::Receiver<crate::remote::Update>>,
+        usage: tokio::sync::watch::Sender<Option<spend::Range>>,
+    },
     Live(Arc<Router>),
     Recorded {
         window: Arc<Mutex<watch::Window>>,
@@ -296,7 +300,11 @@ fn run(
     state.prices = settings.prices.clone();
     state.columns = settings.columns;
     state.db = db.map(Path::to_path_buf);
-    state.recorded = matches!(feed, Feed::Recorded { .. });
+    state.recorded = !matches!(feed, Feed::Live(_));
+    if matches!(feed, Feed::Remote { .. }) {
+        state.remote = Some(Default::default());
+        state.flights_available = false;
+    }
     // Whatever is already queued — a watching dashboard starts with an hour of
     // it — is on the first frame rather than the one after it.
     for event in events.try_iter() {
@@ -347,6 +355,26 @@ fn run(
 /// One sample of whichever counters this dashboard is drawing.
 fn tick(state: &mut State, feed: &Feed) {
     match feed {
+        Feed::Remote { updates, usage } => {
+            // Bound work per redraw even when the server is very busy.
+            let mut updates = updates.lock().unwrap();
+            for _ in 0..256 {
+                let Ok(update) = updates.try_recv() else {
+                    break;
+                };
+                state.apply_remote(update);
+            }
+            state.advance_remote();
+            let range = state.usage_open.then_some(state.usage_range);
+            usage.send_if_modified(|value| {
+                if *value == range {
+                    false
+                } else {
+                    *value = range;
+                    true
+                }
+            });
+        }
         Feed::Live(router) => state.tick(router),
         Feed::Recorded { window, live } => {
             state.tick_recorded(&window.lock().unwrap());

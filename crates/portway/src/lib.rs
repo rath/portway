@@ -18,6 +18,8 @@ pub mod control;
 pub mod daemon;
 pub mod live;
 pub mod logfmt;
+#[cfg(feature = "tui")]
+pub mod remote;
 pub mod report;
 pub mod request_log;
 #[cfg(any(feature = "tui", feature = "web"))]

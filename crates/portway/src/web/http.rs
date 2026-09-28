@@ -259,6 +259,7 @@ fn stream(app: &Arc<App>, after: u64) -> Response<WebBody> {
     let guard = StreamSlot(Arc::clone(app));
     let (sender, receiver) = mpsc::channel::<Bytes>(64);
     let resumed = app.shared.resume(after);
+    let flights = app.shared.flights();
     let mut closing = app.closing.clone();
     tokio::spawn(async move {
         let _slot = guard;
@@ -282,6 +283,11 @@ fn stream(app: &Arc<App>, after: u64) -> Response<WebBody> {
                 return;
             }
             last = seq;
+        }
+        if let Some(flights) = flights
+            && sender.send(sse("flights", None, &flights)).await.is_err()
+        {
+            return;
         }
         let mut ping = tokio::time::interval_at(tokio::time::Instant::now() + PING, PING);
         loop {

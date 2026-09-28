@@ -9,7 +9,7 @@ description = "A compression-first HTTP forwarder"
 
 [features]
 default = []
-tui = ["dep:ratatui"]
+tui = ["dep:ratatui", "dep:bytes", "dep:hyper"]
 web = ["dep:bytes", "dep:http-body", "dep:hyper", "dep:hyper-util"]
 
 [dependencies]

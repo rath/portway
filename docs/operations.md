@@ -163,6 +163,53 @@ provide recorded history; restart them with the new binary to enable live
 attach. An attached viewer's `q` only closes the viewer, even during active
 requests. Web attach continues to show recorded history only.
 
+### Remote terminal dashboard
+
+Run the TUI locally and point it at the remote daemon's **web console URL**:
+
+```sh
+portway --tui --attach https://console.example/portway/
+```
+
+The remote daemon must have `--web` enabled; the local binary only needs the
+`tui` feature. HTTP and HTTPS are supported, including a console published
+under `--web-base-path`. Use the console address, not the forwarding port.
+An existing reverse proxy keeps its path and Host/Origin rewrites unchanged.
+HTTPS uses the same certificate verification as Portway's upstream client;
+redirects are not followed.
+
+On the first connection, paste just the console token at the hidden prompt.
+Use the current token from the remote console's launch URL or its private
+`portway.web` file. Do not put a token in the `--attach` argument. The viewer
+exchanges it for a session and stores **only the session cookie**, with mode
+`0600`, in `<data-dir>/remote-sessions.json`. Sessions are isolated by scheme,
+host, port, and URL prefix. Later connections to that URL need no prompt.
+
+A daemon restart invalidates its sessions. An open viewer then restores the
+terminal and exits with a message to reconnect and enter the new token; the
+expired saved session is removed. To forget saved sessions yourself, remove
+`remote-sessions.json` while no remote viewer is running.
+
+Counters, latency, charts and active requests come from the remote console.
+The event pane loads up to the latest 10,000 events the console still retains
+in memory, then follows its event stream; this is not an export of its SQLite
+history. Usage (`u`) and cost breakdown (`p`) query the remote database through
+the console API, using the remote server's prices and calendar boundaries.
+A console that itself runs in attached mode cannot supply in-flight requests;
+the TUI displays them as unavailable.
+
+On a network interruption, the viewer marks its retained data as stale, clears
+its active-request list, and reconnects with a delay from 2 to 30 seconds.
+A fresh snapshot restores counters, charts and events without adding the
+same requests twice. `q` and Ctrl-C only close the viewer; they never stop the
+remote daemon or interrupt its requests.
+
+`--data-dir` chooses where the viewer stores its session and display settings,
+and `--event-columns` still works. Remote attach does not load the local
+`portway.toml`, read or create a local database, probe a local daemon, or bind a
+forwarding port. Server options such as `--config`, `--host`, `--port`, and
+`--upstream` cannot be combined with `--attach`.
+
 | Key | Action |
 | --- | --- |
 | `q` | Quit; a live server asks before interrupting active relays |

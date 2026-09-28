@@ -7,6 +7,13 @@ version may contain breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- `portway --tui --attach URL` views a remote web console over HTTP/HTTPS,
+  including its live requests, recent events, charts, usage and costs. It
+  remembers an owner-only session after hidden token entry, reconnects after
+  network interruptions, and leaves the remote daemon running when closed.
+
 ### Fixed
 
 - The TUI's in-flight dialog stands apart from the dashboard with a muted

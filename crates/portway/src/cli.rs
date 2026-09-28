@@ -43,6 +43,13 @@ pub struct Args {
     #[cfg_attr(feature = "tui", arg(long, group = "operation"))]
     #[cfg_attr(not(feature = "tui"), arg(skip))]
     pub tui: bool,
+    /// Attach this terminal to a remote web console, including its URL prefix.
+    #[cfg(feature = "tui")]
+    #[arg(long, value_name = "URL", requires = "tui", conflicts_with_all = [
+        "config", "upstream", "host", "port", "coding", "level", "dict",
+        "min_bytes", "max_body_bytes", "probe_path", "retention_days"
+    ])]
+    pub attach: Option<String>,
     #[cfg(feature = "tui")]
     #[arg(long,value_name="LIST",value_delimiter=',',value_parser=column,requires="tui")]
     pub event_columns: Option<Vec<Column>>,
@@ -235,6 +242,44 @@ mod tests {
         #[cfg(not(feature = "web"))]
         assert!(Args::try_parse_from(["portway", "--web"]).is_err());
     }
+    #[cfg(feature = "tui")]
+    #[test]
+    fn remote_attach_requires_a_viewer_and_rejects_server_options() {
+        let url = "https://console.example/portway/";
+        assert_eq!(
+            Args::try_parse_from(["portway", "--tui", "--attach", url])
+                .unwrap()
+                .attach
+                .as_deref(),
+            Some(url)
+        );
+        assert!(Args::try_parse_from(["portway", "--attach", url]).is_err());
+        for (key, value) in [
+            ("--host", "127.0.0.1"),
+            ("--port", "1"),
+            ("--config", "config.toml"),
+            ("--upstream", "http://localhost"),
+            ("--retention-days", "2"),
+        ] {
+            assert!(
+                Args::try_parse_from(["portway", "--tui", "--attach", url, key, value]).is_err()
+            );
+        }
+        assert!(
+            Args::try_parse_from([
+                "portway",
+                "--tui",
+                "--attach",
+                url,
+                "--data-dir",
+                "/tmp/viewer",
+                "--event-columns",
+                "time,model"
+            ])
+            .is_ok()
+        );
+    }
+
     #[test]
     fn report_window_is_bounded_and_positive() {
         assert_eq!(
