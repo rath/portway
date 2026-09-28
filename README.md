@@ -1,65 +1,41 @@
 # Portway
 
-**Send only what changed.** Portway is an HTTP forwarder for LLM agents whose
-context grows with every turn. With a Portway receiver on the other side, each
-request travels as a small delta against the one before it.
+Portway is a local HTTP proxy that sits between a coding agent and the LLM API
+it talks to. When the other end runs `portway receive`, each request crosses
+the network as the difference from the previous one instead of as the whole
+conversation again. On a 1 MiB context, a turn that would upload about 1 MiB
+uploads about 1 KiB.
 
-## Why
+**Both ends must take part.** The agent-side Portway compresses only when its
+destination advertises the Portway protocol. That destination is `portway
+receive`, run on a host you control in front of your own service or of a hosted
+provider API, or any server implementing the [protocol](docs/protocol.md).
+Pointed straight at a provider that runs neither, Portway forwards the request
+unchanged and uncompressed.
 
-A coding agent resends its whole conversation on every turn: the system
-prompt, every earlier message, and every tool result. Turn N is turn N-1 plus
-a few kilobytes, yet the entire body is uploaded again. Across a session the
-upload volume grows with the square of the number of turns, and a slow or
-metered link pays for it on every request.
+## Who it is for
 
-Portway keeps the last request body that the receiver confirmed it stored and
-compresses the next request against it. What crosses the network is the new
-part, zstd-compressed, plus a 40-byte header naming the previous body.
+A coding agent resends its whole conversation on every turn: the system prompt,
+every earlier message, and every tool result. Turn N is turn N-1 plus a few
+kilobytes, yet the entire body is uploaded again, so the upload volume of a
+session grows with the square of the number of turns. Portway helps where that
+upload is what you wait or pay for:
 
-## Measured
+- a self-hosted model server, or a gateway you run, in another region;
+- a remote development machine, or a laptop on a slow or metered link;
+- any long agent session whose requests grow append-only.
 
-[`scripts/bench.py`](scripts/bench.py) sends one synthetic, append-only chat
-conversation through the real binaries three ways. Each turn appends 4 KiB.
-The table shows bytes on the wire per turn, after the first turn, for
-`python3 scripts/bench.py --turns 20 --context-kb N`:
-
-| Context at turn 1 | Uncompressed | zstd only | zstd + previous turn | Saved per turn | Saved over 20 turns |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| 128 KiB | 175,405 | 41,962 | 1,104 | 99.4% | 98.5% |
-| 256 KiB | 306,503 | 69,608 | 1,058 | 99.7% | 98.7% |
-| 512 KiB | 570,438 | 122,089 | 1,034 | 99.8% | 98.8% |
-| 1 MiB | 1,094,276 | 222,937 | 1,048 | 99.9% | 98.9% |
-
-A turn costs about as much as what it added, however large the context has
-grown. The first request carries the whole context, zstd-compressed, to seed
-the dictionary; the last column includes it. The synthetic text is tuned so
-that plain zstd saves about as much as it does on this repository's own
-sources. Runs are reproducible byte for byte. To check your own traffic, see
-[measure it yourself](#measure-it-yourself).
-
-## Before you rely on it
-
-- **The other end must cooperate.** The sender compresses requests when its
-  destination advertises the Portway protocol. It ships that side as
-  `portway receive`, which runs in front of a service you control, such as a self-hosted model
-  server or your own gateway. Any server implementing the
-  [protocol](docs/protocol.md) works too.
-- **Origin compression is separate.** A sender pointed at an API without Portway
-  capabilities forwards uncompressed. A receiver can independently try gzip/zstd
-  toward its origin, learn from responses, and remember refusals. Enable
-  [`[receiver.origin_compression] mode = "auto"`](docs/configuration.md#receiver-to-origin-upload-compression)
-  to use this optional policy; support varies by provider.
-- **It saves bytes, not tokens.** The model receives the identical request and
-  bills the same tokens. Provider-side prompt caching cuts the cost of
-  processing a repeated prefix; Portway cuts the bytes and time of sending it.
-  The two complement each other.
-- **Dictionaries need warm-up.** The first request of a conversation travels
-  without a dictionary, and by default the receiver does not store bodies under
-  32 KiB as one ([`min_dictionary_bytes`](docs/configuration.md#receiving)).
-  Dictionaries live only in memory on both sides and are kept apart per
-  credential.
+Short single-shot requests gain little, because nothing earlier can serve as a
+base. If you cannot run a receiver anywhere on the path to your provider, read
+[the FAQ on hosted provider APIs](docs/faq.md#does-portway-compress-requests-to-a-hosted-provider-api)
+before going further.
 
 ## How it works
+
+Four terms recur below. The agent-side process is the **sender**; `portway
+receive` is the **receiver**; the service behind the receiver is the
+**origin**. A request body the receiver has confirmed it stored is the
+**dictionary** for the next request.
 
 ```text
             agent             Portway sender                    portway receive           app
@@ -88,6 +64,72 @@ No provider, model endpoint, credential, or price is built in. The workspace
 contains `portway-core`, an embeddable Rust library, and `portway`, a CLI with
 recording, daemon control, reports, and an optional terminal dashboard.
 
+## Measured
+
+[`scripts/bench.py`](scripts/bench.py) sends one synthetic, append-only chat
+conversation through the real binaries three ways. Each turn appends 4 KiB.
+The table shows bytes on the wire per turn, after the first turn, for
+`python3 scripts/bench.py --turns 20 --context-kb N`:
+
+| Context at turn 1 | Uncompressed | zstd only | zstd + previous turn | Saved per turn | Saved over 20 turns |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 128 KiB | 175,405 | 41,962 | 1,104 | 99.4% | 98.5% |
+| 256 KiB | 306,503 | 69,608 | 1,058 | 99.7% | 98.7% |
+| 512 KiB | 570,438 | 122,089 | 1,034 | 99.8% | 98.8% |
+| 1 MiB | 1,094,276 | 222,937 | 1,048 | 99.9% | 98.9% |
+
+A turn costs about as much as what it added, however large the context has
+grown. The first request carries the whole context, zstd-compressed, to seed
+the dictionary; the last column includes it. The synthetic text is tuned so
+that plain zstd saves about as much as it does on this repository's own
+sources. Runs are reproducible byte for byte.
+
+### Measure it yourself
+
+The script needs Python 3.9 or later and nothing outside its standard library.
+It starts a local origin, a receiver, and one sender per configuration, checks
+every restored body against the SHA-256 of what was sent, and exits nonzero
+when a request fails or a dictionary is never used. Without options it runs 8
+turns on a 256 KiB context; each table row is one 20-turn run:
+
+```sh
+cargo build --release --locked
+python3 scripts/bench.py
+# One row of the table; repeat with 128, 256, and 512 for the others:
+python3 scripts/bench.py --turns 20 --context-kb 1024
+```
+
+For your own traffic, run an agent session through a sender whose destination
+has a receiver, then read the sender's counters. In the stats, `saved_bytes`
+is `body_bytes` minus `wire_bytes`, and `dict_hits` counts requests sent as a
+delta; the report shows the same comparison as `up raw`, `up wire`, and
+`saved`.
+
+```sh
+curl --fail-with-body http://127.0.0.1:8787/__portway/stats
+portway --report --since 24h
+```
+
+See [checking compression](docs/operations.md#check-compression) if the
+numbers stay flat.
+
+## Before you rely on it
+
+- **It saves bytes, not tokens.** The receiver restores the exact request, so
+  the model receives the identical input and bills the same tokens.
+  Provider-side prompt caching cuts the cost of processing a repeated prefix;
+  Portway cuts the bytes and time of sending it. The two complement each other.
+- **Dictionaries need warm-up.** The first request of a conversation travels
+  without a dictionary, and by default the receiver does not store bodies under
+  32 KiB as one ([`min_dictionary_bytes`](docs/configuration.md#receiving)).
+  Dictionaries live only in memory on both sides, are lost on restart, and are
+  kept apart per credential.
+- **The receiver-to-origin hop is a separate, optional policy.** A receiver can
+  try gzip or zstd toward its origin, learn from responses, and remember
+  refusals. Enable
+  [`[receiver.origin_compression] mode = "auto"`](docs/configuration.md#receiver-to-origin-upload-compression)
+  for that; support varies by provider.
+
 ## Start here
 
 | You want to… | Read |
@@ -101,28 +143,20 @@ recording, daemon control, reports, and an optional terminal dashboard.
 | Implement a compatible receiver | [Request compression protocol](docs/protocol.md) |
 | Understand what Portway stores and how to report a vulnerability | [Security](SECURITY.md) |
 
-## Install from this checkout
+## Quick start
 
-Rust 1.97 or later and a C build toolchain are required. Supported platforms are
-macOS and Linux. Run from the repository root:
+Rust 1.97 or later and a C build toolchain are required, on macOS or Linux.
+From the repository root:
 
 ```sh
 cargo install --path crates/portway --locked
-# Or include the optional terminal dashboard, the browser console, or both:
-cargo install --path crates/portway --locked --features tui
-cargo install --path crates/portway --locked --features web
-cargo install --path crates/portway --locked --features tui,web
+# Add --features tui, web, or tui,web for the terminal dashboard, the browser
+# console, or both.
 ```
 
-Choose one command. Installation normally puts `portway` in `~/.cargo/bin`, which
-must be on your `PATH`. The default build has no terminal UI dependencies. To build
-without installing, use `cargo build --release --locked` (optionally with
-`--features tui`, `web` or `tui,web`) and run `./target/release/portway` instead.
-
-## First configuration
-
-Create a file named `portway.toml` in a directory of your choice. For an
-OpenAI-compatible service, replace the example address with its origin:
+Installation puts `portway` in `~/.cargo/bin`, which must be on your `PATH`.
+Create `portway.toml` in a directory of your choice. For an OpenAI-compatible
+service, replace the example address with its origin:
 
 ```toml
 upstream = "https://api.example.com"
@@ -138,85 +172,32 @@ portway --config ./portway.toml
 
 In your client, set the API base URL to `http://127.0.0.1:8787/v1` and keep the
 upstream service's API key and model name. Portway forwards the request's
-`Authorization` header; it has no separate API key and does not read one from
-TOML or environment variables. See [a complete curl example](docs/getting-started.md#send-a-request).
+`Authorization` header; it has no API key of its own. The upstream URL is a
+prefix: a request to `/v1/chat/completions` reaches
+`https://api.example.com/v1/chat/completions`, so do not put `/v1` in both the
+upstream URL and the client path. See
+[a complete curl example](docs/getting-started.md#send-a-request).
 
-The upstream URL is a prefix: a request to `/v1/chat/completions` with the URL
-above reaches `https://api.example.com/v1/chat/completions`. Putting `/v1` in both
-the upstream URL and client path produces `/v1/v1/chat/completions`.
+Single-upstream mode forwards any HTTP API with finite request bodies; it does
+not require JSON or a `model` field. To send different models to different
+services, replace `upstream` with a `[models]` table; see
+[model registration](docs/configuration.md#register-models) and the annotated
+files in [examples/](examples/).
 
-Single-upstream mode also supports ordinary HTTP APIs, arbitrary finite request
-bodies, and paths unrelated to `/v1`. It does not require JSON or a `model` field.
-Compression is negotiated automatically; services without a compatible
-advertisement receive uncompressed requests.
-
-## Route several models
-
-Replace the `upstream` line with a `[models]` table. Put root settings before the
-first table, and quote model names so dots and slashes remain part of the name:
-
-```toml
-host = "127.0.0.1"
-port = 8787
-
-[models]
-"model-a" = "https://first.example.com"
-"model-b.1" = "https://second.example.com"
-"team/model-c" = "https://second.example.com"
-```
-
-The JSON `model` field selects a destination by exact name. Model names are sent
-upstream unchanged, so each name must also be accepted by its destination.
-`GET /v1/models` lists the configured names; it does not discover or download
-models. Use either `upstream` or `[models]`, never both.
-
-See [model registration and routing rules](docs/configuration.md#register-models)
-for adding routes, bodyless requests, and optional cost estimates. Annotated
-starting files are in [examples/](examples/): [single upstream](examples/forward.toml),
-[models](examples/models.toml), and [receiver](examples/receive.toml).
-
-## Observe and operate
-
-After stopping a foreground instance with Ctrl-C, you can run it in the background:
+To keep it running after you close the terminal:
 
 ```sh
 portway --config ./portway.toml --daemon
 portway --status
 portway --report --since 7d
-# Requires installation with --features tui:
-portway --config ./portway.toml --tui
-# Requires installation with --features web; opens it in the default browser:
-portway --config ./portway.toml --web
-# In another terminal, when ready to stop:
 portway --stop
 ```
 
-A dashboard attached to a daemon can be closed without stopping forwarding.
-Both dashboards show requests still in flight when they own the forwarder.
-An attached TUI also reads live requests from the same data directory over a
-local Unix socket; no web console or additional TCP port is needed.
-`--web` serves the same dashboard in a browser at `http://127.0.0.1:8790/`, plus
-history, search and export, reload and stop
-controls, and a choice of themes; `--daemon --web` hosts it in the daemon. A
-foreground `--web` opens it in the default browser; with `--no-open`, or from a
-daemon, open the printed link, which carries the run's token. With
-`--web-host 0.0.0.0` it prints a link for each of the machine's addresses and
-for each name given with `--web-allow-host`. See
-[the web console](docs/operations.md#optional-web-console).
-Use `--reload` to reread routes, upstream URLs, and compression settings without
-dropping the listener. Daemon mode does not install a boot or login service.
-
-The CLI records request metadata in SQLite, never bodies, credentials, cookies,
-or dictionary contents. The runtime directory defaults to
-`$XDG_CONFIG_HOME/portway` (when absolute) or `~/.config/portway`.
-Without `--config`, the binary reads `./portway.toml` first, then
-`portway.toml` in the runtime directory (`--data-dir` when given), so a bare
-`portway --tui` or `portway --web` attaches to the same file the daemon is using. Use `--data-dir`
-consistently for separate instances; an explicit one never falls back to the
-default directory's file.
-
-For health checks, use `GET /__portway/health`; ordinary `/health` is forwarded to
-the upstream. See [operations and troubleshooting](docs/operations.md).
+Builds with `--features tui` or `web` add `--tui` and `--web`, dashboards that
+attach to a running daemon or host the forwarder themselves. The CLI records
+request metadata in SQLite, never bodies, credentials, cookies, or dictionary
+contents. See [operations](docs/operations.md) for the data directory, reload,
+health checks, and the web console.
 
 ## Embed the core
 
@@ -241,51 +222,17 @@ async fn example() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 The caller owns the Tokio runtime, configuration, authentication, and listener.
-The core has no CLI, SQLite, or terminal UI dependencies and performs no implicit
-recording. Inject `Telemetry` to observe an instance; counters and dictionary
-state do not leak between instances. `DictionaryScope` can partition dictionaries
-by application identity instead of the default Authorization/Cookie fingerprint.
+The core has no CLI, SQLite, or terminal UI dependencies and performs no
+implicit recording. Inject `Telemetry` to observe an instance; counters and
+dictionary state do not leak between instances. `DictionaryScope` can partition
+dictionaries by application identity instead of the default
+Authorization/Cookie fingerprint.
 
-`Receiver::decode` returns the restored request and an acknowledgement; attach it
-with `Acknowledgement::finish` after calling your authenticated application's
-handler. This works with any response body type. A convenience `Receiver::handle`
-adapter supports Portway's streaming response type.
-
-Buildable examples: [forwarding](crates/portway-core/examples/embedded.rs) and
+On the receiving side, `Receiver::decode` returns the restored request and an
+acknowledgement; attach it with `Acknowledgement::finish` after calling your
+authenticated application's handler. Buildable examples:
+[forwarding](crates/portway-core/examples/embedded.rs) and
 [receiving](crates/portway-core/examples/receiving.rs).
-
-## Measure it yourself
-
-Reproduce the table above from a checkout. The script needs Python 3.9 or
-later and nothing outside its standard library. Without options it runs 8 turns
-on a 256 KiB context; each table row is one 20-turn run:
-
-```sh
-cargo build --release --locked
-python3 scripts/bench.py
-# One row of the table; repeat with 128, 256, and 512 for the others:
-python3 scripts/bench.py --turns 20 --context-kb 1024
-```
-
-It starts a local origin, a receiver, and one sender per configuration, then
-prints a per-turn table and a Markdown summary. Every restored body is checked
-against the SHA-256 of what was sent. The script exits nonzero when a request
-fails or a dictionary is never used, so CI runs it too. Pass `--keep` to keep
-the logs and databases; `--help` lists the payload options.
-
-For your own traffic, run an agent session through a sender whose destination
-has a receiver, then read the sender's counters:
-
-```sh
-curl --fail-with-body http://127.0.0.1:8787/__portway/stats
-portway --report --since 24h
-```
-
-In the stats, compare `body_bytes` with `wire_bytes`; `saved_bytes` is the
-difference, and `dict_hits` counts requests sent as a delta. The report shows
-the same comparison as `up raw`, `up wire`, and `saved`. See
-[checking compression](docs/operations.md#check-compression) if the numbers
-stay flat.
 
 ## Limits and verification
 
@@ -294,13 +241,12 @@ stream incrementally. WebSockets, CONNECT, HTTP/2, inbound TLS, and unbounded
 streaming uploads are not supported. Cancellation closes the upstream HTTP/1.1
 connection. Dictionary storage is memory-only and bounded.
 
-```sh
-bash scripts/check.sh
-```
-
-Checks cover both default and TUI builds, formatting, clippy, real TCP forwarding,
-sender/receiver interoperability, retry safety, dictionary limits and isolation,
-stream cancellation, daemon lifecycle, recording, and dashboard rendering.
+`bash scripts/check.sh` runs formatting, clippy, and the tests for the
+default, `tui`, `web`, and `tui,web` builds, then the dependency-boundary and
+web console checks listed in [CONTRIBUTING.md](CONTRIBUTING.md#checks). The
+tests cover real TCP forwarding, sender/receiver interoperability, retry
+safety, dictionary limits and isolation, stream cancellation, daemon lifecycle,
+recording, and dashboard rendering.
 
 ## Contributing and security
 
