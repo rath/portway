@@ -8,8 +8,12 @@
 
 mod common;
 
+use std::io::Write;
+use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -97,13 +101,17 @@ fn launched_pid(output: &Output) -> i32 {
     pid.parse().unwrap_or_else(|_| panic!("no pid in {line:?}"))
 }
 
-fn alive(pid: i32) -> bool {
-    Command::new("kill")
-        .arg("-0")
-        .arg(pid.to_string())
+/// Whether `pid` still runs. A daemon that has exited stays a zombie until
+/// init reaps it — its parent is init, not this test — and `kill -0` succeeds
+/// on a zombie on both Linux and macOS, so the state is read instead.
+fn running(pid: i32) -> bool {
+    let out = Command::new("ps")
+        .args(["-o", "stat=", "-p", &pid.to_string()])
         .output()
-        .map(|out| out.status.success())
-        .unwrap_or(false)
+        .expect("run ps");
+    let stat = String::from_utf8_lossy(&out.stdout);
+    let stat = stat.trim();
+    !stat.is_empty() && !stat.starts_with('Z')
 }
 
 /// The daemon binds its listener before it reports ready, so this is normally
@@ -214,7 +222,7 @@ async fn the_daemon_starts_serves_records_and_stops() {
         !dir.join(PID_FILE).exists(),
         "the pid file outlived the daemon"
     );
-    assert!(!alive(pid), "pid {pid} is still running");
+    assert!(!running(pid), "pid {pid} is still running");
 
     let not_running = oneshot(&dir, "--status");
     assert!(!not_running.status.success());
@@ -398,6 +406,59 @@ async fn stop_without_a_daemon_exits_nonzero() {
         "{}",
         stderr(&status)
     );
+}
+
+/// A daemon unlinks its pid file on the way out and releases the lock only
+/// once the rest of its shutdown is done. `--stop` must wait for the second: a
+/// stop that returns on the first lets the next launch overlap the old
+/// process. This test stands in for the daemon, so the two moments can be told
+/// apart.
+#[tokio::test(flavor = "multi_thread")]
+async fn stop_waits_for_the_lock_not_the_pid_file() {
+    let dir = data_dir("stop-lock");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join(PID_FILE);
+    // Something for --stop to signal that is not this test process, spawned
+    // before the pid file is open so the child never holds a copy of it.
+    let mut target = Command::new("sleep").arg("30").spawn().unwrap();
+    let pid = target.id();
+
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(&path)
+        .unwrap();
+    writeln!(file, "{pid}").unwrap();
+    assert_eq!(
+        unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+        0
+    );
+
+    // Once signalled, the path goes at once and the lock only after the rest
+    // of the shutdown, three of --stop's polls later.
+    let released = Arc::new(AtomicBool::new(false));
+    let exiting = {
+        let (path, released) = (path.clone(), Arc::clone(&released));
+        std::thread::spawn(move || {
+            target.wait().unwrap();
+            std::fs::remove_file(&path).unwrap();
+            std::thread::sleep(Duration::from_millis(300));
+            released.store(true, Ordering::SeqCst);
+            drop(file);
+        })
+    };
+
+    let stop = oneshot(&dir, "--stop");
+    assert!(
+        released.load(Ordering::SeqCst),
+        "--stop returned before the lock was released"
+    );
+    assert!(stop.status.success(), "{}", stderr(&stop));
+    assert_eq!(stdout(&stop), format!("portway: stopped (pid {pid})"));
+    exiting.join().unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 struct Cleanup(PathBuf);

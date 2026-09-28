@@ -15,7 +15,7 @@ use std::cell::Cell;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, ErrorKind, Read, Seek, SeekFrom, Write};
 use std::os::fd::{AsRawFd, RawFd};
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -192,7 +192,7 @@ impl Daemon {
 pub fn status(dir: &Path) -> Result<String, String> {
     let path = dir.join(store::PID_FILE);
     match liveness(&path)? {
-        Liveness::Running(pid) => Ok(format!("running (pid {pid})")),
+        Liveness::Running(pid, _) => Ok(format!("running (pid {pid})")),
         Liveness::Absent => Err(not_running("no pid file at", &path)),
         Liveness::Stale => Err(not_running("stale pid file", &path)),
     }
@@ -202,8 +202,12 @@ pub fn status(dir: &Path) -> Result<String, String> {
 /// aborted, the way the dashboard's `q` aborts them.
 pub fn stop(dir: &Path) -> Result<String, String> {
     let path = dir.join(store::PID_FILE);
-    let pid = match liveness(&path)? {
-        Liveness::Running(pid) => pid,
+    // The file stays open until the daemon has gone. The daemon unlinks the
+    // path on its way out, before it has finished exiting, so the path
+    // vanishing proves nothing; the lock on this inode is released only when
+    // the daemon's own descriptor is closed.
+    let (pid, file) = match liveness(&path)? {
+        Liveness::Running(pid, file) => (pid, file),
         Liveness::Absent => return Err(not_running("no pid file at", &path)),
         Liveness::Stale => {
             let _ = fs::remove_file(&path);
@@ -218,16 +222,25 @@ pub fn stop(dir: &Path) -> Result<String, String> {
     }
 
     let deadline = Instant::now() + STOP_TIMEOUT;
-    while matches!(liveness(&path)?, Liveness::Running(_)) {
+    while held(&file, &path)? {
         if Instant::now() >= deadline {
             return Err(format!("pid {pid} did not exit within 10s"));
         }
         std::thread::sleep(STOP_POLL);
     }
-    match fs::remove_file(&path) {
-        Ok(()) => {}
-        Err(err) if err.kind() == ErrorKind::NotFound => {}
-        Err(err) => return Err(format!("{}: {err}", path.display())),
+    // A daemon that died before it could unlink its file leaves it behind. The
+    // path is removed only while it still names the file this process locked:
+    // a daemon started since has a file of its own there.
+    let ours = match (file.metadata(), fs::metadata(&path)) {
+        (Ok(held), Ok(now)) => (held.dev(), held.ino()) == (now.dev(), now.ino()),
+        (_, Err(err)) if err.kind() == ErrorKind::NotFound => false,
+        (Err(err), _) | (_, Err(err)) => return Err(format!("{}: {err}", path.display())),
+    };
+    if ours
+        && let Err(err) = fs::remove_file(&path)
+        && err.kind() != ErrorKind::NotFound
+    {
+        return Err(format!("{}: {err}", path.display()));
     }
     Ok(format!("stopped (pid {pid})"))
 }
@@ -236,7 +249,7 @@ pub fn stop(dir: &Path) -> Result<String, String> {
 pub fn reload(dir: &Path) -> Result<String, String> {
     let path = dir.join(store::PID_FILE);
     match liveness(&path)? {
-        Liveness::Running(pid) => {
+        Liveness::Running(pid, _) => {
             if unsafe { libc::kill(pid, libc::SIGHUP) } != 0 {
                 return Err(format!("pid {pid}: {}", io::Error::last_os_error()));
             }
@@ -258,7 +271,8 @@ pub fn reopen_log(log: &Path) -> Result<(), String> {
 }
 
 enum Liveness {
-    Running(i32),
+    /// The pid, and the pid file opened to find it: its lock outlives the path.
+    Running(i32, File),
     Absent,
     Stale,
 }
@@ -272,21 +286,31 @@ fn liveness(pid_file: &Path) -> Result<Liveness, String> {
         Err(err) if err.kind() == ErrorKind::NotFound => return Ok(Liveness::Absent),
         Err(err) => return Err(format!("{}: {err}", pid_file.display())),
     };
-    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+    if !held(&file, pid_file)? {
         // Nobody holds it, so no daemon is running here. Closing the file
         // releases the probe's own lock.
         return Ok(Liveness::Stale);
     }
-    let err = io::Error::last_os_error();
-    if err.raw_os_error() != Some(libc::EWOULDBLOCK) {
-        return Err(format!("{}: {err}", pid_file.display()));
-    }
     match read_pid(&mut file) {
-        Some(pid) => Ok(Liveness::Running(pid)),
+        Some(pid) => Ok(Liveness::Running(pid, file)),
         None => Err(format!(
             "{} is locked but holds no pid; remove it if no daemon is running",
             pid_file.display()
         )),
+    }
+}
+
+/// Whether another open file description holds the lock on `file`. When
+/// nobody does, the probe takes it, and keeps it until `file` is closed.
+fn held(file: &File, path: &Path) -> Result<bool, String> {
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+        return Ok(false);
+    }
+    let err = io::Error::last_os_error();
+    if err.raw_os_error() == Some(libc::EWOULDBLOCK) {
+        Ok(true)
+    } else {
+        Err(format!("{}: {err}", path.display()))
     }
 }
 

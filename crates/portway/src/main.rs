@@ -115,7 +115,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ));
     // The recorder is flushed before the process goes, and the pid file goes
     // with it — the lock is released either way, but a file that only ever
-    // reads as stale helps nobody.
+    // reads as stale helps nobody. The lock itself goes last: `daemon` was
+    // declared before the runtime, so it is dropped after the runtime has
+    // joined its threads, and that release is what `--stop` waits for.
     store.shutdown();
     if let Some(daemon) = &daemon {
         daemon.remove_pid_file();

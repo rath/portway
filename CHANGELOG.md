@@ -75,6 +75,11 @@ version may contain breaking changes.
   count exceeded it (a hit rate above 100%) and fresh input was priced at
   zero. The prompt now adds the cache read and cache write counts Anthropic
   reports beside it. Rows recorded before the fix keep the old counts.
+- `--stop` reported the daemon stopped as soon as its pid file was removed,
+  while the daemon was still shutting down, so a script that went on to replace
+  the binary or start another daemon could overlap the old one. It now waits
+  until the daemon releases the pid file's lock, the last thing it does before
+  exiting.
 
 ### Security
 
