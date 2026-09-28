@@ -36,7 +36,7 @@ bash scripts/check.sh
 | `examples/` | Annotated TOML files referenced by the documentation |
 | `docs/` | User documentation; `docs/protocol.md` is the wire contract |
 | `scripts/` | `check.sh` for CI checks, `bench.py` for the compression benchmark |
-| `site/` | The project page at portway.told.md, static files with no build step, published by `.github/workflows/pages.yml` |
+| `site/` | The project page at portway.told.me, static files with no build step, published by `.github/workflows/pages.yml` |
 
 ## Checks
 

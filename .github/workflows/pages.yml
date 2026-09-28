@@ -1,12 +1,12 @@
 name: Pages
 
-# Publishes site/ to GitHub Pages at https://portway.told.md/.
+# Publishes site/ to GitHub Pages at https://portway.told.me/.
 #
 # One-time setup, outside this file:
 #   1. Settings > Pages > Source: "GitHub Actions".
-#   2. Settings > Pages > Custom domain: portway.told.md. A CNAME file is
+#   2. Settings > Pages > Custom domain: portway.told.me. A CNAME file is
 #      ignored by Actions deployments, so the domain lives in the settings.
-#   3. DNS: a CNAME record for portway.told.md pointing at rath.github.io.
+#   3. DNS: a CNAME record for portway.told.me pointing at rath.github.io.
 #
 # The site has no build step: the files in site/ are served as they are.
 
