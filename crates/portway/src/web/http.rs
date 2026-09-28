@@ -21,8 +21,7 @@ use tokio::net::TcpListener;
 use tokio::sync::{broadcast, mpsc, watch};
 
 use crate::cli;
-use crate::config::Prices;
-use crate::control;
+use crate::control::{self, PricesCell};
 use crate::daemon;
 use crate::report;
 use crate::spend;
@@ -68,7 +67,9 @@ pub struct App {
     pub header: Value,
     pub control: Control,
     pub db: Option<std::path::PathBuf>,
-    pub prices: Prices,
+    /// Republished by a reload: `/api/usage` reads it per request, so the
+    /// rates a page shows are the ones the forwarder is running on now.
+    pub prices: PricesCell,
     pub streams: AtomicUsize,
     pub closing: watch::Receiver<bool>,
     /// The URL prefix the console is published under, `/` at the root.
@@ -159,7 +160,11 @@ pub async fn handle(app: Arc<App>, request: Request<Incoming>) -> Response<WebBo
         (&Method::POST, "/api/session") => open_session(&app, request).await,
         _ if !session => error(StatusCode::UNAUTHORIZED, "session required"),
         (&Method::GET, "/api/snapshot") => {
-            let header = app.header.clone();
+            let mut header = app.header.clone();
+            // The one header field a reload can change: whether there is a
+            // price table at all. Read here rather than fixed at start, so a
+            // table added by a reload is not reported as still absent.
+            header["prices"] = json!(!control::current_prices(&app.prices).await.is_empty());
             let shared = Arc::clone(&app.shared);
             match tokio::task::spawn_blocking(move || shared.snapshot(header)).await {
                 Ok(body) => json_text(StatusCode::OK, body),
@@ -359,7 +364,7 @@ async fn usage(app: &App, range: Option<String>) -> Response<WebBody> {
     let Some(db) = app.db.clone() else {
         return error(StatusCode::UNPROCESSABLE_ENTITY, "no database to read");
     };
-    let prices = app.prices.clone();
+    let prices = control::current_prices(&app.prices).await;
     let loaded = tokio::task::spawn_blocking(move || {
         let (since, until) = range.window(crate::logfmt::epoch());
         spend::load(&db, since, until, &prices)
@@ -396,7 +401,9 @@ async fn report(
 
 async fn reload(app: &App) -> Response<WebBody> {
     match &app.control {
-        Control::Live { args, cell, .. } => match control::reload(args, cell).await {
+        Control::Live {
+            args, cell, prices, ..
+        } => match control::reload(args, cell, prices).await {
             Ok(routes) => {
                 let message = format!("configuration reloaded ({routes} route(s))");
                 crate::logfmt::info(&format!("console: {message}"));

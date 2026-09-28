@@ -545,6 +545,141 @@ async fn a_daemon_hosts_its_console_and_another_attaches() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// One buffered request through the forwarder, driven to completion so the
+/// recorder has a row carrying the engine's usage.
+async fn record_one(port: u16, body: &str) {
+    let stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .unwrap();
+    let (mut send, connection) = hyper::client::conn::http1::handshake(TokioIo::new(stream))
+        .await
+        .unwrap();
+    tokio::spawn(connection);
+    let request = Request::builder()
+        .method("POST")
+        .uri("/v1/chat/completions")
+        .header("host", format!("127.0.0.1:{port}"))
+        .body(Full::new(Bytes::from(body.to_string())))
+        .unwrap();
+    let response = send.send_request(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let _ = response.into_body().collect().await.unwrap();
+}
+
+/// A reload carries the price table with the routes: a table added — or a rate
+/// edited — in the file the daemon rereads applies to what the console has
+/// already recorded, with no restart to drop the requests in flight.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_reload_reprices_the_running_console() {
+    let upstream = upstream(Health::Json(vec!["zstd"]), Reply::UsageJson).await;
+    let dir = data_dir("reprice");
+    let port = free_port();
+    let config = dir.join("test.toml");
+    let write = |price: Option<(f64, f64, f64)>| {
+        let table = match price {
+            Some((input, output, cache_read)) => format!(
+                "\n[prices.\"model-web\"]\ninput = {input}\noutput = {output}\ncache_read = {cache_read}\n"
+            ),
+            None => String::new(),
+        };
+        std::fs::write(
+            &config,
+            format!("[models]\n\"model-web\" = {:?}\n{table}", upstream.base),
+        )
+        .unwrap();
+    };
+    let reload = || {
+        let out = Command::new(BIN)
+            .arg("--reload")
+            .arg("--data-dir")
+            .arg(&dir)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    write(None);
+    let launched = Command::new(BIN)
+        .args([
+            "--config",
+            config.to_str().unwrap(),
+            "--port",
+            &port.to_string(),
+        ])
+        .arg("--data-dir")
+        .arg(&dir)
+        .args(["--daemon", "--web", "--web-port", "0"])
+        .output()
+        .unwrap();
+    let _daemon = StopDaemon(dir.clone());
+    let out = String::from_utf8_lossy(&launched.stdout).to_string();
+    assert!(
+        launched.status.success(),
+        "{out} / {}",
+        String::from_utf8_lossy(&launched.stderr)
+    );
+    let console = out
+        .lines()
+        .find_map(parse_console)
+        .unwrap_or_else(|| panic!("no console line in {out}"));
+    let mut page = Page::new(console.port);
+    page.sign_in(&console.token).await;
+
+    // A day with tokens and no rates: recorded, and honestly unpriced.
+    assert_eq!(
+        page.get("/api/snapshot").await.json()["header"]["prices"],
+        false
+    );
+    record_one(port, "{\"model\":\"model-web\"}").await;
+    eventually("the recorded answer is unpriced", async || {
+        let usage = page.get("/api/usage").await.json();
+        usage["rows"][0]["model"] == "model-web" && usage["rows"][0]["charge"].is_null()
+    })
+    .await;
+
+    // Adding the rate to the file prices what is already in the database.
+    write(Some((1.0, 2.0, 0.5)));
+    reload();
+    let mut before = 0.0;
+    eventually("the table added by the reload prices the day", async || {
+        before = page.get("/api/usage").await.json()["rows"][0]["charge"]["total"]
+            .as_f64()
+            .unwrap_or(0.0);
+        before > 0.0
+    })
+    .await;
+    assert_eq!(
+        page.get("/api/snapshot").await.json()["header"]["prices"],
+        true
+    );
+
+    // And editing it reprices the same records, from the file it rereads.
+    write(Some((2.0, 4.0, 1.0)));
+    reload();
+    let mut after = 0.0;
+    eventually("the edited rate reaches the console", async || {
+        after = page.get("/api/usage").await.json()["rows"][0]["charge"]["total"]
+            .as_f64()
+            .unwrap_or(0.0);
+        after > 1.5 * before
+    })
+    .await;
+    assert!(
+        (after - 2.0 * before).abs() < 1e-12,
+        "{before} should have doubled, not become {after}"
+    );
+    let log = recorded_text(&dir);
+    assert_eq!(
+        log.matches("configuration reloaded (1 route(s))").count(),
+        2,
+        "{log}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// `--web-base-path`: served under a prefix a proxy strips, the console must
 /// keep the browser inside that prefix for its assets and API calls, while a
 /// request that is not under the prefix is refused rather than served.

@@ -31,8 +31,7 @@ pub use aggregate::Feed;
 pub use file::{WEB_FILE, console_urls};
 
 use crate::cli::Args;
-use crate::config::Prices;
-use crate::control::RouterCell;
+use crate::control::{PricesCell, RouterCell};
 use crate::logfmt;
 use crate::telemetry::Event;
 
@@ -47,6 +46,9 @@ pub enum Control {
     Live {
         args: Box<Args>,
         cell: RouterCell,
+        /// Republished by the same reload, so a priced route appears without
+        /// restarting the console.
+        prices: PricesCell,
         stop: Arc<Notify>,
     },
     /// Watching another forwarder's database: both go to its daemon, through
@@ -96,7 +98,10 @@ pub struct Options {
     pub control: Control,
     /// The database usage and history read; `None` leaves both explaining why.
     pub db: Option<PathBuf>,
-    pub prices: Prices,
+    /// What the usage figures are billed against. A cell rather than a copy:
+    /// a reload replaces it under the console, so the rates on screen are
+    /// always the ones the running forwarder is pricing.
+    pub prices: PricesCell,
     /// Where `portway.web` goes.
     pub dir: PathBuf,
 }
@@ -181,7 +186,6 @@ impl Console {
             "uptime_s": 0.0,
             "control": {"reload": true, "stop": true},
             "db": db.is_some(),
-            "prices": !prices.is_empty(),
         });
         let (closing, closed) = watch::channel(false);
         let app = Arc::new(http::App {

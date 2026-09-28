@@ -216,7 +216,9 @@ A price entry can also describe a historical route no longer being served.
 Missing prices remain unpriced. Token usage also depends on what the upstream
 reports; a price table cannot fill in missing usage. TUI estimates use the
 configuration loaded by that TUI invocation, including for historical records.
-An attached viewer should receive the same `--config` if you want the same prices.
+A daemon-hosted console rereads this table on `--reload`, the same signal that
+rebuilds its routes. An attached viewer should receive the same `--config` if
+you want the same prices; it keeps the ones it started with.
 The text `--report` command reports traffic and timing; it does not load TOML
 prices or calculate these cost estimates.
 

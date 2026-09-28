@@ -45,8 +45,11 @@ file prevents two daemons from owning one runtime directory. Startup reports its
 pid and log path. The process forks before creating a runtime or recorder thread.
 
 `--reload` sends SIGHUP, reopens the log, rereads the config file, rebuilds the
-router, and renegotiates upstream capabilities. The new router is published only
-after it has been built and probed.
+router and the price table, and renegotiates upstream capabilities. Routes and
+rates are published only after the new router has been built and probed, so the
+console a daemon hosts reprices on the reload itself: an edited rate needs no
+restart. An attached viewer is a separate process reading its own `--config`;
+restart that one to change what it shows.
 `--stop` sends SIGTERM and waits up to ten seconds. The process flushes recording
 and removes its pid file. Controls do not require upstream configuration.
 
@@ -56,9 +59,9 @@ foreground server has no daemon pid file, so check its HTTP health instead.
 
 ## Apply configuration changes
 
-Model additions, destination changes, and compression settings can be applied
-with `--reload` in daemon mode. Listener host/port changes still require a
-restart because the socket is already bound.
+Model additions, destination changes, price changes, and compression settings
+can be applied with `--reload` in daemon mode. Listener host/port changes still
+require a restart because the socket is already bound.
 For a daemon using the default runtime directory:
 
 ```sh
@@ -364,7 +367,7 @@ to ordinary compression according to the [retry protocol](protocol.md#errors-and
 | 415 says routing needs an uncompressed body | Disable client-side request compression in model mode, or use single-upstream mode. |
 | 404 from the upstream | Check path composition, especially a duplicated `/v1` prefix. |
 | 401 or 403 from the upstream | Send the destination's actual key from the client; see [authentication](authentication.md#if-authentication-fails). |
-| Edited routes do not appear | Run `--reload` with the serving daemon's data directory and check the log for `configuration reloaded`; restart if the listener host or port changed. |
+| Edited routes or rates do not appear | Run `--reload` with the serving daemon's data directory and check the log for `configuration reloaded`; restart if the listener host or port changed, or if the viewer is an attached one reading its own config. |
 | `--tui` is an unrecognized argument | Rebuild or install with `--features tui`, and check which executable your shell finds. |
 | Dashboard needs a terminal | Run `--tui` directly in a terminal; use `--report` for redirected output. |
 | `--web` is an unrecognized argument | Rebuild or install with `--features web`. |

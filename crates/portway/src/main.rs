@@ -9,7 +9,7 @@ use clap::Parser;
 use portway::cli::CodingArg;
 use portway::cli::{Args, Mode};
 use portway::config::Config;
-use portway::control::{self, RouterCell};
+use portway::control::{self, PricesCell, RouterCell};
 use portway::router::STATS_PATH;
 use portway::telemetry::{Event, Sinks};
 #[cfg(feature = "tui")]
@@ -135,6 +135,7 @@ async fn run(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let router = config.router(args.mode)?;
     let router_state = control::cell(&router);
+    let prices_state = control::prices(&config.prices);
     let decoder = (args.mode == Mode::Receive)
         .then(|| portway_core::Receiver::new(config.receiver.clone()))
         .transpose()?;
@@ -214,10 +215,11 @@ async fn run(
                     control: web::Control::Live {
                         args: Box::new(args.clone()),
                         cell: Arc::clone(&router_state),
+                        prices: Arc::clone(&prices_state),
                         stop: Arc::clone(&stop),
                     },
                     db: Some(_dir.join(store::DB_FILE)),
-                    prices: config.prices.clone(),
+                    prices: Arc::clone(&prices_state),
                     dir: _dir.to_path_buf(),
                 };
                 match web::Console::start(options).await {
@@ -247,6 +249,7 @@ async fn run(
                 tokio::spawn(reload_on_hangup(
                     args.clone(),
                     Arc::clone(&router_state),
+                    Arc::clone(&prices_state),
                     log,
                 ));
             }
@@ -443,7 +446,10 @@ fn web_watching(
                 dir: dir.to_path_buf(),
             },
             db: Some(db.clone()),
-            prices: config.prices.clone(),
+            // Attached to another process's forwarder: this console never
+            // reloads one itself, so the file it read at start is the one it
+            // keeps. The daemon it signals republishes its own.
+            prices: control::prices(&config.prices),
             dir: dir.to_path_buf(),
         })
         .await?;
@@ -479,9 +485,10 @@ fn daemon_message(outcome: Result<String, String>) -> ! {
     }
 }
 
-/// SIGHUP in daemon mode: reopen the log, rebuild the router from the current
-/// TOML and CLI overrides, then negotiate the new upstreams before publishing it.
-async fn reload_on_hangup(args: Args, router: RouterCell, log: PathBuf) {
+/// SIGHUP in daemon mode: reopen the log, rebuild the router and the price
+/// table from the current TOML and CLI overrides, then negotiate the new
+/// upstreams before publishing either.
+async fn reload_on_hangup(args: Args, router: RouterCell, prices: PricesCell, log: PathBuf) {
     use tokio::signal::unix::{SignalKind, signal};
 
     let Ok(mut stream) = signal(SignalKind::hangup()) else {
@@ -492,7 +499,7 @@ async fn reload_on_hangup(args: Args, router: RouterCell, log: PathBuf) {
             Ok(()) => logfmt::info("SIGHUP: log reopened; reloading configuration"),
             Err(err) => logfmt::error(&format!("SIGHUP: could not reopen the log: {err}")),
         }
-        match control::reload(&args, &router).await {
+        match control::reload(&args, &router, &prices).await {
             Ok(routes) => {
                 logfmt::info(&format!(
                     "SIGHUP: configuration reloaded ({routes} route(s))"

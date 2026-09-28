@@ -7,6 +7,13 @@ version may contain breaking changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- `--reload` publishes the price table with the routes it rebuilds, so editing a
+  rate in `portway.toml` reprices a running console — including for records it
+  has already written — instead of waiting for a restart. An attached viewer
+  still shows the rates it started with; restart it to pick up its own config.
+
 ## [0.1.0] - 2026-09-28
 
 The first public release.
