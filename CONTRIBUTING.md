@@ -36,6 +36,7 @@ bash scripts/check.sh
 | `examples/` | Annotated TOML files referenced by the documentation |
 | `docs/` | User documentation; `docs/protocol.md` is the wire contract |
 | `scripts/` | `check.sh` for CI checks, `bench.py` for the compression benchmark |
+| `site/` | The project page at portway.told.md, static files with no build step, published by `.github/workflows/pages.yml` |
 
 ## Checks
 
@@ -73,7 +74,9 @@ python3 scripts/bench.py
 The payload is deterministic, so the output is identical across machines for
 the same seed, level, and `Cargo.lock`. If a change alters compressed sizes,
 regenerate the README's measured table with the commands it names, and say so
-in the pull request.
+in the pull request. The project page carries the same table in `site/index.html`
+and a 40-turn run (`--turns 40 --context-kb 256`) in `site/session.js`; update
+them together.
 
 ## Documentation
 

@@ -1,0 +1,449 @@
+/* Portway site. The two signal colours are the console's own: blue is what the
+   agent sent (raw), teal is what crossed the network (wire). Keep that meaning;
+   nothing else on the page is blue or teal. */
+
+:root {
+  color-scheme: dark;
+  --ground: #0f1820;
+  --panel: #14202a;
+  --panel-2: #1a2834;
+  --rule: #263846;
+  --ink: #e3eaef;
+  --ink-dim: #97a9b6;
+  --raw: #6f9cf2;
+  --zstd: #9d8ccc;
+  --wire: #2cc3a3;
+  --signal: #e6b54a;
+  --focus: #9cc2ff;
+
+  --sans: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --mono: "Fragment Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  --measure: 66ch;
+  --gutter: clamp(16px, 4vw, 40px);
+  --wide: 1120px;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font: 400 1.0625rem/1.6 var(--sans);
+  font-variation-settings: "wdth" 100;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+a { color: inherit; text-decoration-color: color-mix(in srgb, currentColor 45%, transparent); text-underline-offset: 0.18em; }
+a:hover { text-decoration-color: currentColor; }
+
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; border-radius: 3px; }
+
+code, pre, output, .bytes, [data-counter] {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  /* Fragment Mono joins -- into a dash; CLI flags must stay two hyphens. */
+  font-variant-ligatures: none;
+  font-feature-settings: "liga" 0, "calt" 0;
+}
+code { font-size: 0.9em; }
+p code, li code, dd code { white-space: nowrap; }
+
+.skip {
+  position: absolute; left: var(--gutter); top: -100px;
+  padding: 8px 12px; background: var(--ink); color: var(--ground); z-index: 10;
+}
+.skip:focus { top: 12px; }
+
+/* ---------- masthead ---------- */
+
+.masthead {
+  max-width: var(--wide);
+  margin: 0 auto;
+  padding: 20px var(--gutter);
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+}
+.brand {
+  display: inline-flex; align-items: center; gap: 10px;
+  text-decoration: none;
+  font-weight: 700; font-size: 1.125rem;
+  font-variation-settings: "wdth" 80;
+  letter-spacing: 0.01em;
+}
+.brand svg { width: 26px; height: 26px; }
+.brand rect { fill: var(--raw); }
+.brand path { fill: none; stroke: var(--ground); stroke-width: 3.2; stroke-linecap: round; stroke-linejoin: round; }
+.masthead nav { display: flex; gap: clamp(12px, 3vw, 28px); font-size: 0.95rem; }
+.masthead nav a { text-decoration: none; color: var(--ink-dim); }
+.masthead nav a:hover { color: var(--ink); }
+
+/* ---------- hero ---------- */
+
+.hero {
+  max-width: var(--wide);
+  margin: 0 auto;
+  padding: clamp(16px, 4vw, 48px) var(--gutter) clamp(48px, 8vw, 96px);
+}
+.hero-copy { max-width: 58rem; }
+
+h1 {
+  margin: 0;
+  font-size: clamp(2.5rem, 1.3rem + 4.2vw, 4.75rem);
+  line-height: 0.98;
+  font-weight: 760;
+  font-variation-settings: "wdth" 68;
+  letter-spacing: -0.012em;
+  text-wrap: balance;
+  max-width: 12.5em;
+}
+
+.lede {
+  margin: 1.4rem 0 0;
+  max-width: 54ch;
+  font-size: clamp(1.0625rem, 1rem + 0.35vw, 1.25rem);
+  color: var(--ink-dim);
+}
+
+.actions { display: flex; flex-wrap: wrap; gap: 12px; margin: 2rem 0 0; }
+.button {
+  display: inline-block;
+  padding: 11px 18px;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  text-decoration: none;
+  font-weight: 600;
+  font-size: 0.975rem;
+  background: var(--panel);
+}
+.button:hover { border-color: var(--ink-dim); }
+.button.primary { background: var(--ink); color: var(--ground); border-color: var(--ink); }
+.button.primary:hover { background: #fff; }
+
+/* The monitor: an interface-counter graph of one real session. */
+
+.monitor {
+  margin: clamp(32px, 4.5vw, 52px) 0 0;
+  padding: clamp(16px, 2.4vw, 28px);
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+}
+.monitor-head {
+  display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between;
+  gap: 16px 32px;
+}
+.monitor figcaption { max-width: 52ch; color: var(--ink-dim); font-size: 0.95rem; }
+.monitor figcaption strong { color: var(--ink); font-weight: 600; }
+
+.views { display: inline-flex; border: 1px solid var(--rule); border-radius: 6px; padding: 2px; background: var(--ground); }
+.views button {
+  font: 500 0.875rem var(--sans);
+  color: var(--ink-dim);
+  background: none; border: 0; border-radius: 4px;
+  padding: 6px 12px; cursor: pointer;
+}
+.views button[aria-pressed="true"] { background: var(--panel-2); color: var(--ink); }
+
+.readout {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 24px 0 8px;
+}
+.readout .series { border-top: 3px solid; padding-top: 10px; }
+.readout .raw { border-color: var(--raw); }
+.readout .zstd { border-color: var(--zstd); border-top-style: dashed; }
+.readout .wire { border-color: var(--wire); }
+.readout dt { font-size: 0.875rem; color: var(--ink-dim); }
+.readout dd {
+  margin: 2px 0 0;
+  font-size: clamp(1rem, 0.8rem + 1.1vw, 1.625rem);
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+.readout .wire dd { color: var(--wire); }
+
+.plot { position: relative; width: 100%; height: clamp(220px, 34vw, 360px); margin-top: 8px; }
+.plot svg { display: block; width: 100%; height: 100%; overflow: visible; }
+.plot .grid line { stroke: var(--rule); stroke-width: 1; }
+.plot .tick { fill: var(--ink-dim); font: 11px var(--mono); }
+.plot .raw-area { fill: color-mix(in srgb, var(--raw) 18%, transparent); }
+.plot .raw-line { fill: none; stroke: var(--raw); stroke-width: 2; }
+.plot .raw-bar { fill: color-mix(in srgb, var(--raw) 55%, transparent); }
+.plot .zstd-line { fill: none; stroke: var(--zstd); stroke-width: 2; stroke-dasharray: 6 5; }
+.plot .wire-line { fill: none; stroke: var(--wire); stroke-width: 3; stroke-linejoin: round; }
+.plot .cursor { stroke: var(--ink); stroke-width: 1; stroke-dasharray: 2 3; opacity: 0.7; }
+.plot .wire-dot { fill: var(--wire); stroke: var(--panel); stroke-width: 2; }
+.plot .wire-label {
+  fill: var(--wire);
+  font: 12px var(--mono);
+  paint-order: stroke;
+  stroke: var(--panel);
+  stroke-width: 5px;
+  stroke-linejoin: round;
+}
+.plot-fallback { color: var(--ink-dim); }
+
+.scrub {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  align-items: center;
+  gap: 16px;
+  margin-top: 16px;
+}
+.scrub label { font-size: 0.9rem; color: var(--ink-dim); white-space: nowrap; }
+.scrub output { color: var(--ink); display: inline-block; min-width: 2ch; text-align: right; }
+.replay {
+  font: 600 0.875rem var(--sans);
+  color: var(--ink);
+  background: var(--panel-2);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  padding: 7px 14px;
+  cursor: pointer;
+}
+.replay:hover { border-color: var(--ink-dim); }
+input[type="range"] { width: 100%; accent-color: var(--wire); margin: 0; }
+
+.turn-note { margin: 12px 0 0; font-size: 0.9rem; color: var(--ink-dim); min-height: 1.6em; }
+.turn-note b { color: var(--ink); font-weight: 600; font-family: var(--mono); font-size: 0.95em; }
+.turn-note .w { color: var(--wire); }
+
+/* ---------- chapters ---------- */
+
+.chapter {
+  max-width: calc(var(--measure) + 2 * var(--gutter));
+  margin: 0 auto;
+  padding: clamp(56px, 8vw, 104px) var(--gutter) 0;
+}
+.chapter > p { margin: 0 0 1.1em; }
+
+h2 {
+  margin: 0 0 1.25rem;
+  font-size: clamp(1.75rem, 1.2rem + 2.2vw, 2.75rem);
+  line-height: 1.05;
+  font-weight: 720;
+  font-variation-settings: "wdth" 72;
+  letter-spacing: -0.008em;
+  text-wrap: balance;
+}
+h3 {
+  margin: 2.5rem 0 1rem;
+  font-size: 1.25rem;
+  font-weight: 650;
+  font-variation-settings: "wdth" 85;
+}
+
+.aside { color: var(--ink-dim); font-size: 0.95rem; }
+
+.fit { margin: 0 0 1.25em; padding-left: 1.2em; }
+.fit li { margin: 0.35em 0; }
+.fit li::marker { color: var(--raw); }
+
+/* What each request carries: strips drawn to scale. */
+
+.strips { margin: 2rem 0 2.25rem; }
+.strips figcaption { font-size: 0.9rem; color: var(--ink-dim); margin-bottom: 14px; }
+.strip-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.strip-list li {
+  display: grid;
+  grid-template-columns: 4.5rem 1fr 6.5rem;
+  align-items: center;
+  gap: 12px;
+  font-size: 0.85rem;
+}
+.strip-list .t { color: var(--ink-dim); white-space: nowrap; }
+.strip-list .n { font-family: var(--mono); text-align: right; color: var(--ink-dim); font-variant-numeric: tabular-nums; }
+.strip-list .bar { display: flex; height: 14px; }
+.strip-list .old { background: color-mix(in srgb, var(--raw) 22%, var(--panel)); border-radius: 2px 0 0 2px; }
+.strip-list .new { background: var(--raw); min-width: 3px; border-radius: 0 2px 2px 0; }
+.strip-list .gap { color: var(--ink-dim); text-align: center; letter-spacing: 0.3em; }
+
+/* The hop diagram. */
+
+.hops { margin: 2rem 0 0; }
+.hop-list {
+  list-style: none; margin: 0; padding: 0;
+  display: grid;
+  grid-template-columns: 1fr;
+}
+.hops .node {
+  padding: 12px 14px;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  background: var(--panel);
+}
+.node-name { display: block; font-weight: 650; font-variation-settings: "wdth" 85; }
+.node-sub { display: block; font-size: 0.85rem; color: var(--ink-dim); }
+.hops .link {
+  position: relative;
+  display: flex; align-items: center; gap: 14px;
+  min-height: 52px;
+  padding-left: 36px;
+}
+.hops .link::before {
+  content: "";
+  position: absolute; left: 20px; top: 0; bottom: 0;
+  border-left: 2px solid var(--raw);
+}
+.hops .link.slow::before { border-left: 3px dashed var(--wire); left: 19px; }
+.hops .bytes { font-size: 0.95rem; color: var(--raw); }
+.hops .slow .bytes { color: var(--wire); font-size: 1.05rem; }
+.link-sub { font-size: 0.85rem; color: var(--ink-dim); }
+.hops figcaption { margin-top: 14px; font-size: 0.9rem; color: var(--ink-dim); }
+
+/* Sequences: only where the content really is one. */
+
+.steps { list-style: none; counter-reset: step; margin: 0; padding: 0; }
+.steps > li {
+  counter-increment: step;
+  position: relative;
+  padding: 0 0 0 2.75rem;
+  margin: 0 0 1.5rem;
+}
+.steps > li::before {
+  content: counter(step);
+  position: absolute; left: 0; top: 0.05rem;
+  width: 1.75rem; height: 1.75rem;
+  display: grid; place-items: center;
+  border: 1px solid var(--rule);
+  border-radius: 50%;
+  font: 500 0.85rem var(--mono);
+  color: var(--ink-dim);
+}
+.steps p { margin: 0 0 0.75rem; }
+
+/* RFC-style frame diagram. The ASCII is the figure; do not reflow it. */
+
+.rfc { margin: 2rem 0 0; }
+.rfc pre {
+  margin: 0;
+  padding: 18px 20px;
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  overflow-x: auto;
+  font: 13px/1.45 var(--mono);
+  color: var(--ink-dim);
+}
+.rfc pre b { color: var(--ink); font-weight: 400; }
+.rfc pre i { color: var(--wire); font-style: normal; }
+.rfc .ruler { color: color-mix(in srgb, var(--ink-dim) 70%, transparent); }
+.rfc figcaption { margin-top: 12px; font-size: 0.9rem; color: var(--ink-dim); }
+
+/* Fallback ladder. */
+
+.ladder { list-style: none; counter-reset: rung; margin: 1.75rem 0 1.75rem; padding: 0; }
+.ladder li {
+  counter-increment: rung;
+  display: grid;
+  grid-template-columns: 2rem 1fr;
+  grid-template-areas: "n rung" "n why";
+  column-gap: 12px;
+  padding: 14px 0;
+  border-top: 1px solid var(--rule);
+}
+.ladder li:last-child { border-bottom: 1px solid var(--rule); }
+.ladder li::before {
+  content: counter(rung);
+  grid-area: n;
+  font: 500 0.95rem var(--mono);
+  color: var(--ink-dim);
+}
+.ladder .rung { grid-area: rung; font-weight: 600; }
+.ladder .why { grid-area: why; font-size: 0.9rem; color: var(--ink-dim); }
+.status {
+  color: var(--signal);
+  font-size: 0.9em;
+  padding: 0 0.3em;
+  border: 1px solid color-mix(in srgb, var(--signal) 40%, transparent);
+  border-radius: 3px;
+}
+
+/* Measured table. */
+
+.table-wrap { overflow-x: auto; margin: 1.75rem 0 1.25rem; }
+table { border-collapse: collapse; width: 100%; font-size: 0.95rem; }
+caption { text-align: left; color: var(--ink-dim); font-size: 0.9rem; padding-bottom: 10px; }
+th, td { padding: 10px 12px; border-bottom: 1px solid var(--rule); white-space: nowrap; }
+thead th { font-weight: 600; text-align: right; color: var(--ink-dim); font-size: 0.85rem; vertical-align: bottom; }
+thead th:first-child, tbody th { text-align: left; }
+tbody th { font-weight: 600; }
+td { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; }
+td.w { color: var(--wire); }
+
+pre.shell {
+  margin: 0 0 1rem;
+  padding: 14px 16px;
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  overflow-x: auto;
+  font: 14px/1.55 var(--mono);
+}
+pre.shell code { font-size: inherit; }
+
+/* Limits. */
+
+.limits { margin: 0; display: grid; gap: 1.5rem; }
+.limits dt { font-weight: 650; font-size: 1.0625rem; }
+.limits dd { margin: 0.25rem 0 0; color: var(--ink-dim); }
+
+.docs {
+  list-style: none; margin: 2rem 0 0; padding: 0;
+  display: flex; flex-wrap: wrap; gap: 8px 24px;
+}
+
+/* ---------- footer ---------- */
+
+.colophon {
+  max-width: calc(var(--measure) + 2 * var(--gutter));
+  margin: clamp(72px, 10vw, 128px) auto 0;
+  padding: 28px var(--gutter) 48px;
+  border-top: 1px solid var(--rule);
+  font-size: 0.9rem;
+  color: var(--ink-dim);
+}
+.colophon p { margin: 0 0 0.4rem; }
+
+/* ---------- narrow screens ---------- */
+
+@media (max-width: 640px) {
+  .readout { grid-template-columns: 1fr; gap: 10px; }
+  .readout .series { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+  .scrub { grid-template-columns: auto 1fr; }
+  .scrub input { grid-column: 1 / -1; }
+  .strip-list li { grid-template-columns: 3.25rem 1fr 5.25rem; gap: 8px; font-size: 0.8rem; }
+  .rfc pre { font-size: 11px; padding: 14px; }
+}
+
+@media (min-width: 900px) {
+  /* The topology reads left to right, so it breaks out of the text column. */
+  .hops { margin-inline: calc(50% - min(530px, 50vw - var(--gutter))); }
+  .hop-list {
+    grid-template-columns: 1fr 0.85fr 1fr 0.85fr 1fr 0.85fr 1fr;
+    align-items: stretch;
+  }
+  .hops .link {
+    flex-direction: column; justify-content: center; align-items: center;
+    gap: 20px;
+    min-height: 0;
+    padding: 0 10px;
+    text-align: center;
+  }
+  .hops .link::before {
+    left: 0; right: 0; top: 50%; bottom: auto;
+    border-left: 0;
+    border-top: 2px solid var(--raw);
+  }
+  .hops .link.slow::before { left: 0; border-left: 0; border-top: 3px dashed var(--wire); }
+  .hops figcaption { max-width: 60ch; margin-inline: auto; text-align: center; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { scroll-behavior: auto !important; }
+}

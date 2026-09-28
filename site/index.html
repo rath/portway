@@ -1,0 +1,338 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Portway, a delta-compressing HTTP proxy for LLM agents</title>
+<meta name="description" content="Coding agents re-upload their whole conversation every turn. Portway is a local HTTP proxy that sends only what changed: about a kilobyte per turn, however long the session runs.">
+<meta property="og:title" content="Portway">
+<meta property="og:description" content="A local HTTP proxy for LLM agents that sends each request as a delta against the one before it.">
+<meta property="og:url" content="https://portway.told.md/">
+<meta property="og:type" content="website">
+<meta name="theme-color" content="#0f1820">
+<link rel="canonical" href="https://portway.told.md/">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=Fragment+Mono&display=swap">
+<link rel="stylesheet" href="style.css">
+<script type="module" src="main.js"></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="masthead">
+  <a class="brand" href="./" aria-label="Portway home">
+    <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7"/><path d="M6 23 L12 9 L18 23 L24 9"/></svg>
+    <span>Portway</span>
+  </a>
+  <nav aria-label="Primary">
+    <a href="#try">Get started</a>
+    <a href="https://github.com/rath/portway/tree/main/docs">Docs</a>
+    <a href="https://github.com/rath/portway">GitHub</a>
+  </nav>
+</header>
+
+<main id="main">
+
+<section class="hero" aria-labelledby="hero-title">
+  <div class="hero-copy">
+    <h1 id="hero-title">Your agent resends its whole conversation every turn.</h1>
+    <p class="lede">Portway is a local HTTP proxy that sends only what changed. With a Portway
+    receiver on the far side of the link, each request crosses the network as a delta
+    against the one before it: about a kilobyte, however long the session has run.</p>
+    <p class="actions">
+      <a class="button primary" href="https://github.com/rath/portway">View source on GitHub</a>
+      <a class="button" href="#try">Get started</a>
+    </p>
+  </div>
+
+  <figure class="monitor" id="monitor">
+    <div class="monitor-head">
+      <figcaption>
+        <strong>One agent session, replayed.</strong>
+        Forty turns through the real binaries. The context starts at 256&nbsp;KiB and
+        grows by 4&nbsp;KiB a turn.
+      </figcaption>
+      <div class="views" role="group" aria-label="Graph view">
+        <button type="button" data-view="total" aria-pressed="true">Running total</button>
+        <button type="button" data-view="turn" aria-pressed="false">Per turn</button>
+      </div>
+    </div>
+
+    <dl class="readout" aria-live="off">
+      <div class="series raw">
+        <dt>Sent by the agent</dt>
+        <dd data-counter="body">13,877,261&nbsp;B</dd>
+      </div>
+      <div class="series zstd">
+        <dt>zstd alone</dt>
+        <dd data-counter="zstd">3,114,150&nbsp;B</dd>
+      </div>
+      <div class="series wire">
+        <dt>Portway on the wire</dt>
+        <dd data-counter="wire">101,551&nbsp;B</dd>
+      </div>
+    </dl>
+
+    <div class="plot" data-plot role="img"
+         aria-label="Over 40 turns the agent sent 13.2 MiB. zstd alone would have sent 3.0 MiB. Portway sent 99 KiB, most of it the first turn.">
+      <noscript>
+        <p class="plot-fallback">Over 40 turns the agent sent 13,877,261 bytes. zstd alone would
+        have sent 3,114,150. Portway sent 101,551.</p>
+      </noscript>
+    </div>
+
+    <div class="scrub">
+      <button type="button" class="replay" data-replay>Replay</button>
+      <label for="turn">Turn <output id="turn-out" for="turn">40</output> of 40</label>
+      <input id="turn" type="range" min="1" max="40" value="40" step="1">
+    </div>
+    <p class="turn-note" data-turn-note>Turn 40: the agent sent 429,900 bytes and 1,029 crossed the wire.</p>
+  </figure>
+</section>
+
+<section class="chapter" aria-labelledby="problem-title">
+  <h2 id="problem-title">Turn 40 is turn 39 plus four kilobytes</h2>
+  <p>A coding agent keeps no state on the server. To take one more step, it sends the system
+  prompt, every earlier message and every tool result again, followed by the few kilobytes
+  that are new. Each request is almost entirely a copy of the one before it.</p>
+
+  <figure class="strips" aria-labelledby="strips-cap">
+    <figcaption id="strips-cap">What each request carries, to scale. The bright end is the part
+    no earlier request contained.</figcaption>
+    <ol class="strip-list">
+      <li><span class="t">Turn 1</span><span class="bar" aria-hidden="true"><span class="old" style="width:0.00%"></span><span class="new" style="width:61.40%"></span></span><span class="n">263,966&nbsp;B</span></li>
+      <li><span class="t">Turn 2</span><span class="bar" aria-hidden="true"><span class="old" style="width:61.40%"></span><span class="new" style="width:0.97%"></span></span><span class="n">268,145&nbsp;B</span></li>
+      <li><span class="t">Turn 3</span><span class="bar" aria-hidden="true"><span class="old" style="width:62.37%"></span><span class="new" style="width:1.03%"></span></span><span class="n">272,556&nbsp;B</span></li>
+      <li class="gap" aria-hidden="true"><span class="t"></span><span>&middot; &middot; &middot;</span></li>
+      <li><span class="t">Turn 20</span><span class="bar" aria-hidden="true"><span class="old" style="width:79.21%"></span><span class="new" style="width:0.97%"></span></span><span class="n">344,723&nbsp;B</span></li>
+      <li class="gap" aria-hidden="true"><span class="t"></span><span>&middot; &middot; &middot;</span></li>
+      <li><span class="t">Turn 39</span><span class="bar" aria-hidden="true"><span class="old" style="width:98.00%"></span><span class="new" style="width:1.03%"></span></span><span class="n">425,707&nbsp;B</span></li>
+      <li><span class="t">Turn 40</span><span class="bar" aria-hidden="true"><span class="old" style="width:99.02%"></span><span class="new" style="width:0.98%"></span></span><span class="n">429,900&nbsp;B</span></li>
+    </ol>
+  </figure>
+
+  <p>So the upload of a session grows with the square of its length. Where that upload is
+  what you wait for or pay for, it adds up quickly:</p>
+  <ul class="fit">
+    <li>a self-hosted model server, or a gateway you run, in another region;</li>
+    <li>a remote development machine, where every turn crosses a VPN or an SSH hop;</li>
+    <li>a laptop on a slow, shared or metered connection.</li>
+  </ul>
+  <p class="aside">Short, single-shot requests gain little. Nothing earlier can serve as a base.</p>
+</section>
+
+<section class="chapter" aria-labelledby="how-title">
+  <h2 id="how-title">The previous turn becomes the dictionary</h2>
+  <p>Portway runs twice: a <em>sender</em> next to your agent, and a <em>receiver</em>
+  in front of the service it calls. Both keep the last request body they agreed on. The
+  sender compresses the next request against it, and the receiver rebuilds the original
+  before your service sees a byte.</p>
+
+  <figure class="hops" aria-labelledby="hops-cap">
+    <ol class="hop-list">
+      <li class="node"><span class="node-name">Agent</span><span class="node-sub">Claude Code, Codex, any client with a base URL</span></li>
+      <li class="link local"><span class="bytes">268,145&nbsp;B</span><span class="link-sub">localhost</span></li>
+      <li class="node"><span class="node-name">portway</span><span class="node-sub">sender, 127.0.0.1:8787</span></li>
+      <li class="link slow"><span class="bytes">1,054&nbsp;B</span><span class="link-sub">the slow link</span></li>
+      <li class="node"><span class="node-name">portway receive</span><span class="node-sub">on a host you control</span></li>
+      <li class="link local"><span class="bytes">268,145&nbsp;B</span><span class="link-sub">same datacentre</span></li>
+      <li class="node"><span class="node-name">Your service</span><span class="node-sub">a model server, a gateway, or a provider API</span></li>
+    </ol>
+    <figcaption id="hops-cap">Turn 2 of the session above. The model receives the same bytes the
+    agent sent; only the middle hop carries the delta.</figcaption>
+  </figure>
+
+  <h3>How the two ends agree on a base</h3>
+  <ol class="steps">
+    <li>
+      <p><strong>Turn 1 seeds the dictionary.</strong> It travels zstd-compressed with
+      <code>X-Dict-Store: 1</code>. The receiver decodes it, passes it on and keeps the body.</p>
+    </li>
+    <li>
+      <p><strong>The receiver confirms what it kept.</strong> Its response carries
+      <code>X-Dict-Stored</code> with the SHA-256 of the bytes it actually stored. The sender
+      uses a body as a base only when that hash matches its own copy.</p>
+    </li>
+    <li>
+      <p><strong>Turn 2 names turn 1 by hash.</strong> It travels as DCZ: a 40-byte header
+      carrying the dictionary's SHA-256, then a checksummed zstd frame compressed against it.
+      The sender keeps up to eight confirmed bodies per route and picks the one that shares the
+      longest prefix with the new request. In an append-only conversation, that is the
+      previous turn.</p>
+    </li>
+  </ol>
+
+  <figure class="rfc" aria-labelledby="rfc-cap">
+<pre tabindex="0" aria-describedby="rfc-cap"><span class="ruler"> 0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1</span>
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|     <b>0x5E</b>      |     <b>0x2A</b>      |     <b>0x4D</b>      |     <b>0x18</b>      |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|     <b>0x20</b>      |     <b>0x00</b>      |     <b>0x00</b>      |     <b>0x00</b>      |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                                                               |
++             <i>SHA-256 of the dictionary, 32 bytes</i>               +
+|                                                               |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                                                               |
++         <i>zstd frame compressed against the dictionary,</i>         +
+|         <i>ending in a content checksum</i>                          |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+</pre>
+    <figcaption id="rfc-cap">A DCZ request body, from
+    <a href="https://www.rfc-editor.org/rfc/rfc9842.html#section-5">RFC 9842, section 5</a>.
+    The first eight bytes are a zstd skippable-frame signature. The capability
+    advertisement, the storage acknowledgement and the retry markers are Portway's own,
+    written up in the <a href="https://github.com/rath/portway/blob/main/docs/protocol.md">protocol</a>.</figcaption>
+  </figure>
+</section>
+
+<section class="chapter" aria-labelledby="fail-title">
+  <h2 id="fail-title">When a base goes missing, it falls back</h2>
+  <p>A receiver restarts, evicts an old body, or meets a sender it has never seen. None of that
+  fails a request. The receiver refuses what it cannot restore <em>before</em> your application
+  runs, marks the refusal, and the sender tries again with less.</p>
+
+  <ol class="ladder">
+    <li>
+      <span class="rung">DCZ against a stored body</span>
+      <span class="why">Falls back on <code class="status">412</code> dictionary gone, or <code class="status">400</code> or <code class="status">415</code> frame refused</span>
+    </li>
+    <li>
+      <span class="rung">Plain zstd, no dictionary</span>
+      <span class="why">Falls back on <code class="status">415</code> encoding refused</span>
+    </li>
+    <li>
+      <span class="rung">Uncompressed, exactly as the agent sent it</span>
+      <span class="why">Always accepted</span>
+    </li>
+  </ol>
+
+  <p>A request is sent at most three times. Portway only replays a refusal carrying the
+  receiver's marker, and the receiver strips that marker from application responses, so your
+  application cannot trigger a replay and never runs a request twice. Errors from your
+  application come back to the agent unchanged.</p>
+</section>
+
+<section class="chapter" aria-labelledby="measured-title">
+  <h2 id="measured-title">A turn costs what it added</h2>
+  <p>The same benchmark at four context sizes, twenty turns each. Plain zstd shrinks each
+  request by about four fifths; the previous-turn dictionary leaves about a kilobyte,
+  whatever the size of the context.</p>
+
+  <div class="table-wrap" tabindex="0" role="region" aria-labelledby="measured-cap">
+    <table>
+      <caption id="measured-cap">Bytes on the wire per turn, after the first turn</caption>
+      <thead>
+        <tr>
+          <th scope="col">Context at turn 1</th>
+          <th scope="col">Uncompressed</th>
+          <th scope="col">zstd only</th>
+          <th scope="col">Portway</th>
+          <th scope="col">Saved over 20 turns</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><th scope="row">128 KiB</th><td>175,405</td><td>41,962</td><td class="w">1,104</td><td>98.5%</td></tr>
+        <tr><th scope="row">256 KiB</th><td>306,503</td><td>69,608</td><td class="w">1,058</td><td>98.7%</td></tr>
+        <tr><th scope="row">512 KiB</th><td>570,438</td><td>122,089</td><td class="w">1,034</td><td>98.8%</td></tr>
+        <tr><th scope="row">1 MiB</th><td>1,094,276</td><td>222,937</td><td class="w">1,048</td><td>98.9%</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="aside">The last column includes the first request, which carries the whole
+  context to seed the dictionary. The synthetic text is tuned so that plain zstd saves about
+  as much as it does on Portway's own source. Every run is reproducible byte for byte, and every
+  restored body is checked against the SHA-256 of what was sent.</p>
+
+<pre class="shell"><code>cargo build --release --locked
+python3 scripts/bench.py --turns 20 --context-kb 1024</code></pre>
+</section>
+
+<section class="chapter" aria-labelledby="limits-title">
+  <h2 id="limits-title">What it does not do</h2>
+  <dl class="limits">
+    <div>
+      <dt>It saves bytes, not tokens.</dt>
+      <dd>The model receives the identical request and bills the identical tokens. Provider
+      prompt caching cuts the cost of processing a repeated prefix; Portway cuts the cost of
+      sending it. Use both.</dd>
+    </div>
+    <div>
+      <dt>It needs a receiver.</dt>
+      <dd>Pointed straight at an API that does not advertise the protocol, the sender forwards
+      requests unchanged and uncompressed. The receiver is <code>portway receive</code>, or any
+      server that implements the protocol.</dd>
+    </div>
+    <div>
+      <dt>It forgets on restart.</dt>
+      <dd>Dictionaries live only in memory on both ends, kept apart per credential. By default a
+      body under 32&nbsp;KiB never becomes one.</dd>
+    </div>
+    <div>
+      <dt>It speaks plain HTTP/1.1.</dt>
+      <dd>No WebSockets, CONNECT, HTTP/2 or inbound TLS; put your gateway in front for TLS and
+      authentication. Requests are buffered up to a configurable 256&nbsp;MiB, and responses
+      stream.</dd>
+    </div>
+  </dl>
+</section>
+
+<section class="chapter" id="try" aria-labelledby="try-title">
+  <h2 id="try-title">Try it</h2>
+  <p>You need Rust 1.97 or later and a C toolchain, on macOS or Linux. No provider, endpoint,
+  credential or price is built in.</p>
+
+  <ol class="steps">
+    <li>
+      <p><strong>Install from a checkout.</strong> Add <code>--features tui,web</code> for the
+      terminal dashboard and the browser console.</p>
+<pre class="shell"><code>git clone https://github.com/rath/portway
+cd portway
+cargo install --path crates/portway --locked</code></pre>
+    </li>
+    <li>
+      <p><strong>Point it at your service and start it.</strong></p>
+<pre class="shell"><code># portway.toml
+upstream = "https://api.example.com"
+host = "127.0.0.1"
+port = 8787</code></pre>
+<pre class="shell"><code>portway --config ./portway.toml</code></pre>
+    </li>
+    <li>
+      <p><strong>Point your agent at Portway.</strong> Set its API base URL to
+      <code>http://127.0.0.1:8787/v1</code> and keep its key and model name. Portway passes the
+      <code>Authorization</code> header through and has no key of its own.</p>
+    </li>
+    <li>
+      <p><strong>Put a receiver on the far side.</strong> Run <code>portway receive</code> behind
+      the gateway in front of your service, then point the sender at the gateway.
+      <a href="https://github.com/rath/portway/blob/main/docs/getting-started.md#add-a-compression-receiver">Receiver setup</a>
+      walks through it.</p>
+    </li>
+  </ol>
+
+  <p>The same repository ships <code>portway-core</code>, an embeddable Rust library, and a CLI
+  with daemon mode, reports, a terminal dashboard and a browser console. It records request
+  metadata in SQLite, never bodies, credentials or dictionary contents.</p>
+
+  <ul class="docs">
+    <li><a href="https://github.com/rath/portway/blob/main/docs/getting-started.md">Getting started</a></li>
+    <li><a href="https://github.com/rath/portway/blob/main/docs/faq.md">FAQ</a></li>
+    <li><a href="https://github.com/rath/portway/blob/main/docs/configuration.md">Configuration</a></li>
+    <li><a href="https://github.com/rath/portway/blob/main/docs/operations.md">Operations</a></li>
+    <li><a href="https://github.com/rath/portway/blob/main/docs/protocol.md">Protocol</a></li>
+    <li><a href="https://github.com/rath/portway/blob/main/SECURITY.md">Security</a></li>
+  </ul>
+</section>
+
+</main>
+
+<footer class="colophon">
+  <p>Portway is open source under the <a href="https://github.com/rath/portway/blob/main/LICENSE">MIT licence</a>.
+  Written by Jang-Ho Hwang.</p>
+  <p><a href="https://github.com/rath/portway">github.com/rath/portway</a></p>
+</footer>
+</body>
+</html>
