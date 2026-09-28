@@ -120,6 +120,12 @@ throughput, latency, and recent events. Live counters are per running instance;
 a viewer reconstructs its window from recorded rows. Usage and costs are read
 from the database for today, yesterday, seven days, or thirty days.
 
+The model table shows at most three recently used models, prioritizing models
+with requests in flight, then the latest completed requests. Unused configured
+models are hidden. The title shows the displayed and total model counts; HUD
+totals and event filters still cover every model. This also applies to remote
+attach. Press `f` to see all in-flight requests or `u` for per-model usage.
+
 Press `f` for the **in flight** dialog, which refreshes every 250ms, both when
 the dashboard owns the forwarder and when it attaches to a local server: model,
 phase (upload, prefill, stream), elapsed time and received bytes. From about 70

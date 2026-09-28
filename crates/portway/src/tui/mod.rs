@@ -327,7 +327,7 @@ fn run(
         if dirty {
             let size = terminal.size()?;
             let area = Rect::new(0, 0, size.width, size.height);
-            state.viewport = view::events_height(area, state.models.len());
+            state.viewport = view::events_height(area, state.recent_models().len());
             // The write that notices a terminal that went away.
             terminal.draw(|frame| view::draw(frame, &state, header))?;
             dirty = false;

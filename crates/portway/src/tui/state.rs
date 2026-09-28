@@ -8,7 +8,7 @@
 //! window has no counters but the events it replayed, and adds those up
 //! instead.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -217,6 +217,8 @@ pub struct State {
     /// Sequence numbers of the entries the current filter admits, in order.
     filtered: VecDeque<u64>,
     next_seq: u64,
+    /// Last observed request per model, independent of event filters/eviction.
+    model_recency: BTreeMap<String, u64>,
     pub filter: Filter,
     /// Viewport pinned to the newest line. Any upward move leaves it.
     pub follow: bool,
@@ -267,6 +269,7 @@ impl State {
             entries: VecDeque::new(),
             filtered: VecDeque::new(),
             next_seq: 0,
+            model_recency: BTreeMap::new(),
             filter: Filter::All,
             follow: true,
             cursor: 0,
@@ -308,6 +311,8 @@ impl State {
                 message,
             },
             Event::Request(record) => {
+                self.model_recency
+                    .insert(record.model.clone(), self.next_seq);
                 if let Some(id) = record.flight {
                     self.flights.retain(|flight| flight.id != id);
                 }
@@ -337,6 +342,7 @@ impl State {
                 self.entries.clear();
                 self.filtered.clear();
                 self.next_seq = 0;
+                self.model_recency.clear();
                 self.cursor = 0;
                 self.top = 0;
                 self.detail = false;
@@ -512,6 +518,33 @@ impl State {
                 .and_then(|snapshot| snapshot.models.get(&model.name).copied())
                 .unwrap_or(0);
         }
+    }
+
+    /// Keep the dashboard compact: active models first, then the most recent
+    /// completed requests. Counters without retained events come last; unused
+    /// configured routes do not occupy a row. Never reorder the full model
+    /// list, which also drives event filtering and aggregate counters.
+    pub fn recent_models(&self) -> Vec<&ModelRow> {
+        let active = |row: &ModelRow| self.flights_available && row.view.in_flight > 0;
+        let mut rows: Vec<_> = self
+            .models
+            .iter()
+            .filter(|row| {
+                active(row) || row.view.requests > 0 || self.model_recency.contains_key(&row.name)
+            })
+            .collect();
+        rows.sort_by(|a, b| {
+            active(b)
+                .cmp(&active(a))
+                .then_with(|| {
+                    self.model_recency
+                        .get(&b.name)
+                        .cmp(&self.model_recency.get(&a.name))
+                })
+                .then_with(|| a.name.cmp(&b.name))
+        });
+        rows.truncate(3);
+        rows
     }
 
     // ----------------------------------------------------------- usage screen

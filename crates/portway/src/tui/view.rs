@@ -155,7 +155,7 @@ pub fn draw(frame: &mut Frame, state: &State, header: &Header) {
         }
         return;
     }
-    let Some(panes) = panes(area, state.models.len()) else {
+    let Some(panes) = panes(area, state.recent_models().len()) else {
         frame.render_widget(
             // Short enough to survive the truncation it is warning about.
             Paragraph::new("too small")
@@ -772,7 +772,9 @@ fn models_table(state: &State, width: u16) -> Table<'_> {
     }
     let header = Row::new(names).style(Style::default().fg(DIM));
 
-    let rows = state.models.iter().map(|row| {
+    let models = state.recent_models();
+    let title = format!("recent models · {}/{}", models.len(), state.models.len());
+    let rows = models.into_iter().map(|row| {
         let view = &row.view;
         let errors = view.upstream_errors;
         let mut cells = vec![
@@ -856,7 +858,10 @@ fn models_table(state: &State, width: u16) -> Table<'_> {
         .column_spacing(1)
         .block(
             Block::bordered()
-                .title_top(titled("models"))
+                .title_top(Line::styled(
+                    format!(" {title} "),
+                    Style::default().fg(DIM).add_modifier(Modifier::BOLD),
+                ))
                 .border_style(Style::default().fg(DIM))
                 .padding(Padding::horizontal(1)),
         )
@@ -2390,6 +2395,51 @@ mod tests {
         // keeps the single-size row every other test asserts.
         let plain = screen(140, 44, &populated());
         assert!(!plain.contains("agent"), "{plain}");
+    }
+
+    #[test]
+    fn eleven_models_leave_room_for_events_and_rank_recent_activity() {
+        let mut state = State::new();
+        for n in 0..11 {
+            state.models.push(crate::tui::state::ModelRow {
+                name: format!("model-{n:02}"),
+                view: StatsView::default(),
+            });
+        }
+        assert!(state.recent_models().is_empty());
+        assert!(!screen(100, 24, &state).contains("recent models"));
+        for n in [9, 2, 7, 4, 7] {
+            state.push(Event::Request(Arc::new(record(
+                &format!("model-{n:02}"),
+                200,
+            ))));
+        }
+        let names = |state: &State| {
+            state
+                .recent_models()
+                .iter()
+                .map(|row| row.name.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(names(&state), ["model-07", "model-04", "model-02"]);
+        state.models[10].view.in_flight = 1;
+        assert_eq!(names(&state), ["model-10", "model-07", "model-04"]);
+        state.set_filter(crate::tui::state::Filter::Model("model-02".into()));
+        assert_eq!(names(&state), ["model-10", "model-07", "model-04"]);
+        for width in [78, 140] {
+            let out = screen(width, 24, &state);
+            assert!(out.contains("recent models · 3/11"), "{out}");
+            assert!(out.contains("socket bytes/s"), "{out}");
+            let panes = panes(Rect::new(0, 0, width, 24), state.recent_models().len()).unwrap();
+            assert_eq!(panes.models.unwrap().height, 6);
+            assert!(panes.events.height >= 6);
+            let table = out.lines().skip(5).take(6).collect::<Vec<_>>().join("\n");
+            assert!(table.contains("model-10"), "{table}");
+            assert!(!table.contains("model-02"), "{table}");
+        }
+        state.flights_available = false;
+        assert_eq!(names(&state), ["model-07", "model-04", "model-02"]);
+        assert_eq!(state.models.len(), 11);
     }
 
     #[test]

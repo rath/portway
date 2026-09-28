@@ -16,6 +16,8 @@ version may contain breaking changes.
 
 ### Fixed
 
+- The TUI model table shows at most three recently used models, prioritizes
+  in-flight activity, and hides unused routes to leave more room for events.
 - The TUI's in-flight dialog stands apart from the dashboard with a muted
   backdrop, double border, clearer title and close keys, and vertical padding.
 - `--reload` publishes the price table with the routes it rebuilds, so editing a
