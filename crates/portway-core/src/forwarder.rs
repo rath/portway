@@ -641,15 +641,17 @@ impl Forwarder {
         }
     }
 
-    /// `coding` is what was negotiated; the turn goes out as `dcz` instead when
-    /// the upstream holds a body to compress it against.
+    /// `coding` and `dict` are what was negotiated when the request arrived; the
+    /// turn goes out as `dcz` instead when the upstream holds a body to compress
+    /// it against.
     fn encode_turn(
         &self,
         body: &Bytes,
         coding: Coding,
+        dict: bool,
         scope: &dict::DictionaryScope,
     ) -> std::io::Result<Encoded> {
-        if coding == Coding::Zstd && self.dict.load(Ordering::Relaxed) {
+        if coding == Coding::Zstd && dict {
             let hash = Some(dict::sha256(body));
             if let Some(base) = self.ring.pick_scoped(body, scope) {
                 return Ok(Encoded {
@@ -841,6 +843,9 @@ impl Forwarder {
         let selected = origin_attempt
             .as_ref()
             .map_or_else(|| self.coding(), |attempt| attempt.coding);
+        // Read with the coding, before anything awaits: a re-probe applied while
+        // this turn is encoding must not change what it asks the upstream to keep.
+        let dict = self.dict.load(Ordering::Relaxed);
 
         // Any content-encoding the agent set means it framed the body itself;
         // the bytes and the header both pass through untouched.
@@ -862,7 +867,7 @@ impl Forwarder {
                         hash: None,
                     })
                 } else {
-                    this.encode_turn(&source, negotiated, &encoding_scope)
+                    this.encode_turn(&source, negotiated, dict, &encoding_scope)
                 }
             });
             if let Ok(Ok(encoded)) = job.await
