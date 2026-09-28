@@ -107,6 +107,20 @@ Keep each pull request to one logical change. Add a line under
 `## [Unreleased]` in [CHANGELOG.md](CHANGELOG.md) for anything a user or
 embedder would notice.
 
+## Releasing
+
+Releases are tagged `v<version>` on `main`, and `portway --version` reports the
+tag it was built from: a tagged commit prints `0.1.0`, a commit five past it
+`0.1.0+5.g1a2b3c4`.
+
+1. Set `version` in the root `Cargo.toml` and run `cargo check` so that
+   `Cargo.lock` follows. The build warns when a tag and the manifest disagree.
+2. In [CHANGELOG.md](CHANGELOG.md), rename `## [Unreleased]` to
+   `## [X.Y.Z] - YYYY-MM-DD`, add an empty `## [Unreleased]` above it, and
+   update the comparison links at the bottom.
+3. Commit as `chore(release): X.Y.Z`, then tag that commit with
+   `git tag -a vX.Y.Z -m "Portway X.Y.Z"` and push both.
+
 ## License
 
 By contributing, you agree that your contributions are licensed under the
