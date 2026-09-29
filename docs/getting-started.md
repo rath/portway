@@ -80,7 +80,7 @@ terminal to the real key. For example, replace the placeholder below, or load
 the variable from your existing secret manager:
 
 ```sh
-export UPSTREAM_API_KEY='replace-with-your-upstream-key'
+export UPSTREAM_API_KEY='<your-upstream-key>'
 ```
 
 The variable name here is just for curl; Portway does not read it. Replace
