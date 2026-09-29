@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Portway：面向编程智能体的增量压缩 HTTP 代理</title>
-<meta name="description" content="面向 Claude Code、Codex 以及其他 LLM 智能体的本地 HTTP 代理。每一轮都以 zstd 增量经过链路：约 1 KiB，而不是整个上下文。">
+<meta name="description" content="面向 Claude Code、Codex 等 LLM 智能体的本地 HTTP 代理。每一轮都以 zstd 增量通过链路：只有约 1 KiB，而不是整个上下文。">
 <meta name="author" content="Jang-Ho Hwang">
 <meta name="theme-color" content="#0f1820">
 <link rel="canonical" href="https://portway.told.me/zh/">
@@ -23,25 +23,9 @@
 <meta property="og:image:type" content="image/png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
-<meta property="og:image:alt" content="在一次 40 轮的会话中，智能体发送了 13.2 MiB，仅用 zstd 是 3.0 MiB，而 Portway 在链路上只发了 99 KiB。">
+<meta property="og:image:alt" content="在 40 轮的会话里，智能体发送了 13.2 MiB，只用 zstd 是 3.0 MiB，而 Portway 在链路上只发出 99 KiB。">
 <meta name="twitter:card" content="summary_large_image">
-<script type="application/ld+json">
-{
-  "@context": "https://schema.org",
-  "@type": "SoftwareApplication",
-  "name": "Portway",
-  "url": "https://portway.told.me/zh/",
-  "inLanguage": "zh-Hans",
-  "description": "本地 HTTP 代理：当链路另一端运行 portway receive 时，它把每个请求作为针对上一个请求的 zstd 增量发送出去。",
-  "applicationCategory": "DeveloperApplication",
-  "operatingSystem": "macOS, Linux",
-  "image": "https://portway.told.me/og.png",
-  "license": "https://github.com/rath/portway/blob/main/LICENSE",
-  "sameAs": ["https://github.com/rath/portway"],
-  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
-  "author": { "@type": "Person", "name": "Jang-Ho Hwang", "url": "https://xrath.com" }
-}
-</script>
+<script type="application/ld+json"> { "@context": "https://schema.org", "@type": "SoftwareApplication", "name": "Portway", "url": "https://portway.told.me/zh/", "inLanguage": "zh-Hans", "description": "本地 HTTP 代理。当链路另一端运行 portway receive 时，每个请求都作为相对上一次请求的 zstd 增量发出。", "applicationCategory": "DeveloperApplication", "operatingSystem": "macOS, Linux", "image": "https://portway.told.me/og.png", "license": "https://github.com/rath/portway/blob/main/LICENSE", "sameAs": ["https://github.com/rath/portway"], "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }, "author": { "@type": "Person", "name": "Jang-Ho Hwang", "url": "https://xrath.com" } } </script>
 <link rel="icon" href="../favicon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="../apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -87,9 +71,7 @@
 <section class="hero" aria-labelledby="hero-title">
   <div class="hero-copy">
     <h1 id="hero-title">你的智能体每一轮都在重发整个对话。</h1>
-    <p class="lede">Portway 是一个只发送变化部分的本地 HTTP 代理。只要链路另一端有一个
-    Portway 接收端，每个请求就以相对上一个请求的增量穿过网络：无论会话跑了多久，
-    都只有约 1 KB。</p>
+    <p class="lede">Portway 是一个只发送变化部分的本地 HTTP 代理。链路对端只要有 Portway 接收端，每个请求就以相对上一次请求的增量穿过网络：无论会话跑了多久，都只有约 1 KB。</p>
     <p class="actions">
       <a class="button primary" href="https://github.com/rath/portway">在 GitHub 上查看源码</a>
       <a class="button" href="#try">快速开始</a>
@@ -99,10 +81,7 @@
   <figure class="monitor" id="monitor">
     <div class="monitor-head">
       <figcaption>
-        <strong>一次真实智能体会话的回放。</strong>
-        用真实的二进制跑满四十轮。上下文从 256&nbsp;KiB 起步，每轮增长
-        4&nbsp;KiB。
-      </figcaption>
+        <strong>一次真实智能体会话的回放。</strong>用真实二进制跑满 40 轮。上下文从 256&nbsp;KiB 起步，每轮增长 4&nbsp;KiB。</figcaption>
       <div class="views" role="group" aria-label="图表视图">
         <button type="button" data-view="total" aria-pressed="true">累计</button>
         <button type="button" data-view="turn" aria-pressed="false">每轮</button>
@@ -119,22 +98,21 @@
         <dd data-counter="zstd">3,114,150&nbsp;B</dd>
       </div>
       <div class="series wire">
-        <dt>Portway 在链路上</dt>
+        <dt>Portway 经链路发送的字节</dt>
         <dd data-counter="wire">101,551&nbsp;B</dd>
       </div>
     </dl>
 
     <div class="plot" data-plot role="img"
-         aria-label="在 40 轮中智能体发送了 13.2 MiB。仅用 zstd 会发送 3.0 MiB。Portway 发送了 99 KiB，其中大部分是第 1 轮。">
+         aria-label="40 轮下来，智能体发送了 13.2 MiB；只用 zstd 的话是 3.0 MiB；Portway 只发出 99 KiB，其中大部分集中在第 1 轮。">
       <noscript>
-        <p class="plot-fallback">在 40 轮中智能体发送了 13,877,261 字节。仅用 zstd 会发送
-        3,114,150 字节。Portway 发送了 101,551 字节。</p>
+        <p class="plot-fallback">40 轮下来，智能体发送了 13,877,261 字节；只用 zstd 的话是 3,114,150 字节；Portway 发出 101,551 字节。</p>
       </noscript>
     </div>
 
     <div class="scrub">
       <button type="button" class="replay" data-replay>重播</button>
-      <label for="turn">第 <output id="turn-out" for="turn">40</output> 轮，共 40 轮</label>
+      <label for="turn">第 <output id="turn-out" for="turn">40</output> 轮 / 共 40 轮</label>
       <input id="turn" type="range" min="1" max="40" value="40" step="1">
     </div>
     <p class="turn-note" data-turn-note>第 40 轮：智能体发送了 <b>429,900</b> 字节，而经过链路的只有 <b class="w">1,029</b> 字节。</p>
@@ -143,13 +121,10 @@
 
 <section class="chapter" aria-labelledby="problem-title">
   <h2 id="problem-title">第 40 轮，就是第 39 轮加上 4 KB</h2>
-  <p>编程智能体不在服务端保存任何状态。要再走一步，它会把系统提示词、此前的每一条消息、
-  每一条工具调用结果重新发一遍，后面再跟上新产生的那几 KB。于是每个请求几乎都是上一个
-  请求的副本。</p>
+  <p>编程智能体不在服务端保存任何状态。为了往前走一步，它会把系统提示词、此前的每一条消息、每一条工具调用结果重新发一遍，末尾再附上新产生的那几 KB。所以每个请求几乎都是上一个请求的副本。</p>
 
   <figure class="strips" aria-labelledby="strips-cap">
-    <figcaption id="strips-cap">每个请求实际承载的内容，按比例绘制。亮色的末端是此前
-    任何请求都不曾包含的部分。</figcaption>
+    <figcaption id="strips-cap">每个请求实际承载的数据，按比例绘制。亮色的一端是此前任何请求都不曾包含的部分。</figcaption>
     <ol class="strip-list">
       <li><span class="t">第 1 轮</span><span class="bar" aria-hidden="true"><span class="old" style="width:0.00%"></span><span class="new" style="width:61.40%"></span></span><span class="n">263,966&nbsp;B</span></li>
       <li><span class="t">第 2 轮</span><span class="bar" aria-hidden="true"><span class="old" style="width:61.40%"></span><span class="new" style="width:0.97%"></span></span><span class="n">268,145&nbsp;B</span></li>
@@ -162,21 +137,18 @@
     </ol>
   </figure>
 
-  <p>于是会话的上传量随长度的平方增长。当这份上传正是你要等待、要为之付费的东西时，
-  它很快就显出来了：</p>
+  <p>于是会话的上传量随长度的平方增长。如果这份上传量正好落在你需要等待、需要付费的地方，很快就会显出来：</p>
   <ul class="fit">
-    <li>另一个区域里的自建模型服务，或你自己运营的网关；</li>
-    <li>远程开发机，每一轮都要穿过 VPN 或一路 SSH；</li>
-    <li>在慢速、共享或按流量计费的网络上的笔记本。</li>
+    <li>部署在另一个区域的模型服务，或你自己运维的网关；</li>
+    <li>每一轮请求都要穿过 VPN 或 SSH 的远程开发机；</li>
+    <li>连着慢速、共享或按流量计费网络的笔记本。</li>
   </ul>
   <p class="aside">短小的单次请求收效甚微——没有更早的请求可以充当基线。</p>
 </section>
 
 <section class="chapter" aria-labelledby="how-title">
   <h2 id="how-title">上一轮成了词典</h2>
-  <p>Portway 运行在两处：智能体旁边的<em>发送端</em>，以及它调用的服务前面的<em>接收端</em>。
-  两端都保留着它们上一次达成一致的请求体。发送端用它对下一个请求做压缩，接收端在你的
-  服务看到任何一个字节之前，把原文重建出来。</p>
+  <p>Portway 分两处运行：一是智能体旁边的<em>发送端</em>，二是它调用的服务前面的<em>接收端</em>。两端各自保留着上一次达成一致的请求体。发送端用它压缩下一个请求；接收端则在你的服务看到一个字节之前，把原文还原出来。</p>
 
   <figure class="hops" aria-labelledby="hops-cap">
     <ol class="hop-list">
@@ -188,26 +160,19 @@
       <li class="link local"><span class="bytes">268,145&nbsp;B</span><span class="link-sub">同一数据中心</span></li>
       <li class="node"><span class="node-name">你的服务</span><span class="node-sub">模型服务、网关或服务商 API</span></li>
     </ol>
-    <figcaption id="hops-cap">上图会话的第 2 轮。模型收到的是智能体发来的同一批字节；
-    只有中间那一跳承载增量。</figcaption>
+    <figcaption id="hops-cap">上图会话的第 2 轮。模型收到的是智能体发来的同一批字节；只有中间那一跳承载增量。</figcaption>
   </figure>
 
   <h3>两端如何就基线达成一致</h3>
   <ol class="steps">
     <li>
-      <p><strong>第 1 轮播下词典。</strong>它带着 <code>X-Dict-Store: 1</code> 以 zstd
-      压缩后出发。接收端把它解出来、转发出去，并把请求体留下。</p>
+      <p><strong>第 1 轮播下词典。</strong>这个请求以 zstd 压缩后发出，并带上 <code>X-Dict-Store: 1</code>。接收端解压后转发出去，把请求体留下。</p>
     </li>
     <li>
-      <p><strong>接收端确认自己留下了什么。</strong>它的响应带上
-      <code>X-Dict-Stored</code>，里面是它实际存下的那些字节的 SHA-256。只有当这个哈希
-      与自己的副本一致时，发送端才会把某个请求体当作基线。</p>
+      <p><strong>接收端确认自己留了什么。</strong>响应里带上 <code>X-Dict-Stored</code>，其中是它实际保存的字节的 SHA-256。只有当这个哈希与自己的副本一致时，发送端才会把该请求体当作基线。</p>
     </li>
     <li>
-      <p><strong>第 2 轮用哈希指名第 1 轮。</strong>它以 DCZ 出发：先是 40 字节的报头，
-      携带词典的 SHA-256，接着是针对该词典压缩、带内容校验和的 zstd 帧。发送端为每条路由
-      保留最多八个已确认的请求体，并挑出与新请求共享最长前缀的那一个。在只追加的对话里，
-      那就是上一轮。</p>
+      <p><strong>第 2 轮用哈希指名第 1 轮。</strong>这个请求以 DCZ 格式发出：先是一段 40 字节的报头，携带词典的 SHA-256；接着是针对该词典压缩、带内容校验和的 zstd 帧。发送端为每条路由保留最多 8 个已确认的请求体，挑出与新请求共享最长前缀的那个。在只做追加的对话里，它就是上一轮。</p>
     </li>
   </ol>
 
@@ -227,43 +192,35 @@
 +         <i>zstd frame compressed against the dictionary,</i>         +
 |         <i>ending in a content checksum</i>                          |
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+</pre>
-    <figcaption id="rfc-cap">一个 DCZ 请求体，来自
-    <a href="https://www.rfc-editor.org/rfc/rfc9842.html#section-5">RFC 9842 第 5 节</a>。
-    开头八个字节是 zstd skippable frame 的签名。能力通告、存储确认和重试标记是 Portway
-    自己的约定，写在<a href="https://github.com/rath/portway/blob/main/docs/protocol.md">协议</a>文档里。</figcaption>
+    <figcaption id="rfc-cap">DCZ 请求体，出自 <a href="https://www.rfc-editor.org/rfc/rfc9842.html#section-5">RFC 9842 第 5 节</a>。开头 8 个字节是 zstd 可跳过帧（skippable frame）的签名。能力通告、存储确认和重试标记属于 Portway 自己的约定，写在<a href="https://github.com/rath/portway/blob/main/docs/protocol.md">协议</a>文档里。</figcaption>
   </figure>
 </section>
 
 <section class="chapter" aria-labelledby="fail-title">
   <h2 id="fail-title">基线不见了，就逐级退让</h2>
-  <p>接收端重启、淘汰了旧的请求体，或者遇上一个从未见过的发送端。这些都不会让请求失败。
-  接收端会在你的应用跑起来<em>之前</em>拒绝它无法还原的东西，留下拒绝标记，发送端则用更少
-  的压缩再试一次。</p>
+  <p>接收端会重启、会淘汰旧的请求体，也可能遇到从未见过的发送端。无论哪种情况，请求都不会失败。接收端会在你的应用跑起来<em>之前</em>拒绝它无法还原的请求，留下拒绝标记；发送端则降低压缩再试一次。</p>
 
   <ol class="ladder">
     <li>
-      <span class="rung">针对已存请求体的 DCZ</span>
-      <span class="why">遇到 <code class="status">412</code> 词典已不在，或 <code class="status">400</code>、<code class="status">415</code> 帧被拒时退让</span>
+      <span class="rung">以已保存的请求体为基线的 DCZ</span>
+      <span class="why">碰到 <code class="status">412</code>（词典已不在），或 <code class="status">400</code>、<code class="status">415</code>（帧被拒），就退让</span>
     </li>
     <li>
-      <span class="rung">纯 zstd，不带词典</span>
-      <span class="why">遇到 <code class="status">415</code> 编码被拒时退让</span>
+      <span class="rung">只用 zstd，不带词典</span>
+      <span class="why">碰到 <code class="status">415</code>（编码被拒），就退让</span>
     </li>
     <li>
-      <span class="rung">不压缩，原样照智能体发来的发送</span>
+      <span class="rung">不压缩，照智能体发来的原样发送</span>
       <span class="why">始终接受</span>
     </li>
   </ol>
 
-  <p>一个请求最多发送三次。Portway 只重放带有接收端标记的拒绝，而接收端会把那个标记从
-  应用响应里抹掉，所以你的应用无法触发重放，也绝不会把同一个请求跑两遍。应用返回的错误
-  原样回到智能体手上。</p>
+  <p>每个请求最多发送三次。Portway 只重放带有接收端标记的拒绝，而接收端会把这个标记从应用响应里抹掉。所以你的应用无法触发重放，同一个请求也绝不会跑两遍。应用返回的错误会原样回到智能体那里。</p>
 </section>
 
 <section class="chapter" aria-labelledby="measured-title">
   <h2 id="measured-title">一轮的代价就是它新增的部分</h2>
-  <p>同一个基准在四种上下文规模下各跑二十轮。纯 zstd 把每个请求减少约五分之四；上一轮
-  词典则留下约 1 KB，无论上下文有多大。</p>
+  <p>同一个基准在四种上下文规模下各跑 20 轮。只用 zstd 能把每个请求减少约五分之四；用上一轮词典，无论上下文多大，最后都只剩约 1 KB。</p>
 
   <div class="table-wrap" tabindex="0" role="region" aria-labelledby="measured-cap">
     <table>
@@ -285,9 +242,7 @@
       </tbody>
     </table>
   </div>
-  <p class="aside">最后一列包含第一个请求，它要携带整个上下文来播下词典。合成文本经过
-  调校，使纯 zstd 的节省幅度与它在 Portway 自身源码上相当。每次运行都能逐字节复现，
-  每个被还原的请求体都会与发送时所算的 SHA-256 对照。</p>
+  <p class="aside">最后一列包含了第一个请求，它要带上整个上下文来播下词典。合成文本经过调校，让只用 zstd 的压缩效果与它在 Portway 自身源码上大致相同。每次运行都能逐字节复现，每个还原出来的请求体都会与发送时计算的 SHA-256 比对。</p>
 
 <pre class="shell"><code>cargo build --release --locked
 python3 scripts/bench.py --turns 20 --context-kb 1024</code></pre>
@@ -298,42 +253,36 @@ python3 scripts/bench.py --turns 20 --context-kb 1024</code></pre>
   <dl class="limits">
     <div>
       <dt>它节省的是字节，不是 token。</dt>
-      <dd>模型收到的请求一模一样，计费的 token 也一模一样。服务商的提示缓存省下处理重复
-      前缀的开销；Portway 省下发送它的开销。两者一起用。</dd>
+      <dd>模型收到的请求一模一样，计费的 token 也一模一样。服务商的提示缓存省下处理重复前缀的开销；Portway 省下发送它的开销。两者配合使用。</dd>
     </div>
     <div>
       <dt>它需要一个接收端。</dt>
-      <dd>直指一个不宣告该协议的 API 时，发送端会原样、不压缩地转发请求。接收端可以是
-      <code>portway receive</code>，也可以是任何实现了该协议的服务。</dd>
+      <dd>如果指向一个并不声明该协议的 API，发送端会原样、不压缩地转发请求。接收端可以是 <code>portway receive</code>，也可以是任何实现了该协议的服务。</dd>
     </div>
     <div>
       <dt>它一重启就忘。</dt>
-      <dd>词典只存在两端的内存里，并按凭据彼此隔离。默认情况下，小于 32&nbsp;KiB 的请求体
-      永远不会成为词典。</dd>
+      <dd>词典只存在两端的内存里，并按凭据彼此隔离。默认情况下，小于 32&nbsp;KiB 的请求体不会成为词典。</dd>
     </div>
     <div>
       <dt>它只说普通的 HTTP/1.1。</dt>
-      <dd>没有 WebSocket、CONNECT、HTTP/2，也没有入站 TLS；TLS 和认证请交给前面的网关。
-      请求最多缓冲到可配置的 256&nbsp;MiB，响应则是流式的。</dd>
+      <dd>没有 WebSocket、CONNECT、HTTP/2，也没有入站 TLS；TLS 和认证请交给前面的网关。请求最多缓冲到可配置的 256&nbsp;MiB，响应则是流式的。</dd>
     </div>
   </dl>
 </section>
 
 <section class="chapter" id="try" aria-labelledby="try-title">
   <h2 id="try-title">试一试</h2>
-  <p>你需要 Rust 1.97 或更高版本，以及一套 C 工具链，运行在 macOS 或 Linux 上。没有内置
-  任何服务商、端点、凭据或价格。</p>
+  <p>你需要 Rust 1.97 或更高版本，以及一套 C 工具链，运行在 macOS 或 Linux 上。没有内置任何服务商、端点、凭据或价格。</p>
 
   <ol class="steps">
     <li>
-      <p><strong>从检出安装。</strong>再加上 <code>--features tui,web</code> 就有了终端
-      面板和浏览器控制台。</p>
+      <p><strong>从源码检出安装。</strong>再加上 <code>--features tui,web</code>，还能得到终端面板和浏览器控制台。</p>
 <pre class="shell"><code>git clone https://github.com/rath/portway
 cd portway
 cargo install --path crates/portway --locked</code></pre>
     </li>
     <li>
-      <p><strong>指向你的服务并启动它。</strong></p>
+      <p><strong>指向你的服务并启动。</strong></p>
 <pre class="shell"><code># portway.toml
 upstream = "https://api.example.com"
 host = "127.0.0.1"
@@ -341,20 +290,14 @@ port = 8787</code></pre>
 <pre class="shell"><code>portway --config ./portway.toml</code></pre>
     </li>
     <li>
-      <p><strong>让你的智能体指向 Portway。</strong>把它的 API base URL 设为
-      <code>http://127.0.0.1:8787/v1</code>，密钥和模型名保持不变。Portway 原样透传
-      <code>Authorization</code> 头，自己不持有密钥。</p>
+      <p><strong>让你的智能体指向 Portway。</strong>把它的 API base URL 设为 <code>http://127.0.0.1:8787/v1</code>，密钥和模型名保持不变。Portway 原样透传 <code>Authorization</code> 头，自己不持有密钥。</p>
     </li>
     <li>
-      <p><strong>在另一端放上接收端。</strong>在你服务前面的网关之后再运行
-      <code>portway receive</code>，然后让发送端指向那个网关。
-      <a href="https://github.com/rath/portway/blob/main/docs/getting-started.md#add-a-compression-receiver">接收端设置</a>走完了全过程。</p>
+      <p><strong>在对端放上接收端。</strong>在你服务前面的网关后面运行 <code>portway receive</code>，然后让发送端指向那个网关。<a href="https://github.com/rath/portway/blob/main/docs/getting-started.md#add-a-compression-receiver">接收端设置</a>里有完整步骤。</p>
     </li>
   </ol>
 
-  <p>同一个仓库还提供可嵌入的 Rust 库 <code>portway-core</code>，以及一个带守护模式、
-  报表、终端面板和浏览器控制台的 CLI。它把请求元数据记进 SQLite，绝不记录请求体、
-  凭据或词典内容。</p>
+  <p>同一个仓库还提供可嵌入的 Rust 库 <code>portway-core</code>，以及一个自带守护模式、报表、终端面板和浏览器控制台的 CLI。它把请求元数据记进 SQLite，绝不记录请求体、凭据或词典内容。</p>
 
   <ul class="docs">
     <li><a href="https://github.com/rath/portway/blob/main/docs/getting-started.md">快速开始</a></li>
@@ -369,8 +312,7 @@ port = 8787</code></pre>
 </main>
 
 <footer class="colophon">
-  <p>Portway 以 <a href="https://github.com/rath/portway/blob/main/LICENSE">MIT 许可证</a>
-  开源。作者是 <a href="https://xrath.com">Jang-Ho Hwang</a>。</p>
+  <p>Portway 以 <a href="https://github.com/rath/portway/blob/main/LICENSE">MIT 许可证</a>开源。作者是 <a href="https://xrath.com">Jang-Ho Hwang</a>。</p>
   <p><a href="https://github.com/rath/portway">github.com/rath/portway</a></p>
 </footer>
 </body>

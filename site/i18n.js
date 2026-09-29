@@ -23,7 +23,7 @@ export const STRINGS = {
   "zh-Hans": {
     replay: "重播",
     stop: "停止",
-    seed: '第 1 轮：智能体发送了 <b>{body}</b> 字节。Portway 为了播下词典，把整个上下文以 zstd 压缩后一次性发送了 <b class="w">{wire}</b> 字节。',
+    seed: '第 1 轮：智能体发送了 <b>{body}</b> 字节。Portway 为了播下词典，把整个上下文用 zstd 压缩后一次发出，共 <b class="w">{wire}</b> 字节。',
     turn: '第 {turn} 轮：智能体发送了 <b>{body}</b> 字节，而经过链路的只有 <b class="w">{wire}</b> 字节。',
   },
   ja: {
