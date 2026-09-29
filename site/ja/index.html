@@ -25,23 +25,7 @@
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="40 ターンのセッション 1 回で、エージェントは 13.2 MiB を送り、zstd だけなら 3.0 MiB、Portway が回線に載せたのは 99 KiB でした。">
 <meta name="twitter:card" content="summary_large_image">
-<script type="application/ld+json">
-{
-  "@context": "https://schema.org",
-  "@type": "SoftwareApplication",
-  "name": "Portway",
-  "url": "https://portway.told.me/ja/",
-  "inLanguage": "ja",
-  "description": "コーディングエージェントのリクエストを、直前のリクエストに対する zstd の差分として送り出すローカル HTTP プロキシ。接続の反対側で portway receive が動いているときに機能します。",
-  "applicationCategory": "DeveloperApplication",
-  "operatingSystem": "macOS, Linux",
-  "image": "https://portway.told.me/og.png",
-  "license": "https://github.com/rath/portway/blob/main/LICENSE",
-  "sameAs": ["https://github.com/rath/portway"],
-  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
-  "author": { "@type": "Person", "name": "Jang-Ho Hwang", "url": "https://xrath.com" }
-}
-</script>
+<script type="application/ld+json"> { "@context": "https://schema.org", "@type": "SoftwareApplication", "name": "Portway", "url": "https://portway.told.me/ja/", "inLanguage": "ja", "description": "コーディングエージェントのリクエストを、直前のリクエストに対する zstd の差分として送り出すローカル HTTP プロキシ。接続の反対側で portway receive が動いているときに機能します。", "applicationCategory": "DeveloperApplication", "operatingSystem": "macOS, Linux", "image": "https://portway.told.me/og.png", "license": "https://github.com/rath/portway/blob/main/LICENSE", "sameAs": ["https://github.com/rath/portway"], "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }, "author": { "@type": "Person", "name": "Jang-Ho Hwang", "url": "https://xrath.com" } } </script>
 <link rel="icon" href="../favicon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="../apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -87,9 +71,7 @@
 <section class="hero" aria-labelledby="hero-title">
   <div class="hero-copy">
     <h1 id="hero-title">エージェントは毎ターン、会話の全体を送り直します。</h1>
-    <p class="lede">Portway は、変わった部分だけを送るローカル HTTP プロキシです。リンクの
-    反対側に Portway のレシーバーがあれば、各リクエストは直前のリクエストに対する差分として
-    ネットワークを渡ります。セッションがどれだけ長く続いても、およそ 1 キロバイトです。</p>
+    <p class="lede">Portway は、変わった部分だけを送るローカル HTTP プロキシです。リンクの反対側に Portway のレシーバーがあれば、各リクエストは直前のリクエストに対する差分としてネットワークを渡ります。セッションがどれだけ長く続いても、およそ 1 キロバイトです。</p>
     <p class="actions">
       <a class="button primary" href="https://github.com/rath/portway">GitHub でソースを見る</a>
       <a class="button" href="#try">はじめに</a>
@@ -99,10 +81,7 @@
   <figure class="monitor" id="monitor">
     <div class="monitor-head">
       <figcaption>
-        <strong>実際のエージェントセッション 1 回の再生です。</strong>
-        本物のバイナリで 40 ターン走らせました。コンテキストは 256&nbsp;KiB から始まり、
-        1 ターンごとに 4&nbsp;KiB 増えます。
-      </figcaption>
+        <strong>実際のエージェントセッション 1 回の再生です。</strong>本物のバイナリで 40 ターン走らせました。コンテキストは 256&nbsp;KiB から始まり、1 ターンごとに 4&nbsp;KiB 増えます。</figcaption>
       <div class="views" role="group" aria-label="グラフ表示">
         <button type="button" data-view="total" aria-pressed="true">累計</button>
         <button type="button" data-view="turn" aria-pressed="false">ターンごと</button>
@@ -127,8 +106,7 @@
     <div class="plot" data-plot role="img"
          aria-label="40 ターンでエージェントは 13.2 MiB を送りました。zstd だけであれば 3.0 MiB でした。Portway は 99 KiB を送り、その大半は最初のターンです。">
       <noscript>
-        <p class="plot-fallback">40 ターンでエージェントは 13,877,261 バイトを送りました。zstd
-        だけであれば 3,114,150 バイトでした。Portway は 101,551 バイトを送りました。</p>
+        <p class="plot-fallback">40 ターンでエージェントは 13,877,261 バイトを送りました。zstd だけであれば 3,114,150 バイトでした。Portway は 101,551 バイトを送りました。</p>
       </noscript>
     </div>
 
@@ -143,14 +121,10 @@
 
 <section class="chapter" aria-labelledby="problem-title">
   <h2 id="problem-title">40 ターン目は、39 ターン目に 4 キロバイトを足したもの</h2>
-  <p>コーディングエージェントはサーバー側に何の状態も持ちません。もう一歩進むために、
-  システムプロンプトとこれまでのすべてのメッセージ、すべてのツール結果をもう一度送り、
-  そのあとに新しく増えた数キロバイトを付け足します。どのリクエストも、直前のリクエストを
-  ほとんどそのまま写したものです。</p>
+  <p>コーディングエージェントはサーバー側に何の状態も持ちません。もう一歩進むために、システムプロンプトとこれまでのすべてのメッセージ、すべてのツール結果をもう一度送り、そのあとに新しく増えた数キロバイトを付け足します。どのリクエストも、直前のリクエストをほとんどそのまま写したものです。</p>
 
   <figure class="strips" aria-labelledby="strips-cap">
-    <figcaption id="strips-cap">各リクエストが実際に運ぶもの。縮尺どおりに描いています。
-    明るい端が、それ以前のどのリクエストにも含まれていなかった部分です。</figcaption>
+    <figcaption id="strips-cap">各リクエストが実際に運ぶもの。縮尺どおりに描いています。明るい端が、それ以前のどのリクエストにも含まれていなかった部分です。</figcaption>
     <ol class="strip-list">
       <li><span class="t">1 ターン</span><span class="bar" aria-hidden="true"><span class="old" style="width:0.00%"></span><span class="new" style="width:61.40%"></span></span><span class="n">263,966&nbsp;B</span></li>
       <li><span class="t">2 ターン</span><span class="bar" aria-hidden="true"><span class="old" style="width:61.40%"></span><span class="new" style="width:0.97%"></span></span><span class="n">268,145&nbsp;B</span></li>
@@ -163,23 +137,18 @@
     </ol>
   </figure>
 
-  <p>つまりセッションのアップロード量は、長さの二乗で増えていきます。そのアップロードが
-  待ち時間や費用として返ってくる場所では、すぐに効いてきます：</p>
+  <p>つまりセッションのアップロード量は、長さの二乗で増えていきます。そのアップロードが待ち時間や費用として返ってくる場所では、すぐに効いてきます：</p>
   <ul class="fit">
     <li>別リージョンにある自前のモデルサーバー、あるいは自分で運用するゲートウェイ、</li>
     <li>1 ターンごとに VPN や SSH のホップを渡るリモート開発マシン、</li>
     <li>遅い、共有された、あるいは従量制の回線につながったノート PC。</li>
   </ul>
-  <p class="aside">短い単発のリクエストではほとんど得るものがありません。基盤にできる
-  先行リクエストが存在しないからです。</p>
+  <p class="aside">短い単発のリクエストではほとんど得るものがありません。基盤にできる先行リクエストが存在しないからです。</p>
 </section>
 
 <section class="chapter" aria-labelledby="how-title">
   <h2 id="how-title">直前のターンが辞書になる</h2>
-  <p>Portway は 2 か所で動きます。エージェントの隣の<em>センダー</em>と、呼び出し先の
-  サービスの手前の<em>レシーバー</em>です。どちらも、最後に合意したリクエストボディを
-  保持します。センダーは次のリクエストをそれに対して圧縮し、レシーバーはサービスが
-  1 バイトでも見る前に元の姿へ戻します。</p>
+  <p>Portway は 2 か所で動きます。エージェントの隣の<em>センダー</em>と、呼び出し先のサービスの手前の<em>レシーバー</em>です。どちらも、最後に合意したリクエストボディを保持します。センダーは次のリクエストをそれに対して圧縮し、レシーバーはサービスが 1 バイトでも見る前に元の姿へ戻します。</p>
 
   <figure class="hops" aria-labelledby="hops-cap">
     <ol class="hop-list">
@@ -191,28 +160,19 @@
       <li class="link local"><span class="bytes">268,145&nbsp;B</span><span class="link-sub">同じデータセンター</span></li>
       <li class="node"><span class="node-name">あなたのサービス</span><span class="node-sub">モデルサーバー、ゲートウェイ、あるいはプロバイダーの API</span></li>
     </ol>
-    <figcaption id="hops-cap">上のセッションの 2 ターン目です。モデルが受け取るのは、
-    エージェントが送ったのと同じバイト列です。差分を運ぶのは真ん中のホップだけです。</figcaption>
+    <figcaption id="hops-cap">上のセッションの 2 ターン目です。モデルが受け取るのは、エージェントが送ったのと同じバイト列です。差分を運ぶのは真ん中のホップだけです。</figcaption>
   </figure>
 
   <h3>両端が基盤を合意するまで</h3>
   <ol class="steps">
     <li>
-      <p><strong>1 ターン目が辞書の種を蒔きます。</strong>zstd で圧縮され、
-      <code>X-Dict-Store: 1</code> とともに送られます。レシーバーはそれを解いて先へ渡し、
-      ボディを取っておきます。</p>
+      <p><strong>1 ターン目が辞書の種を蒔きます。</strong>zstd で圧縮され、<code>X-Dict-Store: 1</code> とともに送られます。レシーバーはそれを解いて先へ渡し、ボディを取っておきます。</p>
     </li>
     <li>
-      <p><strong>レシーバーは、取っておいたものを知らせます。</strong>応答には、実際に
-      保存したバイト列の SHA-256 を載せた <code>X-Dict-Stored</code> が付きます。センダーは
-      そのハッシュが自分の複製と一致したときにだけ、そのボディを基盤として使います。</p>
+      <p><strong>レシーバーは、取っておいたものを知らせます。</strong>応答には、実際に保存したバイト列の SHA-256 を載せた <code>X-Dict-Stored</code> が付きます。センダーはそのハッシュが自分の複製と一致したときにだけ、そのボディを基盤として使います。</p>
     </li>
     <li>
-      <p><strong>2 ターン目は 1 ターン目をハッシュで指名します。</strong>DCZ として送られ
-      ます。辞書の SHA-256 を載せた 40 バイトのヘッダーに続けて、その辞書に対して圧縮され、
-      内容チェックサムで終わる zstd フレームが並びます。センダーはルートごとに確認済みの
-      ボディを最大 8 つ保持し、新しいリクエストと最も長い接頭辞を共有するものを選びます。
-      追記だけの会話では、それが直前のターンです。</p>
+      <p><strong>2 ターン目は 1 ターン目をハッシュで指名します。</strong>DCZ として送られます。辞書の SHA-256 を載せた 40 バイトのヘッダーに続けて、その辞書に対して圧縮され、内容チェックサムで終わる zstd フレームが並びます。センダーはルートごとに確認済みのボディを最大 8 つ保持し、新しいリクエストと最も長い接頭辞を共有するものを選びます。追記だけの会話では、それが直前のターンです。</p>
     </li>
   </ol>
 
@@ -232,21 +192,13 @@
 +         <i>zstd frame compressed against the dictionary,</i>         +
 |         <i>ending in a content checksum</i>                          |
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+</pre>
-    <figcaption id="rfc-cap">DCZ のリクエストボディ。
-    <a href="https://www.rfc-editor.org/rfc/rfc9842.html#section-5">RFC 9842 の 5 節</a>に
-    基づきます。最初の 8 バイトは zstd のスキップ可能フレームのシグネチャです。機能の広告、
-    保存の確認、再試行の標識は Portway 独自のもので、
-    <a href="https://github.com/rath/portway/blob/main/docs/protocol.md">プロトコル</a>
-    文書にまとめてあります。</figcaption>
+    <figcaption id="rfc-cap">DCZ のリクエストボディ。<a href="https://www.rfc-editor.org/rfc/rfc9842.html#section-5">RFC 9842 の 5 節</a>に基づきます。最初の 8 バイトは zstd のスキップ可能フレームのシグネチャです。機能の広告、保存の確認、再試行の標識は Portway 独自のもので、<a href="https://github.com/rath/portway/blob/main/docs/protocol.md">プロトコル</a>文書にまとめてあります。</figcaption>
   </figure>
 </section>
 
 <section class="chapter" aria-labelledby="fail-title">
   <h2 id="fail-title">基盤が消えたときは、段階的に降ります</h2>
-  <p>レシーバーが再起動する、古いボディを追い出す、あるいは初めて見るセンダーと出会う
-  ことがあります。どれもリクエストを失敗させません。レシーバーは復元できないものを、
-  アプリケーションが動き出す<em>前に</em>拒み、拒否の印を残します。センダーはより少ない
-  圧縮でやり直します。</p>
+  <p>レシーバーが再起動する、古いボディを追い出す、あるいは初めて見るセンダーと出会うことがあります。どれもリクエストを失敗させません。レシーバーは復元できないものを、アプリケーションが動き出す<em>前に</em>拒み、拒否の印を残します。センダーはより少ない圧縮でやり直します。</p>
 
   <ol class="ladder">
     <li>
@@ -263,17 +215,12 @@
     </li>
   </ol>
 
-  <p>リクエストは最大 3 回送られます。Portway が再生するのは、レシーバーの印が付いた拒否
-  だけです。レシーバーはその印をアプリケーションの応答から取り除くので、アプリケーション
-  が再生を引き起こすことはなく、同じリクエストが 2 度実行されることもありません。
-  アプリケーションのエラーはそのままエージェントへ返ります。</p>
+  <p>リクエストは最大 3 回送られます。Portway が再生するのは、レシーバーの印が付いた拒否だけです。レシーバーはその印をアプリケーションの応答から取り除くので、アプリケーションが再生を引き起こすことはなく、同じリクエストが 2 度実行されることもありません。アプリケーションのエラーはそのままエージェントへ返ります。</p>
 </section>
 
 <section class="chapter" aria-labelledby="measured-title">
   <h2 id="measured-title">1 ターンの代価は、そのターンが増やした分だけ</h2>
-  <p>同じベンチマークを 4 つのコンテキストサイズで、それぞれ 20 ターンずつ。素の zstd は
-  各リクエストをおよそ 5 分の 1 に縮め、直前のターンの辞書はコンテキストの大きさに
-  かかわらず、およそ 1 キロバイトを残します。</p>
+  <p>同じベンチマークを 4 つのコンテキストサイズで、それぞれ 20 ターンずつ。素の zstd は各リクエストをおよそ 5 分の 1 に縮め、直前のターンの辞書はコンテキストの大きさにかかわらず、およそ 1 キロバイトを残します。</p>
 
   <div class="table-wrap" tabindex="0" role="region" aria-labelledby="measured-cap">
     <table>
@@ -295,10 +242,7 @@
       </tbody>
     </table>
   </div>
-  <p class="aside">最後の列は、辞書の種を蒔くためにコンテキスト全体を運ぶ最初のリクエストを
-  含みます。合成テキストは、素の zstd が Portway 自身のソースに対してと同程度に削減するよう
-  調整してあります。どの実行もバイト単位で再現でき、復元されたボディは送信時の SHA-256 と
-  照合されます。</p>
+  <p class="aside">最後の列は、辞書の種を蒔くためにコンテキスト全体を運ぶ最初のリクエストを含みます。合成テキストは、素の zstd が Portway 自身のソースに対してと同程度に削減するよう調整してあります。どの実行もバイト単位で再現でき、復元されたボディは送信時の SHA-256 と照合されます。</p>
 
 <pre class="shell"><code>cargo build --release --locked
 python3 scripts/bench.py --turns 20 --context-kb 1024</code></pre>
@@ -309,39 +253,30 @@ python3 scripts/bench.py --turns 20 --context-kb 1024</code></pre>
   <dl class="limits">
     <div>
       <dt>節約するのはバイト数であり、トークンではありません。</dt>
-      <dd>モデルが受け取るリクエストは同一で、課金されるトークンも同一です。プロバイダーの
-      プロンプトキャッシュは繰り返される接頭辞を処理する費用を削り、Portway はそれを
-      送る費用を削ります。両方をお使いください。</dd>
+      <dd>モデルが受け取るリクエストは同一で、課金されるトークンも同一です。プロバイダーのプロンプトキャッシュは繰り返される接頭辞を処理する費用を削り、Portway はそれを送る費用を削ります。両方をお使いください。</dd>
     </div>
     <div>
       <dt>レシーバーが必要です。</dt>
-      <dd>プロトコルを広告しない API に直接向けた場合、センダーはリクエストを圧縮せず
-      そのまま転送します。レシーバーは <code>portway receive</code> か、プロトコルを
-      実装した任意のサーバーです。</dd>
+      <dd>プロトコルを広告しない API に直接向けた場合、センダーはリクエストを圧縮せずそのまま転送します。レシーバーは <code>portway receive</code> か、プロトコルを実装した任意のサーバーです。</dd>
     </div>
     <div>
       <dt>再起動すると忘れます。</dt>
-      <dd>辞書は両端のメモリにしか存在せず、認証情報ごとに分かれています。既定では
-      32&nbsp;KiB 未満のボディが辞書になることはありません。</dd>
+      <dd>辞書は両端のメモリにしか存在せず、認証情報ごとに分かれています。既定では 32&nbsp;KiB 未満のボディが辞書になることはありません。</dd>
     </div>
     <div>
       <dt>話すのは素の HTTP/1.1 です。</dt>
-      <dd>WebSocket も CONNECT も HTTP/2 も受信側 TLS もありません。TLS と認証は手前の
-      ゲートウェイに任せてください。リクエストは設定可能な 256&nbsp;MiB まで
-      バッファリングし、応答はストリーミングします。</dd>
+      <dd>WebSocket も CONNECT も HTTP/2 も受信側 TLS もありません。TLS と認証は手前のゲートウェイに任せてください。リクエストは設定可能な 256&nbsp;MiB までバッファリングし、応答はストリーミングします。</dd>
     </div>
   </dl>
 </section>
 
 <section class="chapter" id="try" aria-labelledby="try-title">
   <h2 id="try-title">試してみる</h2>
-  <p>macOS か Linux で、Rust 1.97 以降と C ツールチェーンが必要です。プロバイダーも
-  エンドポイントも認証情報も価格も、どれ一つとして組み込まれていません。</p>
+  <p>macOS か Linux で、Rust 1.97 以降と C ツールチェーンが必要です。プロバイダーもエンドポイントも認証情報も価格も、どれ一つとして組み込まれていません。</p>
 
   <ol class="steps">
     <li>
-      <p><strong>チェックアウトからインストールします。</strong>ターミナルダッシュボードと
-      ブラウザーコンソールも使うなら <code>--features tui,web</code> を付けます。</p>
+      <p><strong>チェックアウトからインストールします。</strong>ターミナルダッシュボードとブラウザーコンソールも使うなら <code>--features tui,web</code> を付けます。</p>
 <pre class="shell"><code>git clone https://github.com/rath/portway
 cd portway
 cargo install --path crates/portway --locked</code></pre>
@@ -355,22 +290,14 @@ port = 8787</code></pre>
 <pre class="shell"><code>portway --config ./portway.toml</code></pre>
     </li>
     <li>
-      <p><strong>エージェントを Portway に向けます。</strong>API の base URL を
-      <code>http://127.0.0.1:8787/v1</code> にして、キーとモデル名はそのままにします。
-      Portway は <code>Authorization</code> ヘッダーをそのまま通し、自分では鍵を
-      持ちません。</p>
+      <p><strong>エージェントを Portway に向けます。</strong>API の base URL を <code>http://127.0.0.1:8787/v1</code> にして、キーとモデル名はそのままにします。Portway は <code>Authorization</code> ヘッダーをそのまま通し、自分では鍵を持ちません。</p>
     </li>
     <li>
-      <p><strong>反対側にレシーバーを置きます。</strong>サービスの手前のゲートウェイの
-      後ろで <code>portway receive</code> を動かし、センダーをそのゲートウェイに向けます。
-      <a href="https://github.com/rath/portway/blob/main/docs/getting-started.md#add-a-compression-receiver">レシーバーの設定</a>に手順があります。</p>
+      <p><strong>反対側にレシーバーを置きます。</strong>サービスの手前のゲートウェイの後ろで <code>portway receive</code> を動かし、センダーをそのゲートウェイに向けます。<a href="https://github.com/rath/portway/blob/main/docs/getting-started.md#add-a-compression-receiver">レシーバーの設定</a>に手順があります。</p>
     </li>
   </ol>
 
-  <p>同じリポジトリには、埋め込み可能な Rust ライブラリ <code>portway-core</code> と、
-  デーモンモード、レポート、ターミナルダッシュボード、ブラウザーコンソールを備えた CLI が
-  入っています。リクエストのメタデータだけを SQLite に記録し、ボディ、認証情報、
-  辞書の中身は決して記録しません。</p>
+  <p>同じリポジトリには、埋め込み可能な Rust ライブラリ <code>portway-core</code> と、デーモンモード、レポート、ターミナルダッシュボード、ブラウザーコンソールを備えた CLI が入っています。リクエストのメタデータだけを SQLite に記録し、ボディ、認証情報、辞書の中身は決して記録しません。</p>
 
   <ul class="docs">
     <li><a href="https://github.com/rath/portway/blob/main/docs/getting-started.md">はじめに</a></li>
@@ -385,8 +312,7 @@ port = 8787</code></pre>
 </main>
 
 <footer class="colophon">
-  <p>Portway は <a href="https://github.com/rath/portway/blob/main/LICENSE">MIT ライセンス</a>
-  のオープンソースです。作者は <a href="https://xrath.com">Jang-Ho Hwang</a> です。</p>
+  <p>Portway は <a href="https://github.com/rath/portway/blob/main/LICENSE">MIT ライセンス</a>のオープンソースです。作者は <a href="https://xrath.com">Jang-Ho Hwang</a> です。</p>
   <p><a href="https://github.com/rath/portway">github.com/rath/portway</a></p>
 </footer>
 </body>
