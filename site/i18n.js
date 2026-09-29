@@ -29,7 +29,7 @@ export const STRINGS = {
   ja: {
     replay: "再生",
     stop: "停止",
-    seed: '1 ターン目：エージェントは <b>{body}</b> バイトを送信しました。Portway は辞書の種として、コンテキスト全体を zstd 圧縮した <b class="w">{wire}</b> バイトを一度だけ送りました。',
+    seed: '1 ターン目：エージェントは <b>{body}</b> バイトを送信しました。Portway は辞書の種を蒔くために、コンテキスト全体を zstd で圧縮した <b class="w">{wire}</b> バイトを一度だけ送りました。',
     turn: '{turn} ターン目：エージェントは <b>{body}</b> バイトを送信し、回線を通過したのは <b class="w">{wire}</b> バイトでした。',
   },
 };
