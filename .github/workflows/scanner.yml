@@ -1,0 +1,40 @@
+name: Plugin Security Scan
+
+# The HOL scanner, run continuously by us rather than only by the catalog.
+#
+# hashgraph-online/awesome-ai-plugins inspects .github/workflows of every source
+# repository it lists. A workflow that calls this action and runs on push or
+# pull_request is what removes the 10% trust-score reduction applied to
+# repositories without scanner CI; the catalog still runs its own scan, and a
+# passing result here does not replace it.
+#
+# Everything is pinned: the action by commit SHA, the runner image deliberately
+# (see ci.yml), and the scanner release and its wheel are verified downstream by
+# the action itself.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scanner-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  scan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          # The scan only reads the tree; nothing here needs a token afterwards.
+          persist-credentials: false
+      - uses: hashgraph-online/ai-plugin-scanner-action@caba2e96aa8ad2feb6cf6fca52442b52e22e779f # v1.2.635
+        with:
+          plugin_dir: "."
+          min_score: 80
+          fail_on_severity: high
