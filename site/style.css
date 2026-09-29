@@ -66,6 +66,10 @@ code { font-size: 0.9em; }
   margin: 0 auto;
   padding: 20px var(--gutter);
   display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  /* The primary links and the switcher wrap as one group, so a narrow screen
+     drops the whole group below the brand rather than centring the brand
+     against a two-row group. */
+  flex-wrap: wrap;
 }
 .brand {
   display: inline-flex; align-items: center; gap: 10px;
@@ -82,21 +86,63 @@ code { font-size: 0.9em; }
 .masthead nav a:hover { color: var(--ink); }
 
 /* The primary links and the language switcher share the right-hand end of the
-   masthead. The switcher is the last thing in the row, so it keeps the names of
-   the languages rather than flags or codes. */
+   masthead, and on a narrow screen they wrap together as one group. */
 .masthead-end {
   display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end;
   gap: 8px clamp(12px, 3vw, 28px);
   margin-left: auto;
 }
-.masthead .langs { gap: 6px 14px; font-size: 0.85rem; }
-.masthead .langs a { text-decoration: none; }
-.masthead .langs a[aria-current] {
-  color: var(--ink);
-  text-decoration: underline;
-  text-decoration-color: color-mix(in srgb, currentColor 45%, transparent);
-  text-underline-offset: 0.25em;
+
+/* A screen reader's copy of a label the eye reads from an icon. */
+.sr-only {
+  position: absolute;
+  width: 1px; height: 1px;
+  margin: -1px; padding: 0; border: 0;
+  overflow: hidden; clip-path: inset(50%);
+  white-space: nowrap;
 }
+
+/* The language switcher is one control, not four more links competing with the
+   primary ones: it shows the language in hand and opens to the rest. Last thing
+   in the masthead, and the smallest. */
+.masthead .lang { position: relative; }
+.lang > summary {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 7px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  color: var(--ink-dim);
+  cursor: pointer;
+  list-style: none;
+}
+.lang > summary::-webkit-details-marker { display: none; }
+.lang > summary:hover { color: var(--ink); background: var(--panel); }
+.lang[open] > summary { color: var(--ink); background: var(--panel); border-color: var(--rule); }
+.lang .globe { width: 14px; height: 14px; flex: none; }
+.lang .caret { width: 9px; height: 6px; flex: none; transition: transform 120ms ease; }
+.lang[open] .caret { transform: rotate(180deg); }
+
+.masthead .lang-menu {
+  position: absolute; top: calc(100% + 6px); right: 0; z-index: 20;
+  display: grid; gap: 2px;
+  min-width: 8.5rem;
+  padding: 4px;
+  font-size: 0.875rem;
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  box-shadow: 0 10px 24px rgb(0 0 0 / 45%);
+}
+.masthead .lang-menu a {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+  padding: 7px 10px;
+  border-radius: 5px;
+  text-decoration: none;
+}
+.masthead .lang-menu a:hover { background: var(--panel-2); color: var(--ink); }
+.masthead .lang-menu a[aria-current] { color: var(--ink); }
+.masthead .lang-menu a[aria-current]::after { content: "✓"; color: var(--ink-dim); }
 
 /* ---------- hero ---------- */
 

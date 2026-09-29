@@ -11,6 +11,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=Fragment+Mono&display=swap">
 <link rel="stylesheet" href="/style.css">
+<script type="module" src="/langmenu.js"></script>
 </head>
 <body>
 <header class="masthead">
@@ -23,12 +24,20 @@
       <a href="https://github.com/rath/portway/tree/main/docs" data-t="docs">Docs</a>
       <a href="https://github.com/rath/portway">GitHub</a>
     </nav>
-    <nav class="langs" aria-label="Language" data-ta="language">
-      <a href="/" hreflang="en" lang="en">English</a>
-      <a href="/ko/" hreflang="ko" lang="ko">한국어</a>
-      <a href="/zh/" hreflang="zh-Hans" lang="zh-Hans">中文</a>
-      <a href="/ja/" hreflang="ja" lang="ja">日本語</a>
-    </nav>
+    <details class="lang">
+      <summary>
+        <svg class="globe" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3"><circle cx="8" cy="8" r="6.2"/><path d="M1.8 8h12.4"/><ellipse cx="8" cy="8" rx="2.9" ry="6.2"/></svg>
+        <span class="sr-only" data-t="language">Language</span>
+        <span class="lang-current">English</span>
+        <svg class="caret" viewBox="0 0 10 6" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1 1.2 5 4.8 9 1.2"/></svg>
+      </summary>
+      <nav class="lang-menu" aria-label="Language" data-ta="language">
+        <a href="/" hreflang="en" lang="en">English</a>
+        <a href="/ko/" hreflang="ko" lang="ko">한국어</a>
+        <a href="/zh/" hreflang="zh-Hans" lang="zh-Hans">中文</a>
+        <a href="/ja/" hreflang="ja" lang="ja">日本語</a>
+      </nav>
+    </details>
   </div>
 </header>
 <main id="main">
@@ -92,16 +101,21 @@
   const strings = STRINGS[tag];
   document.documentElement.lang = tag;
   for (const [key, value] of Object.entries(strings)) {
-    if (key === "home" || key === "language") continue;
+    if (key === "home") continue;
     for (const el of document.querySelectorAll(`[data-t="${key}"]`)) el.textContent = value;
   }
   for (const el of document.querySelectorAll("[data-ta]")) {
     el.setAttribute("aria-label", strings[el.dataset.ta] ?? el.getAttribute("aria-label"));
   }
-  const home = { ko: "/ko/", "zh-Hans": "/zh/", ja: "/ja/" }[tag] ?? "/";
-  for (const a of document.querySelectorAll("[data-home]")) a.href = home;
-  for (const a of document.querySelectorAll(".langs a")) a.removeAttribute("aria-current");
-  document.querySelector(`.langs a[hreflang="${tag}"]`)?.setAttribute("aria-current", "page");
+  // The language in hand is no longer the one the markup was written in, so the
+  // switcher has to say so. These names are endonyms, the same in every table,
+  // which is why they are not in STRINGS.
+  const NAMES = { ko: "한국어", "zh-Hans": "中文", ja: "日本語" };
+  const HOME = { ko: "/ko/", "zh-Hans": "/zh/", ja: "/ja/" };
+  document.querySelector(".lang-current").textContent = NAMES[tag];
+  for (const a of document.querySelectorAll("[data-home]")) a.href = HOME[tag] ?? "/";
+  for (const a of document.querySelectorAll(".lang-menu a")) a.removeAttribute("aria-current");
+  document.querySelector(`.lang-menu a[hreflang="${tag}"]`)?.setAttribute("aria-current", "page");
 })();
 </script>
 </body>
