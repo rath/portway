@@ -1,7 +1,40 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"
+        xmlns:xhtml="http://www.w3.org/1999/xhtml">
   <url>
     <loc>https://portway.told.me/</loc>
-    <lastmod>2026-09-28</lastmod>
+    <lastmod>2026-09-29</lastmod>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://portway.told.me/"/>
+    <xhtml:link rel="alternate" hreflang="en" href="https://portway.told.me/"/>
+    <xhtml:link rel="alternate" hreflang="ko" href="https://portway.told.me/ko/"/>
+    <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://portway.told.me/zh/"/>
+    <xhtml:link rel="alternate" hreflang="ja" href="https://portway.told.me/ja/"/>
+  </url>
+  <url>
+    <loc>https://portway.told.me/ko/</loc>
+    <lastmod>2026-09-29</lastmod>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://portway.told.me/"/>
+    <xhtml:link rel="alternate" hreflang="en" href="https://portway.told.me/"/>
+    <xhtml:link rel="alternate" hreflang="ko" href="https://portway.told.me/ko/"/>
+    <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://portway.told.me/zh/"/>
+    <xhtml:link rel="alternate" hreflang="ja" href="https://portway.told.me/ja/"/>
+  </url>
+  <url>
+    <loc>https://portway.told.me/zh/</loc>
+    <lastmod>2026-09-29</lastmod>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://portway.told.me/"/>
+    <xhtml:link rel="alternate" hreflang="en" href="https://portway.told.me/"/>
+    <xhtml:link rel="alternate" hreflang="ko" href="https://portway.told.me/ko/"/>
+    <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://portway.told.me/zh/"/>
+    <xhtml:link rel="alternate" hreflang="ja" href="https://portway.told.me/ja/"/>
+  </url>
+  <url>
+    <loc>https://portway.told.me/ja/</loc>
+    <lastmod>2026-09-29</lastmod>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://portway.told.me/"/>
+    <xhtml:link rel="alternate" hreflang="en" href="https://portway.told.me/"/>
+    <xhtml:link rel="alternate" hreflang="ko" href="https://portway.told.me/ko/"/>
+    <xhtml:link rel="alternate" hreflang="zh-Hans" href="https://portway.told.me/zh/"/>
+    <xhtml:link rel="alternate" hreflang="ja" href="https://portway.told.me/ja/"/>
   </url>
 </urlset>

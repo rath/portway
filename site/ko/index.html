@@ -1,0 +1,380 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Portway: 코딩 에이전트를 위한 델타 압축 HTTP 프록시</title>
+<meta name="description" content="Claude Code, Codex를 비롯한 LLM 에이전트를 위한 로컬 HTTP 프록시. 매 턴이 zstd 델타로 회선을 건넙니다. 컨텍스트 전체가 아니라 약 1 KiB입니다.">
+<meta name="author" content="Jang-Ho Hwang">
+<meta name="theme-color" content="#0f1820">
+<link rel="canonical" href="https://portway.told.me/ko/">
+<link rel="alternate" hreflang="en" href="https://portway.told.me/">
+<link rel="alternate" hreflang="ko" href="https://portway.told.me/ko/">
+<link rel="alternate" hreflang="zh-Hans" href="https://portway.told.me/zh/">
+<link rel="alternate" hreflang="ja" href="https://portway.told.me/ja/">
+<link rel="alternate" hreflang="x-default" href="https://portway.told.me/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Portway">
+<meta property="og:locale" content="ko_KR">
+<meta property="og:url" content="https://portway.told.me/ko/">
+<meta property="og:title" content="Portway: 코딩 에이전트를 위한 델타 압축 HTTP 프록시">
+<meta property="og:description" content="코딩 에이전트는 매 턴 대화 전체를 다시 보냅니다. Portway는 달라진 부분만 보냅니다. 세션이 아무리 길어져도 턴당 약 1킬로바이트입니다.">
+<meta property="og:image" content="https://portway.told.me/og.png">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="40턴짜리 세션 하나에서 에이전트는 13.2 MiB를 보냈고, zstd만 쓰면 3.0 MiB, Portway는 회선으로 99 KiB를 보냈습니다.">
+<meta name="twitter:card" content="summary_large_image">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "Portway",
+  "url": "https://portway.told.me/ko/",
+  "inLanguage": "ko",
+  "description": "코딩 에이전트의 요청을 직전 요청에 대한 zstd 델타로 보내는 로컬 HTTP 프록시. 반대편에서 portway receive가 실행 중일 때 동작합니다.",
+  "applicationCategory": "DeveloperApplication",
+  "operatingSystem": "macOS, Linux",
+  "image": "https://portway.told.me/og.png",
+  "license": "https://github.com/rath/portway/blob/main/LICENSE",
+  "sameAs": ["https://github.com/rath/portway"],
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+  "author": { "@type": "Person", "name": "Jang-Ho Hwang", "url": "https://xrath.com" }
+}
+</script>
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="../apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=Fragment+Mono&display=swap">
+<link rel="stylesheet" href="../style.css">
+<script type="module" src="../main.js"></script>
+</head>
+<body>
+<a class="skip" href="#main">본문으로 건너뛰기</a>
+
+<header class="masthead">
+  <a class="brand" href="../" aria-label="Portway 홈">
+    <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7"/><path d="M6 23 L12 9 L18 23 L24 9"/></svg>
+    <span>Portway</span>
+  </a>
+  <div class="masthead-end">
+    <nav aria-label="주요 링크">
+      <a href="#try">시작하기</a>
+      <a href="https://github.com/rath/portway/tree/main/docs">문서</a>
+      <a href="https://github.com/rath/portway">GitHub</a>
+    </nav>
+    <nav class="langs" aria-label="언어">
+      <a href="../" hreflang="en" lang="en">English</a>
+      <a href="./" hreflang="ko" lang="ko" aria-current="page">한국어</a>
+      <a href="../zh/" hreflang="zh-Hans" lang="zh-Hans">简体中文</a>
+      <a href="../ja/" hreflang="ja" lang="ja">日本語</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+
+<section class="hero" aria-labelledby="hero-title">
+  <div class="hero-copy">
+    <h1 id="hero-title">에이전트는 매 턴 대화 전체를 다시 보냅니다.</h1>
+    <p class="lede">Portway는 달라진 부분만 보내는 로컬 HTTP 프록시입니다. 링크 반대편에
+    Portway 수신기를 두면 각 요청은 직전 요청에 대한 델타로 네트워크를 건넙니다.
+    세션이 아무리 길어져도 약 1킬로바이트입니다.</p>
+    <p class="actions">
+      <a class="button primary" href="https://github.com/rath/portway">GitHub에서 소스 보기</a>
+      <a class="button" href="#try">시작하기</a>
+    </p>
+  </div>
+
+  <figure class="monitor" id="monitor">
+    <div class="monitor-head">
+      <figcaption>
+        <strong>실제 에이전트 세션 하나를 재생한 결과입니다.</strong>
+        실제 바이너리로 40턴을 돌렸습니다. 컨텍스트는 256&nbsp;KiB에서 시작해
+        턴마다 4&nbsp;KiB씩 늘어납니다.
+      </figcaption>
+      <div class="views" role="group" aria-label="그래프 보기">
+        <button type="button" data-view="total" aria-pressed="true">누적</button>
+        <button type="button" data-view="turn" aria-pressed="false">턴당</button>
+      </div>
+    </div>
+
+    <dl class="readout" aria-live="off">
+      <div class="series raw">
+        <dt>에이전트가 보낸 양</dt>
+        <dd data-counter="body">13,877,261&nbsp;B</dd>
+      </div>
+      <div class="series zstd">
+        <dt>zstd만 사용</dt>
+        <dd data-counter="zstd">3,114,150&nbsp;B</dd>
+      </div>
+      <div class="series wire">
+        <dt>회선을 건넌 양</dt>
+        <dd data-counter="wire">101,551&nbsp;B</dd>
+      </div>
+    </dl>
+
+    <div class="plot" data-plot role="img"
+         aria-label="40턴 동안 에이전트는 13.2 MiB를 보냈습니다. zstd만 사용하면 3.0 MiB였을 것입니다. Portway는 99 KiB를 보냈고, 그 대부분은 첫 턴입니다.">
+      <noscript>
+        <p class="plot-fallback">40턴 동안 에이전트는 13,877,261바이트를 보냈습니다. zstd만
+        사용하면 3,114,150바이트였을 것입니다. Portway는 101,551바이트를 보냈습니다.</p>
+      </noscript>
+    </div>
+
+    <div class="scrub">
+      <button type="button" class="replay" data-replay>재생</button>
+      <label for="turn">턴 <output id="turn-out" for="turn">40</output> / 40</label>
+      <input id="turn" type="range" min="1" max="40" value="40" step="1">
+    </div>
+    <p class="turn-note" data-turn-note>40턴: 에이전트가 <b>429,900</b>바이트를 보냈고, 회선을 건넌 것은 <b class="w">1,029</b>바이트입니다.</p>
+  </figure>
+</section>
+
+<section class="chapter" aria-labelledby="problem-title">
+  <h2 id="problem-title">40턴은 39턴 더하기 4킬로바이트</h2>
+  <p>코딩 에이전트는 서버에 아무 상태도 남기지 않습니다. 다음 한 걸음을 내딛으려면 시스템
+  프롬프트와 이전의 모든 메시지, 모든 도구 실행 결과를 다시 보내고, 그 뒤에 새로 생긴
+  몇 킬로바이트를 덧붙입니다. 그러니 각 요청은 직전 요청을 거의 그대로 복사한 것입니다.</p>
+
+  <figure class="strips" aria-labelledby="strips-cap">
+    <figcaption id="strips-cap">요청마다 실제로 나르는 양을 축척대로 그렸습니다. 밝은
+    끝부분이 이전 요청에는 없던 부분입니다.</figcaption>
+    <ol class="strip-list">
+      <li><span class="t">1턴</span><span class="bar" aria-hidden="true"><span class="old" style="width:0.00%"></span><span class="new" style="width:61.40%"></span></span><span class="n">263,966&nbsp;B</span></li>
+      <li><span class="t">2턴</span><span class="bar" aria-hidden="true"><span class="old" style="width:61.40%"></span><span class="new" style="width:0.97%"></span></span><span class="n">268,145&nbsp;B</span></li>
+      <li><span class="t">3턴</span><span class="bar" aria-hidden="true"><span class="old" style="width:62.37%"></span><span class="new" style="width:1.03%"></span></span><span class="n">272,556&nbsp;B</span></li>
+      <li class="gap" aria-hidden="true"><span class="t"></span><span>&middot; &middot; &middot;</span></li>
+      <li><span class="t">20턴</span><span class="bar" aria-hidden="true"><span class="old" style="width:79.21%"></span><span class="new" style="width:0.97%"></span></span><span class="n">344,723&nbsp;B</span></li>
+      <li class="gap" aria-hidden="true"><span class="t"></span><span>&middot; &middot; &middot;</span></li>
+      <li><span class="t">39턴</span><span class="bar" aria-hidden="true"><span class="old" style="width:98.00%"></span><span class="new" style="width:1.03%"></span></span><span class="n">425,707&nbsp;B</span></li>
+      <li><span class="t">40턴</span><span class="bar" aria-hidden="true"><span class="old" style="width:99.02%"></span><span class="new" style="width:0.98%"></span></span><span class="n">429,900&nbsp;B</span></li>
+    </ol>
+  </figure>
+
+  <p>그래서 세션의 업로드량은 길이의 제곱으로 늘어납니다. 그 업로드가 기다림이나 비용으로
+  돌아오는 곳에서는 금세 눈에 띕니다:</p>
+  <ul class="fit">
+    <li>다른 리전에 있는 자체 구동 모델 서버나 직접 운영하는 게이트웨이,</li>
+    <li>매 턴이 VPN이나 SSH 홉을 건너야 하는 원격 개발 머신,</li>
+    <li>느리거나 공유된, 혹은 종량제 회선을 쓰는 노트북.</li>
+  </ul>
+  <p class="aside">짧은 단발 요청에서는 얻을 게 거의 없습니다. 기반으로 삼을 앞선 요청이 없기 때문입니다.</p>
+</section>
+
+<section class="chapter" aria-labelledby="how-title">
+  <h2 id="how-title">직전 턴이 사전이 됩니다</h2>
+  <p>Portway는 두 곳에서 실행됩니다. 에이전트 옆의 <em>송신기</em>와, 에이전트가 호출하는
+  서비스 앞의 <em>수신기</em>입니다. 양쪽 모두 마지막으로 합의한 요청 본문을 보관합니다.
+  송신기는 다음 요청을 그 본문에 대해 압축하고, 수신기는 서비스가 바이트 하나라도 보기 전에
+  원본을 복원합니다.</p>
+
+  <figure class="hops" aria-labelledby="hops-cap">
+    <ol class="hop-list">
+      <li class="node"><span class="node-name">에이전트</span><span class="node-sub">Claude Code, Codex, base URL을 지정할 수 있는 아무 클라이언트</span></li>
+      <li class="link local"><span class="bytes">268,145&nbsp;B</span><span class="link-sub">localhost</span></li>
+      <li class="node"><span class="node-name">portway</span><span class="node-sub">송신기, 127.0.0.1:8787</span></li>
+      <li class="link slow"><span class="bytes">1,054&nbsp;B</span><span class="link-sub">느린 구간</span></li>
+      <li class="node"><span class="node-name">portway receive</span><span class="node-sub">직접 관리하는 호스트</span></li>
+      <li class="link local"><span class="bytes">268,145&nbsp;B</span><span class="link-sub">같은 데이터센터</span></li>
+      <li class="node"><span class="node-name">서비스</span><span class="node-sub">모델 서버, 게이트웨이 또는 프로바이더 API</span></li>
+    </ol>
+    <figcaption id="hops-cap">위 세션의 2턴입니다. 모델은 에이전트가 보낸 것과 같은 바이트를
+    받습니다. 델타를 나르는 것은 가운데 구간뿐입니다.</figcaption>
+  </figure>
+
+  <h3>양쪽이 기반을 합의하는 방법</h3>
+  <ol class="steps">
+    <li>
+      <p><strong>1턴이 사전을 심습니다.</strong> 이 요청은 zstd로 압축되어
+      <code>X-Dict-Store: 1</code>과 함께 전송됩니다. 수신기는 이를 복원해 넘겨주고 본문을
+      보관합니다.</p>
+    </li>
+    <li>
+      <p><strong>수신기는 보관한 것을 확인해 줍니다.</strong> 응답에 실제로 저장한 바이트의
+      SHA-256을 담은 <code>X-Dict-Stored</code>가 실립니다. 송신기는 그 해시가 자기 사본과
+      일치할 때만 그 본문을 기반으로 씁니다.</p>
+    </li>
+    <li>
+      <p><strong>2턴은 1턴을 해시로 지목합니다.</strong> DCZ로 전송됩니다. 사전의 SHA-256을
+      담은 40바이트 헤더 뒤에, 그 사전에 대해 압축되고 체크섬이 붙은 zstd 프레임이
+      이어집니다. 송신기는 라우트마다 확인된 본문을 최대 여덟 개까지 보관하고, 새 요청과
+      가장 긴 접두사를 공유하는 것을 고릅니다. 추가만 되는 대화에서는 그것이 직전
+      턴입니다.</p>
+    </li>
+  </ol>
+
+  <figure class="rfc" aria-labelledby="rfc-cap">
+<pre tabindex="0" aria-describedby="rfc-cap"><span class="ruler"> 0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1</span>
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|     <b>0x5E</b>      |     <b>0x2A</b>      |     <b>0x4D</b>      |     <b>0x18</b>      |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|     <b>0x20</b>      |     <b>0x00</b>      |     <b>0x00</b>      |     <b>0x00</b>      |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                                                               |
++             <i>SHA-256 of the dictionary, 32 bytes</i>               +
+|                                                               |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                                                               |
++         <i>zstd frame compressed against the dictionary,</i>         +
+|         <i>ending in a content checksum</i>                          |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+</pre>
+    <figcaption id="rfc-cap">DCZ 요청 본문이며
+    <a href="https://www.rfc-editor.org/rfc/rfc9842.html#section-5">RFC 9842 5절</a>을
+    따릅니다. 처음 8바이트는 zstd 스킵 가능 프레임 시그니처입니다. 기능 광고, 저장 확인,
+    재시도 표시자는 Portway 자체의 규약이며
+    <a href="https://github.com/rath/portway/blob/main/docs/protocol.md">프로토콜</a>
+    문서에 정리해 두었습니다.</figcaption>
+  </figure>
+</section>
+
+<section class="chapter" aria-labelledby="fail-title">
+  <h2 id="fail-title">기반이 사라지면 단계적으로 물러섭니다</h2>
+  <p>수신기가 재시작하거나, 오래된 본문을 밀어내거나, 처음 보는 송신기를 만날 수 있습니다.
+  어느 경우에도 요청은 실패하지 않습니다. 수신기는 복원할 수 없는 요청을 애플리케이션이
+  실행되기 <em>전에</em> 거부하고 거부 표시를 남기며, 송신기는 더 낮은 압축으로 다시
+  시도합니다.</p>
+
+  <ol class="ladder">
+    <li>
+      <span class="rung">보관된 본문에 대한 DCZ</span>
+      <span class="why"><code class="status">412</code> 사전 없음, 또는 <code class="status">400</code>·<code class="status">415</code> 프레임 거부 시 물러섬</span>
+    </li>
+    <li>
+      <span class="rung">사전 없는 순수 zstd</span>
+      <span class="why"><code class="status">415</code> 인코딩 거부 시 물러섬</span>
+    </li>
+    <li>
+      <span class="rung">압축 없이, 에이전트가 보낸 그대로</span>
+      <span class="why">항상 허용됨</span>
+    </li>
+  </ol>
+
+  <p>요청은 최대 세 번 전송됩니다. Portway는 수신기의 표시가 붙은 거부만 재생하고, 수신기는
+  애플리케이션 응답에서 그 표시를 제거합니다. 따라서 애플리케이션이 재생을 유발할 수 없고
+  요청을 두 번 실행하지도 않습니다. 애플리케이션이 낸 오류는 그대로 에이전트에게
+  돌아갑니다.</p>
+</section>
+
+<section class="chapter" aria-labelledby="measured-title">
+  <h2 id="measured-title">한 턴의 비용은 그 턴이 더한 만큼입니다</h2>
+  <p>같은 벤치마크를 네 가지 컨텍스트 크기로, 각각 스무 턴씩 돌렸습니다. 순수 zstd는 요청을
+  약 5분의 1로 줄이고, 직전 턴 사전은 컨텍스트가 아무리 커도 약 1킬로바이트를 남깁니다.</p>
+
+  <div class="table-wrap" tabindex="0" role="region" aria-labelledby="measured-cap">
+    <table>
+      <caption id="measured-cap">첫 턴을 뺀, 턴당 회선 전송 바이트</caption>
+      <thead>
+        <tr>
+          <th scope="col">1턴의 컨텍스트</th>
+          <th scope="col">비압축</th>
+          <th scope="col">zstd만</th>
+          <th scope="col">Portway</th>
+          <th scope="col">20턴 동안 절감</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><th scope="row">128 KiB</th><td>175,405</td><td>41,962</td><td class="w">1,104</td><td>98.5%</td></tr>
+        <tr><th scope="row">256 KiB</th><td>306,503</td><td>69,608</td><td class="w">1,058</td><td>98.7%</td></tr>
+        <tr><th scope="row">512 KiB</th><td>570,438</td><td>122,089</td><td class="w">1,034</td><td>98.8%</td></tr>
+        <tr><th scope="row">1 MiB</th><td>1,094,276</td><td>222,937</td><td class="w">1,048</td><td>98.9%</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="aside">마지막 열은 사전을 심으려고 컨텍스트 전체를 나르는 첫 요청을 포함합니다.
+  합성 텍스트는 순수 zstd가 Portway 자신의 소스에서만큼 절감하도록 맞춰 두었습니다. 모든
+  실행은 바이트 단위로 재현되며, 복원된 본문은 보낸 바이트의 SHA-256과 대조됩니다.</p>
+
+<pre class="shell"><code>cargo build --release --locked
+python3 scripts/bench.py --turns 20 --context-kb 1024</code></pre>
+</section>
+
+<section class="chapter" aria-labelledby="limits-title">
+  <h2 id="limits-title">하지 않는 일</h2>
+  <dl class="limits">
+    <div>
+      <dt>바이트를 절약합니다. 토큰이 아닙니다.</dt>
+      <dd>모델은 동일한 요청을 받고 동일한 토큰을 청구합니다. 프로바이더의 프롬프트 캐싱은
+      반복되는 접두사를 처리하는 비용을 줄이고, Portway는 그것을 보내는 비용을 줄입니다.
+      둘을 함께 쓰십시오.</dd>
+    </div>
+    <div>
+      <dt>수신기가 필요합니다.</dt>
+      <dd>프로토콜을 광고하지 않는 API에 그대로 겨누면 송신기는 요청을 압축하지 않고 그대로
+      전달합니다. 수신기는 <code>portway receive</code>이거나, 프로토콜을 구현한 아무
+      서버입니다.</dd>
+    </div>
+    <div>
+      <dt>재시작하면 잊습니다.</dt>
+      <dd>사전은 양쪽 모두 메모리에만 있고, 자격 증명별로 분리됩니다. 기본적으로 32&nbsp;KiB
+      미만의 본문은 사전이 되지 않습니다.</dd>
+    </div>
+    <div>
+      <dt>평범한 HTTP/1.1로 말합니다.</dt>
+      <dd>WebSocket도 CONNECT도 HTTP/2도 인바운드 TLS도 없습니다. TLS와 인증은 앞단의
+      게이트웨이가 맡으십시오. 요청은 설정한 최대 256&nbsp;MiB까지 버퍼링하고, 응답은
+      스트리밍합니다.</dd>
+    </div>
+  </dl>
+</section>
+
+<section class="chapter" id="try" aria-labelledby="try-title">
+  <h2 id="try-title">사용해 보기</h2>
+  <p>macOS나 Linux에서 Rust 1.97 이상과 C 툴체인이 필요합니다. 프로바이더도 엔드포인트도
+  자격 증명도 가격도 어느 것 하나 내장되어 있지 않습니다.</p>
+
+  <ol class="steps">
+    <li>
+      <p><strong>체크아웃에서 설치합니다.</strong> 터미널 대시보드와 브라우저 콘솔까지
+      쓰려면 <code>--features tui,web</code>을 붙입니다.</p>
+<pre class="shell"><code>git clone https://github.com/rath/portway
+cd portway
+cargo install --path crates/portway --locked</code></pre>
+    </li>
+    <li>
+      <p><strong>서비스를 가리키고 실행합니다.</strong></p>
+<pre class="shell"><code># portway.toml
+upstream = "https://api.example.com"
+host = "127.0.0.1"
+port = 8787</code></pre>
+<pre class="shell"><code>portway --config ./portway.toml</code></pre>
+    </li>
+    <li>
+      <p><strong>에이전트를 Portway로 향하게 합니다.</strong> API base URL을
+      <code>http://127.0.0.1:8787/v1</code>로 바꾸고 키와 모델 이름은 그대로 둡니다. Portway는
+      <code>Authorization</code> 헤더를 그대로 넘겨주며 자체 키를 갖지 않습니다.</p>
+    </li>
+    <li>
+      <p><strong>반대편에 수신기를 둡니다.</strong> 서비스 앞의 게이트웨이 뒤에서
+      <code>portway receive</code>를 실행한 다음, 송신기가 그 게이트웨이를 향하도록
+      설정합니다.
+      <a href="https://github.com/rath/portway/blob/main/docs/getting-started.md#add-a-compression-receiver">수신기 설정</a>
+      에 과정이 나와 있습니다.</p>
+    </li>
+  </ol>
+
+  <p>같은 저장소에 임베드할 수 있는 Rust 라이브러리 <code>portway-core</code>와, 데몬 모드와
+  리포트, 터미널 대시보드, 브라우저 콘솔을 갖춘 CLI가 함께 들어 있습니다. 요청
+  메타데이터만 SQLite에 기록하며, 본문과 자격 증명, 사전 내용은 기록하지 않습니다.</p>
+
+  <ul class="docs">
+    <li><a href="https://github.com/rath/portway/blob/main/docs/getting-started.md">시작하기</a></li>
+    <li><a href="https://github.com/rath/portway/blob/main/docs/faq.md">자주 묻는 질문</a></li>
+    <li><a href="https://github.com/rath/portway/blob/main/docs/configuration.md">설정</a></li>
+    <li><a href="https://github.com/rath/portway/blob/main/docs/operations.md">운영</a></li>
+    <li><a href="https://github.com/rath/portway/blob/main/docs/protocol.md">프로토콜</a></li>
+    <li><a href="https://github.com/rath/portway/blob/main/SECURITY.md">보안</a></li>
+  </ul>
+</section>
+
+</main>
+
+<footer class="colophon">
+  <p>Portway는 <a href="https://github.com/rath/portway/blob/main/LICENSE">MIT 라이선스</a>로
+  공개한 오픈 소스입니다. 만든 사람은 <a href="https://xrath.com">Jang-Ho Hwang</a>입니다.</p>
+  <p><a href="https://github.com/rath/portway">github.com/rath/portway</a></p>
+</footer>
+</body>
+</html>

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Portway: page not found</title>
+<title data-t="title">Portway: page not found</title>
 <meta name="robots" content="noindex">
 <meta name="theme-color" content="#0f1820">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
@@ -14,24 +14,95 @@
 </head>
 <body>
 <header class="masthead">
-  <a class="brand" href="/" aria-label="Portway home">
+  <a class="brand" href="/" aria-label="Portway home" data-ta="home">
     <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7"/><path d="M6 23 L12 9 L18 23 L24 9"/></svg>
     <span>Portway</span>
   </a>
-  <nav aria-label="Primary">
-    <a href="https://github.com/rath/portway/tree/main/docs">Docs</a>
-    <a href="https://github.com/rath/portway">GitHub</a>
-  </nav>
+  <div class="masthead-end">
+    <nav aria-label="Primary">
+      <a href="https://github.com/rath/portway/tree/main/docs" data-t="docs">Docs</a>
+      <a href="https://github.com/rath/portway">GitHub</a>
+    </nav>
+    <nav class="langs" aria-label="Language" data-ta="language">
+      <a href="/" hreflang="en" lang="en">English</a>
+      <a href="/ko/" hreflang="ko" lang="ko">한국어</a>
+      <a href="/zh/" hreflang="zh-Hans" lang="zh-Hans">简体中文</a>
+      <a href="/ja/" hreflang="ja" lang="ja">日本語</a>
+    </nav>
+  </div>
 </header>
 <main id="main">
 <section class="chapter">
-  <h1>There is no page here</h1>
-  <p class="lede">The site is a single page. The documentation lives in the repository.</p>
+  <h1 data-t="heading">There is no page here</h1>
+  <p class="lede" data-t="lede">The site is a single page. The documentation lives in the repository.</p>
   <p class="actions">
-    <a class="button primary" href="/">Go to the Portway home page</a>
-    <a class="button" href="https://github.com/rath/portway/tree/main/docs">Read the docs</a>
+    <a class="button primary" href="/" data-home data-t="home-cta">Go to the Portway home page</a>
+    <a class="button" href="https://github.com/rath/portway/tree/main/docs" data-t="docs-cta">Read the docs</a>
   </p>
 </section>
 </main>
+<script>
+// GitHub Pages serves this one file for every missing path, so the language
+// cannot come from the URL the way it does on the four pages themselves. It
+// comes from the reader instead: English is what the markup says, and a browser
+// that asks for Korean, Japanese or Chinese first gets that instead. No build
+// step, so the strings live here; no JavaScript, so does the English page.
+(() => {
+  const STRINGS = {
+    ko: {
+      title: "Portway: 페이지를 찾을 수 없습니다",
+      heading: "여기에는 페이지가 없습니다",
+      lede: "이 사이트는 한 페이지입니다. 문서는 저장소에 있습니다.",
+      docs: "문서",
+      "home-cta": "Portway 홈으로 가기",
+      "docs-cta": "문서 보기",
+      home: "Portway 홈",
+      language: "언어",
+    },
+    "zh-Hans": {
+      title: "Portway：找不到页面",
+      heading: "这里没有页面",
+      lede: "本站只有一页。文档在仓库里。",
+      docs: "文档",
+      "home-cta": "前往 Portway 首页",
+      "docs-cta": "阅读文档",
+      home: "Portway 首页",
+      language: "语言",
+    },
+    ja: {
+      title: "Portway: ページが見つかりません",
+      heading: "ここにページはありません",
+      lede: "このサイトは 1 ページだけです。ドキュメントはリポジトリにあります。",
+      docs: "ドキュメント",
+      "home-cta": "Portway のホームへ",
+      "docs-cta": "ドキュメントを読む",
+      home: "Portway ホーム",
+      language: "言語",
+    },
+  };
+
+  // The site ships one Chinese, and it is Simplified, so every zh tag lands
+  // there rather than on nothing.
+  const wanted = (navigator.languages?.length ? navigator.languages : [navigator.language || "en"])
+    .map((tag) => String(tag).toLowerCase())
+    .map((tag) => (tag.startsWith("zh") ? "zh-Hans" : tag.split("-")[0]));
+  const tag = wanted.find((candidate) => candidate in STRINGS);
+  if (!tag) return;
+
+  const strings = STRINGS[tag];
+  document.documentElement.lang = tag;
+  for (const [key, value] of Object.entries(strings)) {
+    if (key === "home" || key === "language") continue;
+    for (const el of document.querySelectorAll(`[data-t="${key}"]`)) el.textContent = value;
+  }
+  for (const el of document.querySelectorAll("[data-ta]")) {
+    el.setAttribute("aria-label", strings[el.dataset.ta] ?? el.getAttribute("aria-label"));
+  }
+  const home = { ko: "/ko/", "zh-Hans": "/zh/", ja: "/ja/" }[tag] ?? "/";
+  for (const a of document.querySelectorAll("[data-home]")) a.href = home;
+  for (const a of document.querySelectorAll(".langs a")) a.removeAttribute("aria-current");
+  document.querySelector(`.langs a[hreflang="${tag}"]`)?.setAttribute("aria-current", "page");
+})();
+</script>
 </body>
 </html>

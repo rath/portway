@@ -36,7 +36,7 @@ bash scripts/check.sh
 | `examples/` | Annotated TOML files referenced by the documentation |
 | `docs/` | User documentation; `docs/protocol.md` is the wire contract |
 | `scripts/` | `check.sh` for CI checks, `bench.py` for the compression benchmark |
-| `site/` | The project page at portway.told.me, static files with no build step, published by `.github/workflows/pages.yml` |
+| `site/` | The project page at portway.told.me in English, Korean, Simplified Chinese and Japanese; static files with no build step, published by `.github/workflows/pages.yml` |
 
 ## Checks
 
@@ -76,7 +76,11 @@ the same seed, level, and `Cargo.lock`. If a change alters compressed sizes,
 regenerate the README's measured table with the commands it names, and say so
 in the pull request. The project page carries the same table in `site/index.html`
 and a 40-turn run (`--turns 40 --context-kb 256`) in `site/session.js`; update
-them together.
+them together. The page ships in four languages — `site/index.html`,
+`site/ko/`, `site/zh/` and `site/ja/` — and the numbers are the same in all of
+them, so a regenerated table is four edits against one `session.js`. `site/main.js`
+writes the turn readout at runtime and takes its sentences from `site/i18n.js`,
+which carries one entry per language.
 
 ## Documentation
 

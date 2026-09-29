@@ -1,9 +1,17 @@
 import { SESSION } from "./session.js";
+import { strings } from "./i18n.js";
 
 const TURNS = SESSION.body.length;
 const KIB = 1024;
 const MIB = 1024 * 1024;
 const PLAY_MS = 4200;
+
+// The page declares its language; the sentences this script writes and the
+// number format follow it. Grouping is the same in all four, but a reader who
+// asks for another locale should get its digits and dates too.
+const LANG = document.documentElement.lang || "en";
+const S = strings(LANG);
+const fill = (template, values) => template.replace(/\{(\w+)\}/g, (_, key) => values[key] ?? `{${key}}`);
 
 const cumulative = (xs) => xs.reduce((acc, x, i) => (acc.push((acc[i - 1] ?? 0) + x), acc), []);
 const TOTAL = {
@@ -12,7 +20,7 @@ const TOTAL = {
   wire: cumulative(SESSION.wire),
 };
 
-const fmt = new Intl.NumberFormat("en-US");
+const fmt = new Intl.NumberFormat(LANG);
 const bytes = (n) => `${fmt.format(n)} B`;
 const short = (n) =>
   n >= MIB ? `${(n / MIB).toFixed(1)} MiB` : n >= KIB ? `${Math.round(n / KIB)} KiB` : `${n} B`;
@@ -144,14 +152,18 @@ function paint() {
   out.textContent = String(turn);
   note.innerHTML =
     turn === 1
-      ? `Turn 1: the agent sent <b>${fmt.format(SESSION.body[0])}</b> bytes. Portway sent the whole context once, zstd-compressed, as <b class="w">${fmt.format(SESSION.wire[0])}</b> bytes to seed the dictionary.`
-      : `Turn ${turn}: the agent sent <b>${fmt.format(SESSION.body[turn - 1])}</b> bytes and <b class="w">${fmt.format(SESSION.wire[turn - 1])}</b> crossed the wire.`;
+      ? fill(S.seed, { body: fmt.format(SESSION.body[0]), wire: fmt.format(SESSION.wire[0]) })
+      : fill(S.turn, {
+          turn: String(turn),
+          body: fmt.format(SESSION.body[turn - 1]),
+          wire: fmt.format(SESSION.wire[turn - 1]),
+        });
 }
 
 function stop() {
   cancelAnimationFrame(frame);
   frame = 0;
-  replayButton.textContent = "Replay";
+  replayButton.textContent = S.replay;
 }
 
 function play() {
@@ -161,7 +173,7 @@ function play() {
     paint();
     return;
   }
-  replayButton.textContent = "Stop";
+  replayButton.textContent = S.stop;
   const start = performance.now();
   const tick = (now) => {
     const p = Math.min(1, (now - start) / PLAY_MS);

@@ -81,6 +81,23 @@ code { font-size: 0.9em; }
 .masthead nav a { text-decoration: none; color: var(--ink-dim); }
 .masthead nav a:hover { color: var(--ink); }
 
+/* The primary links and the language switcher share the right-hand end of the
+   masthead. The switcher is the last thing in the row, so it keeps the names of
+   the languages rather than flags or codes. */
+.masthead-end {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end;
+  gap: 8px clamp(12px, 3vw, 28px);
+  margin-left: auto;
+}
+.masthead .langs { gap: 6px 14px; font-size: 0.85rem; }
+.masthead .langs a { text-decoration: none; }
+.masthead .langs a[aria-current] {
+  color: var(--ink);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentColor 45%, transparent);
+  text-underline-offset: 0.25em;
+}
+
 /* ---------- hero ---------- */
 
 .hero {
@@ -409,6 +426,38 @@ pre.shell code { font-size: inherit; }
   color: var(--ink-dim);
 }
 .colophon p { margin: 0 0 0.4rem; }
+
+/* ---------- other languages ---------- */
+
+/* Archivo and Fragment Mono carry no CJK glyphs, so Korean, Japanese and
+   Chinese fall through to whatever the reader has installed. Naming the fonts
+   per language matters: Han characters are shared between the three, but their
+   forms are not, and a Japanese page drawn in a Korean font shows Chinese
+   shapes. The language is the page's, declared on <html>, so these are :lang()
+   rules rather than classes the markup has to carry. */
+html:lang(ko) {
+  --sans: "Archivo", "Pretendard", "Apple SD Gothic Neo", "Noto Sans KR", "Nanum Gothic", "Malgun Gothic", "Helvetica Neue", Arial, sans-serif;
+  --mono: "Fragment Mono", "D2Coding", ui-monospace, "SF Mono", Menlo, monospace;
+}
+html:lang(ja) {
+  --sans: "Archivo", "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic", "Noto Sans JP", "Meiryo", "Helvetica Neue", Arial, sans-serif;
+  --mono: "Fragment Mono", "Hiragino Kaku Gothic ProN", ui-monospace, "SF Mono", Menlo, monospace;
+}
+html:lang(zh-Hans) {
+  --sans: "Archivo", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", "Helvetica Neue", Arial, sans-serif;
+  --mono: "Fragment Mono", "PingFang SC", ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+/* The display sizes are set for Latin: condensed, tightly leaded, negatively
+   tracked. CJK is none of those — a line-height under 1 crowds full-width
+   glyphs, and tracking pulls them apart — so the headings get their own box.
+   Wider, too, since a CJK character is a full em where a Latin one is nearer
+   half of one. */
+:is(html:lang(ko), html:lang(ja), html:lang(zh-Hans)) :is(h1, h2) {
+  line-height: 1.2;
+  letter-spacing: normal;
+}
+:is(html:lang(ko), html:lang(ja), html:lang(zh-Hans)) h1 { max-width: 17em; }
 
 /* ---------- narrow screens ---------- */
 

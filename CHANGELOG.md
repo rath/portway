@@ -13,6 +13,11 @@ version may contain breaking changes.
   including its live requests, recent events, charts, usage and costs. It
   remembers an owner-only session after hidden token entry, reconnects after
   network interruptions, and leaves the remote daemon running when closed.
+- The project page at portway.told.me is published in Korean, Simplified Chinese
+  and Japanese as well as English, at `/ko/`, `/zh/` and `/ja/`. Each language is
+  a page of its own with a language switcher, `hreflang` alternates and an entry
+  in the sitemap; the 404 picks the reader's language. English is unchanged at
+  `/`.
 
 ### Fixed
 
