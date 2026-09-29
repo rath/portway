@@ -17,7 +17,7 @@ export const STRINGS = {
   ko: {
     replay: "재생",
     stop: "정지",
-    seed: '1턴: 에이전트가 <b>{body}</b>바이트를 보냈습니다. Portway는 사전을 심기 위해 전체 컨텍스트를 zstd로 압축한 <b class="w">{wire}</b>바이트를 한 번 전송했습니다.',
+    seed: '1턴: 에이전트가 <b>{body}</b>바이트를 보냈습니다. Portway는 사전의 씨앗을 뿌리려고 컨텍스트 전체를 zstd로 압축해 <b class="w">{wire}</b>바이트로 한 번 보냈습니다.',
     turn: '{turn}턴: 에이전트가 <b>{body}</b>바이트를 보냈고, 회선을 건넌 것은 <b class="w">{wire}</b>바이트입니다.',
   },
   "zh-Hans": {
