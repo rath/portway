@@ -1,0 +1,18 @@
+version: 2
+updates:
+  # Every action in .github/workflows is pinned to a commit SHA, which is what
+  # the HOL scanner requires for a listing in hashgraph-online/awesome-ai-plugins.
+  # This is the only thing that moves those pins: the comment after the SHA (`# v5`)
+  # is what Dependabot reads to tell one version from another.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+
+  # No npm entry on purpose: crates/portway/webui has no dependencies and no
+  # build step, so there is no lockfile for Dependabot to keep current.
