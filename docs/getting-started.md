@@ -227,7 +227,8 @@ and [receiver settings](configuration.md#receiving).
 
 The `[receiver]` table only changes receiver settings. It does not select the
 mode: the `receive` positional argument is required. A receiver accepts one
-`upstream`; it does not use a `[models]` routing table.
+`upstream`, or a `[models]` table that routes each request to the origin
+configured for its JSON `model` field.
 
 ### Compress the receiver's upload to a provider
 

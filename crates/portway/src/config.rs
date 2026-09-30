@@ -100,8 +100,8 @@ impl Config {
         if self.upstream.is_some() == !self.models.is_empty() {
             return Err("configure either upstream or [models], exclusively".into());
         }
-        if mode == Mode::Receive && self.upstream.is_none() {
-            return Err("receive requires a single upstream".into());
+        if mode == Mode::Receive && self.upstream.is_none() && self.models.is_empty() {
+            return Err("receive requires an upstream or a [models] table".into());
         }
         for price in self.prices.values() {
             if [price.input, price.output, price.cache_read]
@@ -173,7 +173,10 @@ mod tests {
         assert!(config.validate(Mode::Forward).is_err());
         config.upstream = None;
         assert!(config.validate(Mode::Forward).is_ok());
-        assert!(config.validate(Mode::Receive).is_err());
+        // A [models] table serves both modes: a receiver routes each request
+        // to the origin configured for its JSON model.
+        assert!(config.validate(Mode::Receive).is_ok());
+        assert!(Config::default().validate(Mode::Receive).is_err());
         config.prices.insert(
             "sample".into(),
             Price {

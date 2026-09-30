@@ -502,3 +502,61 @@ async fn incompressible_and_integrity_protected_uploads_are_not_transformed() {
     assert_eq!(calls[1].headers["content-digest"], "sha-256=:placeholder:");
     task.abort();
 }
+
+/// One listener, several origins: the routing table serves the receiving side
+/// too, so a single receiver fronts providers that speak different APIs.
+#[tokio::test]
+async fn a_receiver_routes_each_model_to_its_own_origin() {
+    let first = origin(vec![]).await;
+    let second = origin(vec![]).await;
+    let mut config = config(&first.url, false);
+    config.upstream = None;
+    config
+        .models
+        .insert("claude-opus-5".into(), first.url.clone());
+    config
+        .models
+        .insert("gpt-6-astra".into(), second.url.clone());
+    let (client, _, task) = receiver(&config).await;
+
+    // The capability probe arrives before any request names a model, so it
+    // must be answered by the receiver rather than refused by the router.
+    let probe = client.get("/__portway/capabilities").await;
+    assert_eq!(probe.status, 200);
+    assert_eq!(probe.json()["request_encodings"][0], "zstd");
+
+    let routed = Bytes::from_static(br#"{"model":"gpt-6-astra","input":"hi"}"#);
+    assert_eq!(client.post("/responses", routed.clone()).await.status, 200);
+    assert_eq!(
+        client
+            .post(
+                "/v1/messages",
+                Bytes::from_static(br#"{"model":"claude-opus-5"}"#)
+            )
+            .await
+            .status,
+        200
+    );
+    assert_eq!(first.calls.lock().unwrap().len(), 1);
+    assert_eq!(
+        first.calls.lock().unwrap()[0].plain(),
+        br#"{"model":"claude-opus-5"}"#
+    );
+    assert_eq!(second.calls.lock().unwrap().len(), 1);
+    assert_eq!(second.calls.lock().unwrap()[0].plain(), routed);
+
+    // A model outside the table is refused before anything reaches an origin.
+    let refused = client
+        .post("/responses", Bytes::from_static(br#"{"model":"nope"}"#))
+        .await;
+    assert_eq!(refused.status, 400);
+    assert!(
+        refused.json()["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("gpt-6-astra")
+    );
+    assert_eq!(first.calls.lock().unwrap().len(), 1);
+    assert_eq!(second.calls.lock().unwrap().len(), 1);
+    task.abort();
+}

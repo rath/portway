@@ -100,7 +100,7 @@ the existing `[models]` section, before the next table.
 | --- | --- |
 | One HTTP service, including arbitrary non-JSON requests | `upstream = "https://api.example.com"` |
 | Several destinations selected by a JSON `model` field | `[models]` table |
-| Decode compressed requests in front of an application | `receive` CLI mode with one `upstream` |
+| Decode compressed requests in front of one or more applications | `receive` CLI mode with `upstream` or a `[models]` table |
 
 Use exactly one of `upstream` or a nonempty `[models]` table. Even a one-entry
 `[models]` table requires a matching model in requests; it is not an implicit
@@ -283,10 +283,13 @@ work but compression or dictionary reuse is absent.
 
 ## Receiving
 
-Start with `portway receive --config ./receive.toml`. Receiver mode requires one
-`upstream`. It restores incoming compressed requests and forwards them to that
-application. By default the origin upload is uncompressed; optional origin
-compression is described below. Receiver mode does not perform model routing.
+Start with `portway receive --config ./receive.toml`. Receiver mode requires an
+`upstream` or a `[models]` table. It restores incoming compressed requests and
+forwards them to that application, or — with a `[models]` table — to the origin
+configured for the request's JSON `model` field, so one receiver can front
+several providers that each speak their own API. By default the origin upload is
+uncompressed; optional origin compression is described below. A model outside
+the table is refused with a 400 before any origin is contacted.
 `[receiver]` configures this mode; it does not activate the mode by itself.
 
 | `[receiver]` setting | Default |

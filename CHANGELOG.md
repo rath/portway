@@ -9,6 +9,11 @@ version may contain breaking changes.
 
 ### Added
 
+- `portway receive` accepts a `[models]` table as well as a single `upstream`,
+  routing each request to the origin configured for its JSON `model` field. One
+  receiver can therefore front several providers from one listener: its
+  dictionary store and its credential partitions serve every route, and a model
+  outside the table is refused with a 400 before any origin is contacted.
 - `portway --tui --attach URL` views a remote web console over HTTP/HTTPS,
   including its live requests, recent events, charts, usage and costs. It
   remembers an owner-only session after hidden token entry, reconnects after
