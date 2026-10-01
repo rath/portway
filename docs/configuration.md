@@ -105,7 +105,7 @@ the existing table, before the next table header.
 | Requirement | Configuration |
 | --- | --- |
 | One HTTP service, including arbitrary non-JSON requests | `upstream = "https://api.example.com"` |
-| A vendor's API for that vendor's own client — Claude Code, Codex — or several such APIs on one listener, each under its own path | `[upstreams]` table |
+| A vendor's API for that vendor's own client (Claude Code, Codex), or several such APIs on one listener, each under its own path | `[upstreams]` table |
 | Several destinations selected by a JSON `model` field, for a client that sees one provider with many models | `[models]` table |
 | Decode compressed requests in front of one or more applications | `receive` CLI mode with any of the above |
 
@@ -141,7 +141,7 @@ proxy destinations; they are not HTTP CONNECT proxy settings.
 
 ## Mount upstreams at path prefixes
 
-A vendor's own client — Claude Code, Codex — speaks that vendor's API and lets
+A vendor's own client, such as Claude Code or Codex, speaks that vendor's API and lets
 you set one thing: its base URL. Mount the vendor's API under a name, and set
 the client's base URL to that mount:
 
@@ -155,7 +155,7 @@ codex = "https://chatgpt.com/backend-api/codex"
 ```
 
 Each name answers under `/<name>/`. Portway removes that segment and forwards
-the rest of the path, with its query, to the URL — appended to the URL's own
+the rest of the path, with its query, to the URL, appended to the URL's own
 path prefix, as for any upstream:
 
 | Configured | Incoming path | Upstream request |
@@ -165,7 +165,7 @@ path prefix, as for any upstream:
 | `codex = "https://chatgpt.com/backend-api/codex"` | `/codex` | `https://chatgpt.com/backend-api/codex/` |
 
 The choice is made from the path alone. The body is not read, so a request
-without one — a model catalog, a health check — routes like any other, and a
+without one (a model catalog, a health check) routes like any other, and a
 model name the table has never heard of needs no entry: the client sends
 whatever its vendor ships next. An already encoded body goes through a mount
 as it came. For the client side, see [Claude Code and Codex](agents.md).
@@ -277,8 +277,8 @@ cache_read = 0.1
 ```
 
 All three price fields are required together and must be finite, nonnegative
-numbers. Names match the **model the request named** — the string `model` of
-its JSON body — whatever route it went through: under `upstream = "…"` or a
+numbers. Names match the **model the request named**, the string `model` of
+its JSON body, whatever route it went through: under `upstream = "…"` or a
 mount, a request for `claude-opus-5-5` is priced by `[prices."claude-opus-5-5"]`.
 A request that names no model (a catalog, a health check) is recorded with an
 empty model and stays unpriced. Each record also keeps the route it went
@@ -354,7 +354,7 @@ work but compression or dictionary reuse is absent.
 
 Start with `portway receive --config ./receive.toml`. Receiver mode requires an
 `upstream`, an `[upstreams]` table or a `[models]` table. It restores incoming
-compressed requests and forwards them to that application, or — with a table —
+compressed requests and forwards them to that application or, with a table,
 to the origin [mounted under the request's first path segment](#mount-upstreams-at-path-prefixes)
 or configured for its JSON `model` field, so one receiver can front several
 providers that each speak their own API. By default the origin upload is

@@ -36,7 +36,7 @@ claude
 ```
 
 Claude Code sends `POST /anthropic/v1/messages`; Portway forwards
-`/v1/messages` to `api.anthropic.com` with the request's own credentials —
+`/v1/messages` to `api.anthropic.com` with the request's own credentials:
 the login Claude Code already has, or `ANTHROPIC_API_KEY` if you use one.
 Model names travel in the body and are recorded, not matched: a model works
 the day it ships.
@@ -134,8 +134,8 @@ The dashboards list `anthropic` and `codex` as upstreams and each request
 under its model; `portway --report --model claude-opus-5-5` narrows to one.
 A catalog request names no model and shows `-`.
 
-Codex asks for no response compression — its HTTP client sends no
-`Accept-Encoding` — so its answers reach it as they were decoded, and the
+Codex asks for no response compression (its HTTP client sends no
+`Accept-Encoding`), so its answers reach it as they were decoded, and the
 console's "to agent" column stays empty for it. Claude Code accepts a
 compressed answer and shows the smaller figure there.
 

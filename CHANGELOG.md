@@ -14,7 +14,7 @@ version may contain breaking changes.
   reaches `https://api.anthropic.com/v1/messages`. The choice is made from the
   path alone, so a bodiless request such as Codex's model catalog routes like
   any other, and a new model name needs no configuration. A vendor's own client
-  is connected by its base URL — `http://127.0.0.1:8787/anthropic` — with nothing
+  is connected by its base URL (`http://127.0.0.1:8787/anthropic`) with nothing
   else to set. Mounts combine with `[models]` on one listener and work in
   `receive` mode too, so one receiver can front several providers. The stats
   endpoint now keys its per-route counters under `upstreams` rather than
