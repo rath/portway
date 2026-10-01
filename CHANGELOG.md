@@ -7,6 +7,8 @@ version may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-01
+
 ### Added
 
 - An `[upstreams]` table mounts named upstreams at path prefixes: with
@@ -126,5 +128,6 @@ The first public release.
   FAQ; the request compression protocol; a security policy; and contribution
   guidelines.
 
-[Unreleased]: https://github.com/rath/portway/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/rath/portway/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/rath/portway/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/rath/portway/releases/tag/v0.1.0
