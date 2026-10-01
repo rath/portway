@@ -32,8 +32,8 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=Fragment+Mono&display=swap">
 <link rel="stylesheet" href="../style.css?v=0829ee468187">
-<script type="module" src="../main.js?v=60fadf5ae233"></script>
-<script type="module" src="../install.js?v=43f9786cd367"></script>
+<script type="module" src="../main.js?v=a43c79eba2e2"></script>
+<script type="module" src="../install.js?v=be55ca0cf537"></script>
 <script type="module" src="../langmenu.js"></script>
 </head>
 <body>
@@ -112,7 +112,7 @@
         <dd data-counter="zstd">3,114,150&nbsp;B</dd>
       </div>
       <div class="series wire">
-        <dt>Portway 经链路发送的字节</dt>
+        <dt>Portway 实际发出的字节</dt>
         <dd data-counter="wire">101,551&nbsp;B</dd>
       </div>
     </dl>
@@ -129,13 +129,13 @@
       <label for="turn">第 <output id="turn-out" for="turn">40</output> 轮 / 共 40 轮</label>
       <input id="turn" type="range" min="1" max="40" value="40" step="1">
     </div>
-    <p class="turn-note" data-turn-note>第 40 轮：智能体发送了 <b>429,900</b> 字节，而经过链路的只有 <b class="w">1,029</b> 字节。</p>
+    <p class="turn-note" data-turn-note>第 40 轮：智能体发送了 <b>429,900</b> 字节，实际发出的只有 <b class="w">1,029</b> 字节。</p>
   </figure>
 </section>
 
 <section class="chapter" id="try" aria-labelledby="try-title">
   <h2 id="try-title">安装，然后连接你的智能体</h2>
-  <p>通过 Homebrew 安装，然后连接你的智能体。安装包已包含终端面板和浏览器控制台，无需 Rust 工具链。</p>
+  <p>Homebrew 安装包已包含终端面板和浏览器控制台，无需 Rust 工具链。</p>
 
   <ol class="steps">
     <li>
@@ -202,7 +202,7 @@ codex = "https://chatgpt.com/backend-api/codex"</code></pre>
     </ol>
   </figure>
 
-  <p>于是会话的上传量随长度的平方增长。如果这份上传量正好落在你需要等待、需要付费的地方，很快就会显出来：</p>
+  <p>于是会话的上传量随长度的平方增长。一旦这些上传要你等待、要你付费，差距很快就会显现：</p>
   <ul class="fit">
     <li>部署在另一个区域的模型服务，或你自己运维的网关；</li>
     <li>每一轮请求都要穿过 VPN 或 SSH 的远程开发机；</li>
@@ -237,7 +237,7 @@ codex = "https://chatgpt.com/backend-api/codex"</code></pre>
       <p><strong>接收端确认自己留了什么。</strong>响应里带上 <code>X-Dict-Stored</code>，其中是它实际保存的字节的 SHA-256。只有当这个哈希与自己的副本一致时，发送端才会把该请求体当作基线。</p>
     </li>
     <li>
-      <p><strong>第 2 轮用哈希指名第 1 轮。</strong>这个请求以 DCZ 格式发出：先是一段 40 字节的报头，携带词典的 SHA-256；接着是针对该词典压缩、带内容校验和的 zstd 帧。发送端为每条路由保留最多 8 个已确认的请求体，挑出与新请求共享最长前缀的那个。在只做追加的对话里，它就是上一轮。</p>
+      <p><strong>第 2 轮用哈希指定第 1 轮。</strong>这个请求以 DCZ 格式发出：先是一段 40 字节的报头，携带词典的 SHA-256；接着是针对该词典压缩、带内容校验和的 zstd 帧。发送端为每条路由保留最多 8 个已确认的请求体，挑出与新请求共享最长前缀的那个。在只做追加的对话里，它就是上一轮。</p>
     </li>
   </ol>
 
@@ -329,7 +329,7 @@ python3 scripts/bench.py --turns 20 --context-kb 1024</code></pre>
       <dd>词典只存在两端的内存里，并按凭据彼此隔离。默认情况下，小于 32&nbsp;KiB 的请求体不会成为词典。</dd>
     </div>
     <div>
-      <dt>它只说普通的 HTTP/1.1。</dt>
+      <dt>它只支持普通的 HTTP/1.1。</dt>
       <dd>没有 WebSocket、CONNECT、HTTP/2，也没有入站 TLS；TLS 和认证请交给前面的网关。请求最多缓冲到可配置的 256&nbsp;MiB，响应则是流式的。</dd>
     </div>
   </dl>

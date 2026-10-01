@@ -22,8 +22,8 @@ export const STRINGS = {
     copyError: "복사하지 못했습니다. 선택된 명령을 직접 복사해 주세요.",
     replay: "재생",
     stop: "정지",
-    seed: '1턴: 에이전트가 <b>{body}</b>바이트를 보냈습니다. Portway는 사전의 씨앗을 뿌리려고 컨텍스트 전체를 zstd로 압축해 <b class="w">{wire}</b>바이트로 한 번 보냈습니다.',
-    turn: '{turn}턴: 에이전트가 <b>{body}</b>바이트를 보냈고, 회선을 건넌 것은 <b class="w">{wire}</b>바이트입니다.',
+    seed: '1턴: 에이전트가 <b>{body}</b>바이트를 보냈습니다. Portway는 사전을 만들려고 컨텍스트 전체를 zstd로 압축해 <b class="w">{wire}</b>바이트로 한 번 보냈습니다.',
+    turn: '{turn}턴: 에이전트가 <b>{body}</b>바이트를 보냈고, 실제로 전송된 것은 <b class="w">{wire}</b>바이트입니다.',
   },
   "zh-Hans": {
     copied: "已复制",
@@ -32,7 +32,7 @@ export const STRINGS = {
     replay: "重播",
     stop: "停止",
     seed: '第 1 轮：智能体发送了 <b>{body}</b> 字节。Portway 为了播下词典，把整个上下文用 zstd 压缩后一次发出，共 <b class="w">{wire}</b> 字节。',
-    turn: '第 {turn} 轮：智能体发送了 <b>{body}</b> 字节，而经过链路的只有 <b class="w">{wire}</b> 字节。',
+    turn: '第 {turn} 轮：智能体发送了 <b>{body}</b> 字节，实际发出的只有 <b class="w">{wire}</b> 字节。',
   },
   ja: {
     copied: "コピー済み",
@@ -40,7 +40,7 @@ export const STRINGS = {
     copyError: "コピーできませんでした。選択されたコマンドを手動でコピーしてください。",
     replay: "再生",
     stop: "停止",
-    seed: '1 ターン目：エージェントは <b>{body}</b> バイトを送信しました。Portway は辞書の種を蒔くために、コンテキスト全体を zstd で圧縮した <b class="w">{wire}</b> バイトを一度だけ送りました。',
+    seed: '1 ターン目：エージェントは <b>{body}</b> バイトを送信しました。Portway は辞書の元にするために、コンテキスト全体を zstd で圧縮した <b class="w">{wire}</b> バイトを一度だけ送りました。',
     turn: '{turn} ターン目：エージェントは <b>{body}</b> バイトを送信し、回線を通過したのは <b class="w">{wire}</b> バイトでした。',
   },
 };

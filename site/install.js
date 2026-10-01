@@ -1,4 +1,4 @@
-import { strings } from "./i18n.js?v=c31a877af605";
+import { strings } from "./i18n.js?v=5c19a0daadbd";
 
 const S = strings(document.documentElement.lang);
 

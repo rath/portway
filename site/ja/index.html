@@ -48,8 +48,8 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=Fragment+Mono&display=swap">
 <link rel="stylesheet" href="../style.css?v=0829ee468187">
-<script type="module" src="../main.js?v=60fadf5ae233"></script>
-<script type="module" src="../install.js?v=43f9786cd367"></script>
+<script type="module" src="../main.js?v=a43c79eba2e2"></script>
+<script type="module" src="../install.js?v=be55ca0cf537"></script>
 <script type="module" src="../langmenu.js"></script>
 </head>
 <body>
@@ -151,7 +151,7 @@
 
 <section class="chapter" id="try" aria-labelledby="try-title">
   <h2 id="try-title">インストールして、エージェントを接続</h2>
-  <p>Homebrew でインストールして、エージェントを接続します。ターミナルダッシュボードとブラウザーコンソールが含まれており、Rust ツールチェーンは不要です。</p>
+  <p>Homebrew のパッケージにはターミナルダッシュボードとブラウザーコンソールも含まれており、Rust ツールチェーンは不要です。</p>
 
   <ol class="steps">
     <li>
@@ -180,7 +180,7 @@ codex = "https://chatgpt.com/backend-api/codex"</code></pre>
 <pre class="shell" tabindex="0"><code>portway --config ./portway.toml --web</code></pre>
     </li>
     <li>
-      <p><strong>エージェントを自分のマウントに向けます。</strong>変えるのはそれだけです。Claude Code は <code>ANTHROPIC_BASE_URL=http://127.0.0.1:8787/anthropic</code>、Codex はプロバイダー項目の <code>base_url = "http://127.0.0.1:8787/codex"</code> です。ログインもモデル名もそれぞれそのまま使い、Portway はリクエストに載った認証情報をそのまま通して、自分では鍵を持ちません。OpenAI 互換のサービスなら <code>upstream</code> ひとつと base URL <code>http://127.0.0.1:8787/v1</code> で済みます。</p>
+      <p><strong>エージェントを自分のマウントに向けます。</strong>変えるのはそれだけです。Claude Code は <code>ANTHROPIC_BASE_URL=http://127.0.0.1:8787/anthropic</code>、Codex はプロバイダー項目の <code>base_url = "http://127.0.0.1:8787/codex"</code> です。ログインもモデル名もそれぞれそのまま使い、Portway はリクエストに載った認証情報をそのまま通して、自前のキーは持ちません。OpenAI 互換のサービスなら <code>upstream</code> ひとつと base URL <code>http://127.0.0.1:8787/v1</code> で済みます。</p>
     </li>
     <li>
       <p><strong>デルタ圧縮を使うにはレシーバーを追加します。</strong>サービスの手前にあるゲートウェイの後ろで <code>portway receive</code> を動かし、センダーをそのゲートウェイに向けます。<a href="https://github.com/rath/portway/blob/main/docs/getting-started.md#add-a-compression-receiver">レシーバーの設定</a>に手順があります。</p>
@@ -229,7 +229,7 @@ codex = "https://chatgpt.com/backend-api/codex"</code></pre>
 
 <section class="chapter" aria-labelledby="how-title">
   <h2 id="how-title">直前のターンが辞書になる</h2>
-  <p>Portway は 2 か所で動きます。エージェントの隣の<em>センダー</em>と、呼び出し先のサービスの手前の<em>レシーバー</em>です。どちらも、最後に合意したリクエストボディを保持します。センダーはそれを基準に次のリクエストを圧縮し、レシーバーはサービスが 1 バイトでも見る前に元の姿へ戻します。</p>
+  <p>Portway は 2 か所で動きます。エージェントの隣の<em>センダー</em>と、呼び出し先のサービスの手前の<em>レシーバー</em>です。どちらも、最後に合意したリクエストボディを保持します。センダーはそれを基準に次のリクエストを圧縮し、レシーバーはサービスが 1 バイトでも見る前に元に戻します。</p>
 
   <figure class="hops" aria-labelledby="hops-cap">
     <ol class="hop-list">
@@ -247,7 +247,7 @@ codex = "https://chatgpt.com/backend-api/codex"</code></pre>
   <h3>両端が基準を揃えるまで</h3>
   <ol class="steps">
     <li>
-      <p><strong>1 ターン目が辞書の種を蒔きます。</strong>zstd で圧縮され、<code>X-Dict-Store: 1</code> とともに送られます。レシーバーはそれを解いて先へ渡し、ボディを取っておきます。</p>
+      <p><strong>1 ターン目が辞書の元になります。</strong>zstd で圧縮され、<code>X-Dict-Store: 1</code> とともに送られます。レシーバーはそれを解いて先へ渡し、ボディを取っておきます。</p>
     </li>
     <li>
       <p><strong>レシーバーは、何を取っておいたかを知らせます。</strong>応答には、実際に保存したバイト列の SHA-256 を載せた <code>X-Dict-Stored</code> が付きます。センダーはそのハッシュが自分の複製と一致したときにだけ、そのボディを基準として使います。</p>
@@ -323,7 +323,7 @@ codex = "https://chatgpt.com/backend-api/codex"</code></pre>
       </tbody>
     </table>
   </div>
-  <p class="aside">最後の列は、辞書の種を蒔くためにコンテキスト全体を運ぶ最初のリクエストを含みます。合成テキストは、素の zstd が Portway 自身のソースに対して発揮するのと同程度の削減率になるよう調整してあります。どの実行もバイト単位で再現でき、復元されたボディは送信時の SHA-256 と照合されます。</p>
+  <p class="aside">最後の列は、辞書の元にするためにコンテキスト全体を運ぶ最初のリクエストを含みます。合成テキストは、素の zstd が Portway 自身のソースに対して発揮するのと同程度の削減率になるよう調整してあります。どの実行もバイト単位で再現でき、復元されたボディは送信時の SHA-256 と照合されます。</p>
 
 <pre class="shell" tabindex="0"><code>cargo build --release --locked
 python3 scripts/bench.py --turns 20 --context-kb 1024</code></pre>
@@ -345,7 +345,7 @@ python3 scripts/bench.py --turns 20 --context-kb 1024</code></pre>
       <dd>辞書は両端のメモリにしか存在せず、認証情報ごとに分かれています。既定では 32&nbsp;KiB 未満のボディが辞書になることはありません。</dd>
     </div>
     <div>
-      <dt>話すのは素の HTTP/1.1 です。</dt>
+      <dt>使うのは素の HTTP/1.1 だけです。</dt>
       <dd>WebSocket も CONNECT も HTTP/2 も受信側 TLS もありません。TLS と認証は手前のゲートウェイに任せてください。リクエストは設定可能な 256&nbsp;MiB までバッファリングし、応答はストリーミングします。</dd>
     </div>
   </dl>

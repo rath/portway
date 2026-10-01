@@ -48,8 +48,8 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=Fragment+Mono&display=swap">
 <link rel="stylesheet" href="../style.css?v=0829ee468187">
-<script type="module" src="../main.js?v=60fadf5ae233"></script>
-<script type="module" src="../install.js?v=43f9786cd367"></script>
+<script type="module" src="../main.js?v=a43c79eba2e2"></script>
+<script type="module" src="../install.js?v=be55ca0cf537"></script>
 <script type="module" src="../langmenu.js"></script>
 </head>
 <body>
@@ -88,7 +88,7 @@
 <section class="hero" aria-labelledby="hero-title">
   <div class="hero-copy">
     <h1 id="hero-title"><span>코딩 에이전트의</span> <span>네트워크 전송량을</span> <span>줄이세요.</span></h1>
-    <p class="lede">Claude Code, Codex 같은 코딩 에이전트는 매 턴 쌓인 대화를 통째로 다시 보냅니다. Portway는 직전 요청을 기준으로 다음 요청을 압축해 수신기까지의 네트워크 전송량을 줄입니다. 수신기는 원래 요청을 복원해 모델에 전달합니다.</p>
+    <p class="lede">Claude Code, Codex 같은 코딩 에이전트는 턴마다 그동안 쌓인 대화를 통째로 다시 보냅니다. Portway는 직전 요청을 기준으로 다음 요청을 압축해, 달라진 부분만 수신기까지 보냅니다. 수신기는 원래 요청을 복원해 모델에 전달합니다.</p>
     <div class="hero-install">
       <div class="command-block" data-install>
         <div class="install-command">
@@ -111,7 +111,7 @@
   <figure class="monitor" id="monitor">
     <div class="monitor-head">
       <figcaption>
-        <strong>실제 에이전트 세션 하나를 그대로 재생했습니다.</strong>
+        <strong>에이전트 세션 하나를 그대로 재생했습니다.</strong>
         실제 바이너리로 40턴을 돌렸습니다. 컨텍스트는 256&nbsp;KiB에서 시작해
         턴마다 4&nbsp;KiB씩 늘어납니다.
       </figcaption>
@@ -131,7 +131,7 @@
         <dd data-counter="zstd">3,114,150&nbsp;B</dd>
       </div>
       <div class="series wire">
-        <dt>회선을 건넌 양</dt>
+        <dt>실제로 전송된 양</dt>
         <dd data-counter="wire">101,551&nbsp;B</dd>
       </div>
     </dl>
@@ -149,13 +149,13 @@
       <label for="turn"><output id="turn-out" for="turn">40</output> / 40턴</label>
       <input id="turn" type="range" min="1" max="40" value="40" step="1">
     </div>
-    <p class="turn-note" data-turn-note>40턴: 에이전트가 <b>429,900</b>바이트를 보냈고, 회선을 건넌 것은 <b class="w">1,029</b>바이트입니다.</p>
+    <p class="turn-note" data-turn-note>40턴: 에이전트가 <b>429,900</b>바이트를 보냈고, 실제로 전송된 것은 <b class="w">1,029</b>바이트입니다.</p>
   </figure>
 </section>
 
 <section class="chapter" id="try" aria-labelledby="try-title">
   <h2 id="try-title">설치하고 에이전트를 연결하세요</h2>
-  <p>Homebrew로 설치하고 에이전트를 연결하세요. 터미널 대시보드와 브라우저 콘솔이 포함되어 있으며, Rust 툴체인은 필요하지 않습니다.</p>
+  <p>Homebrew 패키지에는 터미널 대시보드와 브라우저 콘솔까지 들어 있어 Rust 툴체인이 필요 없습니다.</p>
 
   <ol class="steps">
     <li>
@@ -184,7 +184,7 @@ codex = "https://chatgpt.com/backend-api/codex"</code></pre>
 <pre class="shell" tabindex="0"><code>portway --config ./portway.toml --web</code></pre>
     </li>
     <li>
-      <p><strong>에이전트를 자기 마운트로 향하게 합니다.</strong> 바꿀 것은 그것뿐입니다.
+      <p><strong>에이전트가 자기 마운트를 바라보게 합니다.</strong> 바꿀 것은 그것뿐입니다.
       Claude Code는 <code>ANTHROPIC_BASE_URL=http://127.0.0.1:8787/anthropic</code>, Codex는
       프로바이더 항목의 <code>base_url = "http://127.0.0.1:8787/codex"</code>입니다. 로그인과 모델
       이름은 각자 그대로 쓰고, Portway는 요청에 실린 자격 증명을 그대로 넘겨주며 키를 따로
@@ -200,7 +200,7 @@ codex = "https://chatgpt.com/backend-api/codex"</code></pre>
   </ol>
 
   <p>같은 저장소에는 임베딩할 수 있는 Rust 라이브러리 <code>portway-core</code>와, 데몬
-  모드·리포트·터미널 대시보드·브라우저 콘솔을 갖춘 CLI가 같이 들어 있습니다. 요청
+  모드·리포트·터미널 대시보드·브라우저 콘솔을 갖춘 CLI가 함께 들어 있습니다. 요청
   메타데이터만 SQLite에 기록하고, 본문과 자격 증명, 사전 내용은 기록하지 않습니다.</p>
 
   <ul class="docs">
@@ -235,12 +235,12 @@ codex = "https://chatgpt.com/backend-api/codex"</code></pre>
     </ol>
   </figure>
 
-  <p>그래서 세션의 업로드량은 길이의 제곱에 비례해 늘어납니다. 그 업로드가 곧 기다림이거나
-  비용이 되는 환경에서는 금세 드러납니다:</p>
+  <p>그래서 세션의 업로드량은 길이의 제곱에 비례해 늘어납니다. 업로드가 곧 대기 시간이고
+  비용인 환경에서는 금세 체감됩니다:</p>
   <ul class="fit">
-    <li>다른 리전에 있는 자체 호스팅 모델 서버나 직접 운영하는 게이트웨이,</li>
-    <li>매 턴마다 VPN과 SSH 구간을 지나야 하는 원격 개발 머신,</li>
-    <li>느리거나, 여럿이 나눠 쓰거나, 종량제인 회선에 연결된 노트북.</li>
+    <li>다른 리전에 있는 자체 호스팅 모델 서버나 직접 운영하는 게이트웨이</li>
+    <li>턴마다 VPN이나 SSH 구간을 지나야 하는 원격 개발 머신</li>
+    <li>느리거나 여럿이 나눠 쓰거나 종량제인 회선에 연결된 노트북</li>
   </ul>
   <p class="aside">짧은 단발 요청에서는 얻을 게 거의 없습니다. 기준 삼을 앞선 요청이 없기 때문입니다.</p>
 </section>
@@ -250,11 +250,11 @@ codex = "https://chatgpt.com/backend-api/codex"</code></pre>
   <p>Portway는 두 곳에서 실행됩니다. 에이전트 옆의 <em>송신기</em>와, 에이전트가 호출하는
   서비스 앞의 <em>수신기</em>입니다. 양쪽 모두 마지막으로 합의한 요청 본문을 보관합니다.
   송신기는 그 본문을 기준으로 다음 요청을 압축하고, 수신기는 서비스가 바이트 하나라도 보기
-  전에 원본을 그대로 되돌립니다.</p>
+  전에 원본을 그대로 복원합니다.</p>
 
   <figure class="hops" aria-labelledby="hops-cap">
     <ol class="hop-list">
-      <li class="node"><span class="node-name">에이전트</span><span class="node-sub">Claude Code, Codex, base URL을 지정할 수 있는 아무 클라이언트</span></li>
+      <li class="node"><span class="node-name">에이전트</span><span class="node-sub">Claude Code, Codex, base URL을 바꿀 수 있는 클라이언트라면 무엇이든</span></li>
       <li class="link local"><span class="bytes">268,145&nbsp;B</span><span class="link-sub">localhost</span></li>
       <li class="node"><span class="node-name">portway</span><span class="node-sub">송신기, 127.0.0.1:8787</span></li>
       <li class="link slow"><span class="bytes">1,054&nbsp;B</span><span class="link-sub">느린 구간</span></li>
@@ -266,10 +266,10 @@ codex = "https://chatgpt.com/backend-api/codex"</code></pre>
     것과 똑같습니다. 델타를 나르는 것은 가운데 구간뿐입니다.</figcaption>
   </figure>
 
-  <h3>양 끝이 기준을 합의하는 방법</h3>
+  <h3>양 끝이 기준을 맞추는 방법</h3>
   <ol class="steps">
     <li>
-      <p><strong>1턴이 사전의 씨앗을 뿌립니다.</strong> 이 요청은 zstd로 압축해
+      <p><strong>1턴이 사전의 바탕이 됩니다.</strong> 이 요청은 zstd로 압축해
       <code>X-Dict-Store: 1</code>과 함께 보냅니다. 수신기는 압축을 풀어 넘겨주고, 본문은
       보관합니다.</p>
     </li>
@@ -279,10 +279,10 @@ codex = "https://chatgpt.com/backend-api/codex"</code></pre>
       사본과 일치할 때만 그 본문을 기준으로 삼습니다.</p>
     </li>
     <li>
-      <p><strong>2턴은 1턴을 해시로 지목합니다.</strong> DCZ 형식으로 나갑니다. 사전의
+      <p><strong>2턴은 해시로 1턴을 가리킵니다.</strong> 요청은 DCZ 형식으로 나갑니다. 사전의
       SHA-256을 담은 40바이트 헤더 뒤에, 그 사전을 기준으로 압축되고 체크섬으로 끝나는 zstd
       프레임이 이어집니다. 송신기는 라우트마다 확인된 본문을 최대 여덟 개까지 보관하고,
-      새 요청과 접두사를 가장 길게 공유하는 본문을 고릅니다. 앞에 덧붙이기만 하는
+      새 요청과 접두사를 가장 길게 공유하는 본문을 고릅니다. 뒤에 덧붙이기만 하는
       대화라면 그것이 직전 턴입니다.</p>
     </li>
   </ol>
@@ -316,17 +316,17 @@ codex = "https://chatgpt.com/backend-api/codex"</code></pre>
   <h2 id="fail-title">기준이 사라지면 한 단계씩 물러섭니다</h2>
   <p>수신기가 재시작하거나, 오래된 본문을 밀어내거나, 처음 보는 송신기를 만날 수 있습니다.
   어느 쪽이든 요청이 실패하지는 않습니다. 수신기는 복원할 수 없는 요청을 애플리케이션이
-  실행되기 <em>전에</em> 거부하고 거부했다는 표식을 남기며, 송신기는 압축을 낮춰 다시
+  실행되기 <em>전에</em> 거부하고 거부했다는 표식을 남기며, 송신기는 한 단계 덜 압축해 다시
   시도합니다.</p>
 
   <ol class="ladder">
     <li>
       <span class="rung">보관된 본문을 기준으로 한 DCZ</span>
-      <span class="why"><code class="status">412</code> 사전이 사라졌거나 <code class="status">400</code>·<code class="status">415</code>로 프레임이 거부되면 물러납니다</span>
+      <span class="why"><code class="status">412</code> 사전이 사라졌거나 <code class="status">400</code>·<code class="status">415</code>로 프레임이 거부되면 물러섭니다</span>
     </li>
     <li>
       <span class="rung">사전 없이 zstd만</span>
-      <span class="why"><code class="status">415</code>로 인코딩이 거부되면 물러납니다</span>
+      <span class="why"><code class="status">415</code>로 인코딩이 거부되면 물러섭니다</span>
     </li>
     <li>
       <span class="rung">압축 없이, 에이전트가 보낸 그대로</span>
@@ -366,8 +366,8 @@ codex = "https://chatgpt.com/backend-api/codex"</code></pre>
       </tbody>
     </table>
   </div>
-  <p class="aside">마지막 열은 사전의 씨앗을 뿌리려고 컨텍스트 전체를 나르는 첫 요청까지
-  포함합니다. 합성 텍스트는 zstd만 써도 Portway 자신의 소스에서와 비슷한 절감률이 나오도록
+  <p class="aside">마지막 열에는 사전을 만들려고 컨텍스트 전체를 보내는 첫 요청까지
+  포함됩니다. 합성 텍스트는 zstd만 써도 Portway 자신의 소스에서와 비슷한 절감률이 나오도록
   맞춰 두었습니다. 모든 실행 결과는 바이트 단위까지 똑같이 재현되고, 복원된 본문은 보낸
   바이트의 SHA-256과 대조해 검증합니다.</p>
 
@@ -379,7 +379,7 @@ python3 scripts/bench.py --turns 20 --context-kb 1024</code></pre>
   <h2 id="limits-title">하지 않는 일</h2>
   <dl class="limits">
     <div>
-      <dt>바이트를 절약합니다. 토큰이 아닙니다.</dt>
+      <dt>줄이는 것은 바이트이지, 토큰이 아닙니다.</dt>
       <dd>모델이 받는 요청은 똑같고, 청구되는 토큰도 똑같습니다. 프로바이더의 프롬프트
       캐싱은 반복되는 접두사를 처리하는 비용을 줄이고, Portway는 그 접두사를 보내는 비용을
       줄입니다. 둘을 함께 쓰면 됩니다.</dd>
