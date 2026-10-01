@@ -28,11 +28,20 @@ pub const READ_TIMEOUT: Duration = Duration::from_secs(600);
 /// has gone. An agent that stops reading at the answer's last event — Codex
 /// closes on `response.completed` — leaves the EOF unread, which would make
 /// a finished answer a cut one: no usage, and a connection that cannot be
-/// pooled. Reading on for a moment lets that answer end on its own. One the
-/// agent cut short keeps streaming past the grace and is dropped as before,
-/// which is what makes the engine stop.
-const GRACE: Duration = Duration::from_millis(250);
-const GRACE_BYTES: u64 = 64 << 10;
+/// pooled. Reading on lets that answer end on its own.
+///
+/// The two limits tell that answer from one the agent cut short. A finished
+/// answer is quiet until its end, and the end can trail its last event by
+/// more than the event took to arrive: behind a receiver on another
+/// continent it reached the sender up to about a second after the receiver
+/// had it, and a quarter of a second cut one finished Codex turn in seven.
+/// An answer still generating sends more of itself instead, and past a
+/// closing event's worth of it is dropped as before, which is what makes the
+/// engine stop. Only an engine that has gone quiet mid-answer, thinking,
+/// runs out the clock.
+const GRACE: Duration = Duration::from_secs(2);
+/// Decoded bytes: a trailing `data: [DONE]` or usage chunk, not a generation.
+const GRACE_BYTES: u64 = 1 << 10;
 
 /// Everything the one-line request log needs, rendered when the relay ends —
 /// including when the agent disconnects mid-stream.
@@ -248,10 +257,10 @@ impl Drop for RelayBody {
 }
 
 /// Read the rest of an answer the agent stopped reading, for at most `GRACE`
-/// and `GRACE_BYTES`. An answer that ends within them is recorded as complete,
-/// with the usage its last chunk carried, and its connection is pooled; one
-/// that does not is dropped here, cut, as the agent's disconnect would have
-/// dropped it at once.
+/// and `GRACE_BYTES` more of it. An answer that ends within them is recorded
+/// as complete, with the usage its last chunk carried, and its connection is
+/// pooled; one that does not is dropped here, cut, as the agent's disconnect
+/// would have dropped it at once.
 async fn drain(
     mut upstream: Incoming,
     mut decoder: Decoder,
@@ -260,16 +269,12 @@ async fn drain(
     mut log: Option<RequestLog>,
 ) {
     let rest = async {
-        let mut wire = 0u64;
+        let mut more = 0u64;
         while let Some(frame) = upstream.frame().await {
             let Ok(frame) = frame else { return false };
             let Ok(data) = frame.into_data() else {
                 continue;
             };
-            wire += data.len() as u64;
-            if wire > GRACE_BYTES {
-                return false;
-            }
             if let Some(log) = log.as_mut() {
                 log.received_wire += data.len() as u64;
                 log.stats
@@ -285,6 +290,11 @@ async fn drain(
                 log.stats
                     .down_bytes
                     .fetch_add(decoded.len() as u64, Ordering::Relaxed);
+            }
+            // More than a closing event: the engine is still generating.
+            more += decoded.len() as u64;
+            if more > GRACE_BYTES {
+                return false;
             }
         }
         true

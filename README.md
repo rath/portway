@@ -265,11 +265,11 @@ authenticated application's handler. Buildable examples:
 
 Requests are buffered with a configurable 256 MiB default limit; response bodies
 stream incrementally. WebSockets, CONNECT, HTTP/2, inbound TLS, and unbounded
-streaming uploads are not supported. When the agent disconnects, the upstream
-answer is read on for at most 250 ms and 64 KiB, so an answer the agent stopped
-reading at its last event is still recorded whole; past that, cancellation
-closes the upstream HTTP/1.1 connection. Dictionary storage is memory-only and
-bounded.
+streaming uploads are not supported. When the agent disconnects, Portway waits
+up to 2 s for the upstream answer to end, so an answer the agent stopped reading
+at its last event is still recorded whole; an answer still generating, or still
+open after that, is cancelled and its upstream HTTP/1.1 connection closed.
+Dictionary storage is memory-only and bounded.
 
 `bash scripts/check.sh` runs formatting, clippy, and the tests for the
 default, `tui`, `web`, and `tui,web` builds, then the dependency-boundary and

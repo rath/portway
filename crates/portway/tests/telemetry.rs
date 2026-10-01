@@ -279,7 +279,7 @@ async fn an_answer_the_agent_stopped_reading_at_its_last_event_is_still_whole() 
     let _ = next_request().await;
     assert_eq!(up.connections(), after_probe);
 
-    let up = upstream(Health::JsonBare, Reply::UsageStreamLingers(2_000)).await;
+    let up = upstream(Health::JsonBare, Reply::UsageStreamLingers(5_000)).await;
     let fwd = forwarder(&[("model-alpha", &up.base)], &[]).await;
     fwd.read_then_abort("/v1/chat/completions", chat_body("model-alpha"), 1)
         .await;

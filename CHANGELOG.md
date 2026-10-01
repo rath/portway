@@ -28,6 +28,13 @@ version may contain breaking changes.
   own fields and their `…_details`, whatever its size.
   Reasoning tokens are read from the Responses API's `output_tokens_details`
   as well.
+- After an agent disconnects, Portway waits up to 2 s for the answer to end,
+  instead of 250 ms. Behind a receiver on another continent, an answer's end
+  reached the sender up to about a second after its last event, so about one
+  finished Codex turn in seven was recorded as cut, without usage and without
+  returning its connection to the pool. An answer still generating is
+  cancelled once more than 1 KiB of it arrives, where 64 KiB was allowed
+  before; only one that has gone quiet mid-answer waits out the 2 s.
 - A response Portway decodes or re-encodes keeps its `ETag`, weakened, instead
   of losing it. Codex keys its model catalog on that tag and compares it with
   the `X-Models-Etag` of every answer; without it, Codex downloaded the whole

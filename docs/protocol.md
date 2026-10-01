@@ -116,12 +116,13 @@ cache scope, reload behavior, and eligibility, see
 
 Request bodies are bounded and buffered before compression or restoration.
 Responses are relayed incrementally, optionally decoded and re-encoded according
-to the client's `Accept-Encoding`. When the client disconnects, the proxy reads
-the upstream answer on for at most 250 ms and 64 KiB: an answer that ends
-within that grace is complete, with its usage, and its connection is pooled.
-Past it, cancellation drops both proxy hops and closes the active upstream
-HTTP/1.1 connection. Only fully consumed responses return a connection to the
-pool.
+to the client's `Accept-Encoding`. When the client disconnects, the proxy waits
+up to 2 s for the upstream answer to end: an answer that ends within that grace
+is complete, with its usage, and its connection is pooled. An answer that sends
+more than 1 KiB of itself meanwhile is still generating, and is cancelled at
+once, as is one still open when the grace runs out: both proxy hops drop it and
+close the active upstream HTTP/1.1 connection. Only fully consumed responses
+return a connection to the pool.
 
 Hop-by-hop headers, including those named by `Connection`, are not forwarded.
 Content length and encoding are recomputed after transformations. When the
