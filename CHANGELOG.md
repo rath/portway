@@ -7,6 +7,12 @@ version may contain breaking changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- `scripts/bench.py` reads the sender's counters under `upstreams`, the key
+  `/__portway/stats` uses since 0.2.0. The 0.2.0 tag's copy still reads
+  `models` and stops with a `KeyError`; the released binaries are unaffected.
+
 ## [0.2.0] - 2026-10-01
 
 ### Added

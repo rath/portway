@@ -407,7 +407,7 @@ def run_config(binary: Path, config: Config, receiver: Portway, origin: Origin,
                            f"http://127.0.0.1:{receiver.port}", workdir, extra)
     try:
         sender.wait_ready()
-        route = sender.stats()["models"]["upstream"]
+        route = sender.stats()["upstreams"]["upstream"]
         if (route["coding"], route["dict"]) != (config.coding, config.dictionary):
             raise BenchError(3, (
                 f"{config.name}: negotiated coding={route['coding']} dict={route['dict']}, "
@@ -417,13 +417,13 @@ def run_config(binary: Path, config: Config, receiver: Portway, origin: Origin,
         headers = {"Content-Type": "application/json", "Authorization": f"Bearer bench-{config.name}"}
         turns: list[Turn] = []
         for index, body in enumerate(bodies, start=1):
-            before = sender.stats()["models"]["upstream"]
+            before = sender.stats()["upstreams"]["upstream"]
             status, _, reply = request(sender.port, "POST", CHAT_PATH, body, headers)
             if status != 200:
                 raise BenchError(1, f"{config.name} turn {index}: status {status}: {reply[:200]!r}")
             if not origin.digests or origin.digests[-1] != hashlib.sha256(body).hexdigest():
                 raise BenchError(1, f"{config.name} turn {index}: the origin did not receive the body that was sent")
-            after = sender.stats()["models"]["upstream"]
+            after = sender.stats()["upstreams"]["upstream"]
             delta = {key: after[key] - before[key]
                      for key in ("requests", "body_bytes", "wire_bytes", "encoded_requests", "dict_hits")}
             if delta["requests"] != 1 or delta["body_bytes"] != len(body):
@@ -435,7 +435,7 @@ def run_config(binary: Path, config: Config, receiver: Portway, origin: Origin,
             else:
                 coding = "identity"
             turns.append(Turn(delta["body_bytes"], delta["wire_bytes"], coding))
-        return turns, sender.stats()["models"]["upstream"]
+        return turns, sender.stats()["upstreams"]["upstream"]
     finally:
         sender.stop()
 
