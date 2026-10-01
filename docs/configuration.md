@@ -16,8 +16,9 @@ portway --config ./portway.toml
 ```
 
 Use [forward.toml](../examples/forward.toml) for one destination,
-[models.toml](../examples/models.toml) for a model routing table, or
-[receive.toml](../examples/receive.toml) for a receiver.
+[upstreams.toml](../examples/upstreams.toml) for vendor APIs mounted under
+their own paths, [models.toml](../examples/models.toml) for a model routing
+table, or [receive.toml](../examples/receive.toml) for a receiver.
 
 Remote TUI attach (`--tui --attach URL`) skips local TOML loading and uses the
 remote console's configuration and prices. Its `--data-dir` holds only viewer
@@ -60,8 +61,9 @@ portway --config ./portway.toml --port 8789 --level 3
 ```
 
 This changes the listening port and compression level for that invocation.
-`--upstream URL` also clears a file's `[models]` table and selects single-upstream
-mode. There is no `--models` registration flag; edit the table in TOML.
+`--upstream URL` also clears a file's `[upstreams]` and `[models]` tables and
+selects single-upstream mode. There is no flag that adds a table entry; edit
+the TOML.
 A file must still parse successfully before CLI overrides can be applied.
 
 Relative config paths are read before daemonization. TOML strings do not expand
@@ -73,13 +75,17 @@ appropriate](operations.md#apply-configuration-changes).
 ## TOML basics that matter here
 
 Root settings such as `host`, `port`, and `upstream` go **before** the first table
-header. After `[models]`, assignments belong to that table until the next header.
-Use `#` for comments, quotes for string values, integers for ports and byte counts,
-and quoted model keys for literal names containing punctuation.
+header. After `[upstreams]` or `[models]`, assignments belong to that table
+until the next header. Use `#` for comments, quotes for string values, integers
+for ports and byte counts, and quoted model keys for literal names containing
+punctuation.
 
 ```toml
 host = "127.0.0.1"
 port = 8787
+
+[upstreams]
+anthropic = "https://api.anthropic.com"
 
 [models]
 "model-b.1" = "https://second.example.com"
@@ -91,20 +97,22 @@ level = 3
 
 An unquoted `model-b.1` is a TOML dotted key, not one literal model name. Quote the
 name in price table headers too: `[prices."model-b.1"]`. Tables cannot be declared
-twice, and duplicate model keys are errors. To add a route, put a new entry inside
-the existing `[models]` section, before the next table.
+twice, and duplicate keys are errors. To add a route, put a new entry inside
+the existing table, before the next table header.
 
 ## Choose the routing mode
 
 | Requirement | Configuration |
 | --- | --- |
 | One HTTP service, including arbitrary non-JSON requests | `upstream = "https://api.example.com"` |
-| Several destinations selected by a JSON `model` field | `[models]` table |
-| Decode compressed requests in front of one or more applications | `receive` CLI mode with `upstream` or a `[models]` table |
+| A vendor's API for that vendor's own client — Claude Code, Codex — or several such APIs on one listener, each under its own path | `[upstreams]` table |
+| Several destinations selected by a JSON `model` field, for a client that sees one provider with many models | `[models]` table |
+| Decode compressed requests in front of one or more applications | `receive` CLI mode with any of the above |
 
-Use exactly one of `upstream` or a nonempty `[models]` table. Even a one-entry
-`[models]` table requires a matching model in requests; it is not an implicit
-default destination.
+`upstream` stands alone: it is the one destination for everything. The two
+tables combine on one listener: the path decides first, and a request outside
+every mount is routed by its model. Even a one-entry `[models]` table requires
+a matching model in requests; it is not an implicit default destination.
 
 Single-upstream mode sends application requests to the one configured service,
 including `/v1/models`. It neither inspects nor restricts the JSON `model` field.
@@ -130,6 +138,60 @@ configure `https://api.example.com` and point your client's API base URL at
 URLs must use explicit `http://` or `https://`, with no embedded credentials,
 query, or fragment. HTTPS upstream certificates are verified. These are reverse
 proxy destinations; they are not HTTP CONNECT proxy settings.
+
+## Mount upstreams at path prefixes
+
+A vendor's own client — Claude Code, Codex — speaks that vendor's API and lets
+you set one thing: its base URL. Mount the vendor's API under a name, and set
+the client's base URL to that mount:
+
+```toml
+host = "127.0.0.1"
+port = 8787
+
+[upstreams]
+anthropic = "https://api.anthropic.com"
+codex = "https://chatgpt.com/backend-api/codex"
+```
+
+Each name answers under `/<name>/`. Portway removes that segment and forwards
+the rest of the path, with its query, to the URL — appended to the URL's own
+path prefix, as for any upstream:
+
+| Configured | Incoming path | Upstream request |
+| --- | --- | --- |
+| `anthropic = "https://api.anthropic.com"` | `/anthropic/v1/messages` | `https://api.anthropic.com/v1/messages` |
+| `codex = "https://chatgpt.com/backend-api/codex"` | `/codex/models?client_version=1` | `https://chatgpt.com/backend-api/codex/models?client_version=1` |
+| `codex = "https://chatgpt.com/backend-api/codex"` | `/codex` | `https://chatgpt.com/backend-api/codex/` |
+
+The choice is made from the path alone. The body is not read, so a request
+without one — a model catalog, a health check — routes like any other, and a
+model name the table has never heard of needs no entry: the client sends
+whatever its vendor ships next. An already encoded body goes through a mount
+as it came. For the client side, see [Claude Code and Codex](agents.md).
+
+Names are one path segment: letters, digits, `-`, `.`, `_` and `~`. The
+segment `__portway` is reserved for management paths, and with a `[models]`
+table on the same listener `v1` is refused, because it would hide the `/v1`
+paths that table routes. A path outside every mount is a 404 that lists the
+mounts, unless a `[models]` table routes it.
+
+Each mount is one route, with its own connection pool, dictionaries and
+counters, keyed by its name in `/__portway/stats`. Across a hop, mount the
+same names on the receiver and let the sender's URL carry the name:
+
+```toml
+# sender
+[upstreams]
+anthropic = "https://gateway.example.com/anthropic"
+
+# receiver
+[upstreams]
+anthropic = "https://api.anthropic.com"
+```
+
+The sender strips `/anthropic` and appends the rest to its URL's prefix, so the
+receiver sees `/anthropic/v1/messages` and strips it again.
 
 ## Register models
 
@@ -195,8 +257,9 @@ Keys are sent by the client, not registered in the routing table. See
 | --- | --- | --- |
 | `host` | `"127.0.0.1"` | Listening address |
 | `port` | `8787` | Listening port |
-| `upstream` | unset | Single upstream HTTP(S) URL |
-| `[models]` | empty | Model name → upstream URL; exclusive with `upstream` |
+| `upstream` | unset | Single upstream HTTP(S) URL; exclusive with both tables |
+| `[upstreams]` | empty | Name → upstream URL, mounted at `/<name>/` |
+| `[models]` | empty | Model name → upstream URL, chosen by the JSON `model` field |
 | `[prices.NAME]` | absent | Optional `input`, `output`, `cache_read` rates in USD per million tokens |
 
 Prices are optional inputs to the TUI's usage and cost estimates. They do not
@@ -284,12 +347,14 @@ work but compression or dictionary reuse is absent.
 ## Receiving
 
 Start with `portway receive --config ./receive.toml`. Receiver mode requires an
-`upstream` or a `[models]` table. It restores incoming compressed requests and
-forwards them to that application, or — with a `[models]` table — to the origin
-configured for the request's JSON `model` field, so one receiver can front
-several providers that each speak their own API. By default the origin upload is
-uncompressed; optional origin compression is described below. A model outside
-the table is refused with a 400 before any origin is contacted.
+`upstream`, an `[upstreams]` table or a `[models]` table. It restores incoming
+compressed requests and forwards them to that application, or — with a table —
+to the origin [mounted under the request's first path segment](#mount-upstreams-at-path-prefixes)
+or configured for its JSON `model` field, so one receiver can front several
+providers that each speak their own API. By default the origin upload is
+uncompressed; optional origin compression is described below. A path outside
+every mount, or a model outside the table, is refused before any origin is
+contacted.
 `[receiver]` configures this mode; it does not activate the mode by itself.
 
 | `[receiver]` setting | Default |

@@ -1,8 +1,9 @@
 # Decode compressed requests in front of an existing HTTP application.
 # Run: portway receive --config examples/receive.toml --data-dir ./receiver-data
 # The "receive" argument selects the mode; [receiver] alone does not.
-# This mode requires an upstream, or a [models] table that routes each request
-# by its JSON model field to the origin configured for it.
+# This mode requires an upstream, an [upstreams] table that mounts each origin
+# under its own path, or a [models] table that routes each request by its JSON
+# model field to the origin configured for it.
 
 # The application receives restored requests, uncompressed by default.
 upstream = "http://127.0.0.1:8000"

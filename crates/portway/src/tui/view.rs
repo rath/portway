@@ -1908,6 +1908,7 @@ mod tests {
         config.telemetry = Arc::new(crate::telemetry::Telemetry::default());
         let router = crate::router::Router::build(
             &config,
+            &[],
             &[("alpha".to_string(), "https://example.invalid".to_string())],
             None,
         )
@@ -2508,6 +2509,7 @@ mod tests {
         state.tick(
             &crate::router::Router::build(
                 &crate::cli::Args::default().forwarder_config(),
+                &[],
                 &[(
                     "model-zeta".to_string(),
                     "https://example.invalid".to_string(),

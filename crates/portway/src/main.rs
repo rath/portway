@@ -166,7 +166,7 @@ async fn run(
         "http://{}:{} -> {} route(s) (stats: {STATS_PATH})",
         config.host,
         config.port,
-        router.models().len()
+        router.routes().len()
     );
     // Available in every CLI build, without starting the web console. A local
     // observer failure must never stop forwarding.
@@ -595,17 +595,17 @@ async fn serving(
             if request.method() == http::Method::GET
                 && request.uri().path() == portway::router::STATS_PATH
             {
-                let models = {
+                let upstreams = {
                     let current = control::current(&router).await;
                     current
-                        .models()
+                        .routes()
                         .iter()
                         .map(|(n, f)| (n.clone(), f.snapshot()))
                         .collect::<serde_json::Map<String, serde_json::Value>>()
                 };
                 return portway::relay::json_response(
                     http::StatusCode::OK,
-                    serde_json::json!({"models":models,"receiver":receiver.snapshot()}),
+                    serde_json::json!({"upstreams":upstreams,"receiver":receiver.snapshot()}),
                 );
             }
             receiver

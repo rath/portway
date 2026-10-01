@@ -646,16 +646,32 @@ pub struct Fwd {
     pub base: String,
 }
 
+/// A forwarder routing by the JSON `model` field: `upstreams` are its
+/// `[models]` table.
 pub async fn forwarder(upstreams: &[(&str, &str)], argv: &[&str]) -> Fwd {
+    router(&[], upstreams, argv).await
+}
+
+/// A forwarder with `mounts` answering under `/<name>/` and `models` chosen by
+/// the JSON `model` field at the root.
+pub async fn router(mounts: &[(&str, &str)], models: &[(&str, &str)], argv: &[&str]) -> Fwd {
     use clap::Parser;
     let mut full = vec!["portway"];
     full.extend_from_slice(argv);
     let args = Args::parse_from(full);
-    let mapped: Vec<(String, String)> = upstreams
-        .iter()
-        .map(|(model, url)| ((*model).to_string(), (*url).to_string()))
-        .collect();
-    let router = Router::build(&args.forwarder_config(), &mapped, None).unwrap();
+    let owned = |pairs: &[(&str, &str)]| -> Vec<(String, String)> {
+        pairs
+            .iter()
+            .map(|(name, url)| ((*name).to_string(), (*url).to_string()))
+            .collect()
+    };
+    let router = Router::build(
+        &args.forwarder_config(),
+        &owned(mounts),
+        &owned(models),
+        None,
+    )
+    .unwrap();
     router.negotiate_all().await;
 
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();

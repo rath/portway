@@ -108,7 +108,7 @@ pub fn forwarder_on(host: &str, port: u16) -> bool {
         }
     }
     let text = String::from_utf8_lossy(&answer);
-    text.starts_with("HTTP/1.") && text.contains("\"models\"")
+    text.starts_with("HTTP/1.") && text.contains("\"upstreams\"")
 }
 
 /// What the dashboard's 250ms tick reads while it is not the one serving: the
@@ -774,7 +774,7 @@ mod tests {
             let _ = std::io::Read::read(&mut socket, &mut request);
             let _ = std::io::Write::write_all(
                 &mut socket,
-                b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\r\n{\"models\":{\"model-zeta\":{}}}",
+                b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\r\n{\"upstreams\":{\"model-zeta\":{}}}",
             );
         });
         assert!(forwarder_on("127.0.0.1", port));

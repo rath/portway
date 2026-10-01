@@ -171,7 +171,7 @@ async fn the_stats_json_carries_the_live_fields_and_in_flight_settles_at_zero() 
         .await;
     next_request().await;
 
-    let mine = fwd.get("/__portway/stats").await.json()["models"]["model-alpha"].clone();
+    let mine = fwd.get("/__portway/stats").await.json()["upstreams"]["model-alpha"].clone();
     assert_eq!(mine["in_flight"], 0, "{mine}");
     assert_eq!(mine["requests"], 1, "{mine}");
     assert!(mine["down_bytes"].as_u64().unwrap() > 0, "{mine}");

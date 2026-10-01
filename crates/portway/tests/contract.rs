@@ -95,7 +95,7 @@ async fn large_bodies_are_zstd_encoded_small_and_preencoded_are_not() {
     assert_eq!(up.last().body, big());
 
     let stats = fwd.get("/__portway/stats").await.json();
-    let mine = &stats["models"]["model-alpha"];
+    let mine = &stats["upstreams"]["model-alpha"];
     assert_eq!(mine["coding"], "zstd");
     assert_eq!(mine["encoded_requests"], 1);
     assert_eq!(mine["requests"], 3);
@@ -189,7 +189,7 @@ async fn a_415_is_retried_identity_once_and_turns_encoding_off() {
     assert_eq!(up.calls().len(), 3);
     assert!(!up.last().has("content-encoding"));
 
-    let mine = fwd.get("/__portway/stats").await.json()["models"]["model-alpha"].clone();
+    let mine = fwd.get("/__portway/stats").await.json()["upstreams"]["model-alpha"].clone();
     assert_eq!(mine["retried_identity"], 1);
     assert_eq!(mine["coding"], serde_json::Value::Null);
     assert_eq!(mine["encoded_requests"], 0);
@@ -240,7 +240,7 @@ async fn upstream_failure_is_a_502_not_a_crash() {
             .unwrap()
             .contains("portway")
     );
-    let mine = fwd.get("/__portway/stats").await.json()["models"]["model-alpha"].clone();
+    let mine = fwd.get("/__portway/stats").await.json()["upstreams"]["model-alpha"].clone();
     assert_eq!(mine["upstream_errors"], 1);
 }
 
@@ -302,7 +302,7 @@ async fn the_router_lists_all_models_and_routes_the_original_body_and_auth() {
     }
 
     let stats = fwd.get("/__portway/stats").await.json();
-    let models = stats["models"].as_object().unwrap();
+    let models = stats["upstreams"].as_object().unwrap();
     assert_eq!(models.len(), common::MODEL_UPSTREAMS.len());
     assert!(models.values().all(|s| s["requests"] == 1));
 }
@@ -416,7 +416,7 @@ async fn the_router_isolates_encoding_fallback_and_upstream_failure() {
     );
 
     let stats = fwd.get("/__portway/stats").await.json();
-    let models = &stats["models"];
+    let models = &stats["upstreams"];
     assert_eq!(models["model-alpha"]["coding"], serde_json::Value::Null);
     assert_eq!(models["model-alpha"]["retried_identity"], 1);
     assert_eq!(models["model-zeta"]["coding"], "zstd");
@@ -560,7 +560,7 @@ async fn the_second_turn_goes_out_against_the_first() {
     assert!(!up.last().has("x-dict-store"));
 
     let stats = fwd.get("/__portway/stats").await.json();
-    let mine = &stats["models"][DICT_MODEL];
+    let mine = &stats["upstreams"][DICT_MODEL];
     assert_eq!(mine["coding"], "zstd");
     assert_eq!(mine["dict"], true);
     assert_eq!(mine["dict_hits"], 2);
@@ -587,7 +587,7 @@ async fn dictionaries_need_the_advertisement_and_the_flag() {
         assert!(!up.last().has("x-dict-store"));
     }
     let stats = off.get("/__portway/stats").await.json();
-    assert_eq!(stats["models"][DICT_MODEL]["dict"], false);
+    assert_eq!(stats["upstreams"][DICT_MODEL]["dict"], false);
 
     // The miss path resends as zstd, so a gzip-only upstream gets no dictionaries.
     let gzip_only = upstream(Health::PlaintextDict(vec!["gzip"]), Reply::Dict).await;
@@ -622,7 +622,7 @@ async fn a_missing_dictionary_costs_one_resend_as_zstd() {
     assert_eq!(calls[2].inflated, conversation(2));
 
     let stats = fwd.get("/__portway/stats").await.json();
-    let mine = &stats["models"][DICT_MODEL];
+    let mine = &stats["upstreams"][DICT_MODEL];
     assert_eq!(mine["dict"], true);
     assert_eq!(mine["dict_hits"], 0);
     assert_eq!(mine["dict_misses"], 1);
@@ -688,7 +688,7 @@ async fn a_rolled_back_upstream_loses_dictionaries_but_keeps_zstd() {
     assert_eq!(up.last().header("content-encoding"), Some("zstd"));
     assert!(!up.last().has("x-dict-store"));
     let stats = fwd.get("/__portway/stats").await.json();
-    let mine = &stats["models"][DICT_MODEL];
+    let mine = &stats["upstreams"][DICT_MODEL];
     assert_eq!(mine["dict"], false);
     assert_eq!(mine["coding"], "zstd");
     assert_eq!(mine["retried_identity"], 0);
@@ -711,12 +711,12 @@ async fn a_upstream_that_stored_other_bytes_is_never_used_as_a_dictionary() {
     assert_eq!(up.last().header("content-encoding"), Some("zstd"));
     assert!(!up.last().has("x-dict-store"));
     let stats = fwd.get("/__portway/stats").await.json();
-    assert_eq!(stats["models"][DICT_MODEL]["dict"], false);
-    assert_eq!(stats["models"][DICT_MODEL]["dict_hits"], 0);
-    assert_eq!(stats["models"][DICT_MODEL]["coding"], "zstd");
-    assert_eq!(stats["models"][DICT_MODEL]["dict_hash_mismatches"], 1);
+    assert_eq!(stats["upstreams"][DICT_MODEL]["dict"], false);
+    assert_eq!(stats["upstreams"][DICT_MODEL]["dict_hits"], 0);
+    assert_eq!(stats["upstreams"][DICT_MODEL]["coding"], "zstd");
+    assert_eq!(stats["upstreams"][DICT_MODEL]["dict_hash_mismatches"], 1);
     assert_eq!(
-        stats["models"][DICT_MODEL]["dict_backoff_reason"],
+        stats["upstreams"][DICT_MODEL]["dict_backoff_reason"],
         "hash_mismatch"
     );
 }
@@ -738,7 +738,7 @@ async fn a_400_for_dcz_is_retried_without_the_dictionary() {
     assert_eq!(calls[2].header("content-encoding"), Some("zstd"));
     assert_eq!(calls[2].inflated, conversation(2));
     let stats = fwd.get("/__portway/stats").await.json();
-    assert_eq!(stats["models"][DICT_MODEL]["dict_misses"], 1);
+    assert_eq!(stats["upstreams"][DICT_MODEL]["dict_misses"], 1);
 }
 
 #[tokio::test]
@@ -768,7 +768,7 @@ async fn a_body_the_agent_encoded_itself_is_never_stored_or_rebased() {
 async fn settles(fwd: &common::Fwd, dict: bool, coding: &str) {
     for _ in 0..600 {
         let stats = fwd.get("/__portway/stats").await.json();
-        let model = &stats["models"][DICT_MODEL];
+        let model = &stats["upstreams"][DICT_MODEL];
         if model["dict"] == serde_json::json!(dict) && model["coding"] == serde_json::json!(coding)
         {
             return;
@@ -821,7 +821,7 @@ async fn a_upstream_that_comes_back_with_dictionaries_is_used_without_a_restart(
     // The turn already held is gone from the wire; only the new one is left.
     assert!(chained.body.len() < conversation(2).len() * 6 / 10);
     let stats = fwd.get("/__portway/stats").await.json();
-    assert_eq!(stats["models"][DICT_MODEL]["dict_hits"], 1);
+    assert_eq!(stats["upstreams"][DICT_MODEL]["dict_hits"], 1);
 }
 
 #[tokio::test]
@@ -846,4 +846,102 @@ async fn a_upstream_that_comes_back_without_them_stops_being_sent_them() {
     assert_eq!(plain.header("content-encoding"), Some("zstd"));
     assert!(!plain.has("x-dict-store"));
     assert_eq!(plain.inflated, conversation(4));
+}
+
+/// A mount is chosen by the first path segment alone: no body is read, so a
+/// bodiless catalog request routes like any other, and the rest of the path
+/// goes upstream unchanged. The root answers only through `[models]`.
+#[tokio::test]
+async fn a_mount_routes_by_its_path_segment_without_reading_the_body() {
+    let codex = upstream(Health::JsonBare, Reply::Ok).await;
+    let anthropic = upstream(Health::JsonBare, Reply::Ok).await;
+    let fwd = common::router(
+        &[("codex", &codex.base), ("anthropic", &anthropic.base)],
+        &[],
+        &[],
+    )
+    .await;
+
+    let answer = fwd.get("/codex/models?client_version=0.1").await;
+    assert_eq!(answer.status, 200);
+    let sent = codex.last();
+    assert_eq!(
+        (sent.method.as_str(), sent.path.as_str()),
+        ("GET", "/models")
+    );
+    assert_eq!(sent.query, "client_version=0.1");
+    assert!(sent.body.is_empty());
+
+    // The body names a model nobody registered: a mount does not care.
+    let body = body_for("whatever-the-vendor-ships-next");
+    let answer = fwd
+        .send(
+            "POST",
+            "/anthropic/v1/messages",
+            &[("authorization", "Bearer agent-key")],
+            body.clone(),
+        )
+        .await;
+    assert_eq!(answer.status, 200);
+    let sent = anthropic.last();
+    assert_eq!(sent.path, "/v1/messages");
+    assert_eq!(sent.body, body);
+    assert_eq!(sent.header("authorization"), Some("Bearer agent-key"));
+
+    // The bare mount is the upstream's root; a near miss is not the mount.
+    assert_eq!(fwd.get("/codex").await.status, 200);
+    assert_eq!(codex.last().path, "/");
+    assert_eq!(codex.calls().len(), 2);
+    for path in ["/codexx/models", "/Codex/models", "/v1/chat/completions"] {
+        let answer = fwd.post(path, body_for("model-alpha")).await;
+        assert_eq!(answer.status, 404, "{path}");
+        let message = answer.json()["error"]["message"].to_string();
+        assert!(message.contains("/anthropic, /codex"), "{message}");
+    }
+    assert_eq!(codex.calls().len(), 2);
+    assert_eq!(anthropic.calls().len(), 1);
+
+    assert_eq!(
+        fwd.get("/__portway/health").await.json(),
+        serde_json::json!({"status": "ok", "mode": "router"})
+    );
+    let stats = fwd.get("/__portway/stats").await.json();
+    assert_eq!(stats["upstreams"]["codex"]["requests"], 2);
+    assert_eq!(stats["upstreams"]["anthropic"]["requests"], 1);
+}
+
+/// Mounts and `[models]` share one listener: the segment decides first, and
+/// what is left at the root is routed by the JSON model as before.
+#[tokio::test]
+async fn mounts_and_models_share_a_listener() {
+    let codex = upstream(Health::JsonBare, Reply::Ok).await;
+    let alpha = upstream(Health::JsonBare, Reply::Ok).await;
+    let fwd = common::router(
+        &[("codex", &codex.base)],
+        &[("model-alpha", &alpha.base)],
+        &[],
+    )
+    .await;
+
+    assert_eq!(
+        fwd.post("/v1/chat/completions", body_for("model-alpha"))
+            .await
+            .status,
+        200
+    );
+    assert_eq!(alpha.last().path, "/v1/chat/completions");
+    assert_eq!(fwd.get("/codex/models").await.status, 200);
+    assert_eq!(codex.last().path, "/models");
+    // The local list names the models, not the mounts.
+    let listed: Vec<String> = fwd.get("/v1/models").await.json()["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["id"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(listed, ["model-alpha"]);
+    // A model request still needs its model; the mount's name is not one.
+    let answer = fwd.post("/v1/chat/completions", body_for("codex")).await;
+    assert_eq!(answer.status, 400);
+    assert_eq!(codex.calls().len(), 1);
 }

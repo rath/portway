@@ -1,0 +1,30 @@
+# Vendor APIs for their own clients, each under its own path. Copy to
+# portway.toml, replace the URLs, then run: portway --config ./portway.toml
+# Root settings must appear before any [table]. Do not also set upstream.
+host = "127.0.0.1"
+port = 8787
+
+# Each name answers under /<name>/. The segment is removed and the rest of the
+# path goes to the URL: /anthropic/v1/messages reaches
+# https://api.example.com/v1/messages. The body is not read to choose, so a
+# request without one routes too, and a new model name needs no entry here.
+# Names are one path segment: letters, digits, '-', '.', '_' or '~'.
+[upstreams]
+anthropic = "https://api.example.com"
+codex = "https://chat.example.com/backend-api/codex"
+
+# Connect a client by its base URL alone, keeping its own key and model:
+#   ANTHROPIC_BASE_URL=http://127.0.0.1:8787/anthropic
+#   base_url = "http://127.0.0.1:8787/codex"   (Codex model_providers entry)
+# See docs/agents.md for Claude Code and Codex.
+
+# Optional: a [models] table on the same listener routes requests outside
+# every mount by their JSON "model" field. See examples/models.toml.
+# [models]
+# "model-a" = "https://first.example.com"
+
+[compression]
+coding = "auto"
+dict = "auto"
+level = 11
+min_bytes = 1024

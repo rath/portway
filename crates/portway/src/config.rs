@@ -18,6 +18,9 @@ pub struct Config {
     pub host: String,
     pub port: u16,
     pub upstream: Option<String>,
+    /// Named upstreams, each answering under `/<name>/`.
+    pub upstreams: BTreeMap<String, String>,
+    /// Upstreams chosen by the JSON `model` field at the root.
     pub models: BTreeMap<String, String>,
     pub compression: ForwarderConfig,
     pub receiver: ReceiverConfig,
@@ -29,6 +32,7 @@ impl Default for Config {
             host: "127.0.0.1".into(),
             port: 8787,
             upstream: None,
+            upstreams: BTreeMap::new(),
             models: BTreeMap::new(),
             compression: ForwarderConfig::default(),
             receiver: ReceiverConfig::default(),
@@ -77,6 +81,7 @@ impl Config {
         };
         if let Some(url) = &args.upstream {
             config.upstream = Some(url.clone());
+            config.upstreams.clear();
             config.models.clear();
         }
         if let Some(host) = &args.host {
@@ -86,7 +91,7 @@ impl Config {
             config.port = port;
         }
         args.apply_compression(&mut config.compression);
-        if (args.tui || args.web) && config.upstream.is_none() && config.models.is_empty() {
+        if (args.tui || args.web) && !config.has_destination() {
             config.compression.validate()?;
             config.receiver.validate()?;
         } else {
@@ -94,14 +99,29 @@ impl Config {
         }
         Ok(config)
     }
+    /// Whether the file names somewhere to send requests. A dashboard that
+    /// only attaches to a running instance needs none.
+    pub fn has_destination(&self) -> bool {
+        self.upstream.is_some() || !self.upstreams.is_empty() || !self.models.is_empty()
+    }
     pub fn validate(&self, mode: Mode) -> Result<(), String> {
         self.compression.validate()?;
         self.receiver.validate()?;
-        if self.upstream.is_some() == !self.models.is_empty() {
-            return Err("configure either upstream or [models], exclusively".into());
+        if self.upstream.is_some() && (!self.upstreams.is_empty() || !self.models.is_empty()) {
+            return Err(
+                "upstream is the one destination for everything: remove it to route by \
+                 [upstreams] or [models]"
+                    .into(),
+            );
         }
-        if mode == Mode::Receive && self.upstream.is_none() && self.models.is_empty() {
-            return Err("receive requires an upstream or a [models] table".into());
+        if !self.has_destination() {
+            return Err(match mode {
+                Mode::Receive => {
+                    "receive requires an upstream, an [upstreams] table or a [models] table"
+                }
+                Mode::Forward => "configure an upstream, an [upstreams] table or a [models] table",
+            }
+            .into());
         }
         for price in self.prices.values() {
             if [price.input, price.output, price.cache_read]
@@ -123,13 +143,16 @@ impl Config {
         if let Some(url) = &self.upstream {
             Router::single(&compression, url, None)
         } else {
-            Router::build(
-                &compression,
-                &self
-                    .models
+            let pairs = |table: &BTreeMap<String, String>| {
+                table
                     .iter()
                     .map(|(k, v)| (k.clone(), v.clone()))
-                    .collect::<Vec<_>>(),
+                    .collect::<Vec<_>>()
+            };
+            Router::build(
+                &compression,
+                &pairs(&self.upstreams),
+                &pairs(&self.models),
                 None,
             )
         }
@@ -177,6 +200,19 @@ mod tests {
         // to the origin configured for its JSON model.
         assert!(config.validate(Mode::Receive).is_ok());
         assert!(Config::default().validate(Mode::Receive).is_err());
+        // Mounts coexist with models and serve both modes too; only the
+        // single upstream excludes them.
+        config
+            .upstreams
+            .insert("vendor".into(), "http://example.test".into());
+        assert!(config.validate(Mode::Forward).is_ok());
+        assert!(config.validate(Mode::Receive).is_ok());
+        config.models.clear();
+        assert!(config.validate(Mode::Forward).is_ok());
+        config.upstream = Some("http://example.test".into());
+        assert!(config.validate(Mode::Forward).is_err());
+        config.upstream = None;
+        assert!(config.router(Mode::Forward).is_ok());
         config.prices.insert(
             "sample".into(),
             Price {
@@ -190,6 +226,41 @@ mod tests {
         assert!(
             toml::from_str::<Config>("[models]\na='http://a.test'\na='http://b.test'").is_err()
         );
+    }
+    #[test]
+    fn upstreams_mount_by_name_and_the_cli_upstream_clears_both_tables() {
+        let config: Config = toml::from_str(
+            "[upstreams]\nanthropic='https://api.example.test'\n[models]\n'model-a'='http://a.test'\n",
+        )
+        .unwrap();
+        assert_eq!(config.upstreams["anthropic"], "https://api.example.test");
+        assert!(config.validate(Mode::Forward).is_ok());
+        let names: Vec<String> = config
+            .router(Mode::Forward)
+            .unwrap()
+            .routes()
+            .iter()
+            .map(|(name, _)| name.clone())
+            .collect();
+        assert_eq!(names, ["anthropic", "model-a"]);
+        // A name the router refuses is refused here too, before serving.
+        let bad: Config =
+            toml::from_str("[upstreams]\n'a/b'='https://api.example.test'\n").unwrap();
+        assert!(bad.router(Mode::Forward).is_err());
+
+        let path = std::env::temp_dir().join(format!("portway-mounts-{}.toml", std::process::id()));
+        std::fs::write(&path, "[upstreams]\nanthropic='https://api.example.test'\n").unwrap();
+        let args = Args::parse_from([
+            "portway",
+            "--config",
+            path.to_str().unwrap(),
+            "--upstream",
+            "http://single.test",
+        ]);
+        let config = Config::load(&args).unwrap();
+        assert_eq!(config.upstream.as_deref(), Some("http://single.test"));
+        assert!(config.upstreams.is_empty());
+        std::fs::remove_file(path).unwrap();
     }
     #[test]
     fn an_explicit_missing_file_is_an_error() {

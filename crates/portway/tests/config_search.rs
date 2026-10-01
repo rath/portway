@@ -157,7 +157,7 @@ fn an_explicit_data_dir_never_falls_back_to_the_default_one() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("configure either upstream or [models]"),
+        stderr.contains("configure an upstream, an [upstreams] table or a [models] table"),
         "{stderr}"
     );
     cleanup(&[&cwd, &home, &xdg]);
@@ -203,7 +203,7 @@ fn neither_existing_is_a_clear_error_not_a_silent_default() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("configure either upstream or [models]"),
+        stderr.contains("configure an upstream, an [upstreams] table or a [models] table"),
         "{stderr}"
     );
     cleanup(&[&cwd, &home]);

@@ -40,14 +40,14 @@ pub async fn serve_receiver(
                 if request.method() == http::Method::GET
                     && request.uri().path() == crate::router::STATS_PATH
                 {
-                    let models: serde_json::Map<String, serde_json::Value> = router
-                        .models()
+                    let upstreams: serde_json::Map<String, serde_json::Value> = router
+                        .routes()
                         .iter()
                         .map(|(n, f)| (n.clone(), f.snapshot()))
                         .collect();
                     return crate::relay::json_response(
                         http::StatusCode::OK,
-                        serde_json::json!({"models":models,"receiver":receiver.snapshot()}),
+                        serde_json::json!({"upstreams":upstreams,"receiver":receiver.snapshot()}),
                     );
                 }
                 receiver

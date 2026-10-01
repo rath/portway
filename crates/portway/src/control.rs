@@ -50,7 +50,7 @@ pub async fn reload(args: &Args, cell: &RouterCell, prices: &PricesCell) -> Resu
     let next = config.router(args.mode)?;
     next.inherit_origin_state(&*current(cell).await);
     next.negotiate_all().await;
-    let routes = next.models().len();
+    let routes = next.routes().len();
     *cell.write().await = next;
     *prices.write().await = Arc::new(config.prices);
     Ok(routes)

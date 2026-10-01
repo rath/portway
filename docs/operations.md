@@ -360,8 +360,8 @@ Inspect sender statistics after sending application requests:
 curl --fail-with-body http://127.0.0.1:8787/__portway/stats
 ```
 
-The `models` object is keyed by route name (`upstream` in single-upstream mode).
-Useful fields include:
+The `upstreams` object is keyed by route name: a mount's name, a model's name,
+or `upstream` in single-upstream mode. Useful fields include:
 
 | Field | Interpretation |
 | --- | --- |
@@ -418,7 +418,9 @@ to ordinary compression according to the [retry protocol](protocol.md#errors-and
 
 | Symptom | Check or action |
 | --- | --- |
-| `configure either upstream or [models], exclusively` | Configure exactly one routing mode. If neither was intended to be empty, check the current directory or pass `--config`. |
+| `configure an upstream, an [upstreams] table or a [models] table` | The file names no destination. If it was meant to, check the current directory or pass `--config`. |
+| `upstream is the one destination for everything` | Remove `upstream` to route by `[upstreams]` or `[models]`, or remove the tables to send everything to it. |
+| 404 says no upstream is mounted at the path | The client's base URL must end in a mount name from `[upstreams]`, such as `http://127.0.0.1:8787/anthropic`; the message lists the mounts. |
 | TOML complains about a table or type for a model | Quote names containing dots or slashes, including in `[prices."name"]`. |
 | Unknown field such as `api_key`, `data_dir`, or `mode` | Keys belong in client headers; runtime directory and mode are CLI options. |
 | Address already in use | Stop the process owning the port, choose another port, or use `--tui` or `--web` to view an existing Portway. For `--web ...: Address already in use`, choose another `--web-port`. |
@@ -442,9 +444,11 @@ to ordinary compression according to the [retry protocol](protocol.md#errors-and
 
 With `[receiver.origin_compression] mode = "auto"`, read the **receiver's**
 `/__portway/stats`. Its `receiver` object counts decoding of the incoming hop;
-`models.upstream` describes forwarding to the origin. The origin codec varies
-by request context, so the route-level negotiated `coding` is not an aggregate
-origin capability. Use `models.upstream.origin_compression` instead:
+`upstreams.upstream` describes forwarding to the origin (replace the second
+`upstream` with the route's name when the receiver has a table). The origin
+codec varies by request context, so the route-level negotiated `coding` is not
+an aggregate origin capability. Use `upstreams.upstream.origin_compression`
+instead:
 
 | Field | Meaning |
 | --- | --- |
@@ -468,7 +472,7 @@ fallback; the failed trial can therefore produce negative savings. The warning
 warning names the attempted coding and the 600-second suspension. A 400 produces
 only the suspension warning and returns the original error.
 
-Existing `models.upstream.wire_bytes` includes refused attempts for requests that
+Existing `upstreams.upstream.wire_bytes` includes refused attempts for requests that
 obtained a final response. The nested origin `wire_bytes` also includes bytes
 handed to HTTP before a transport error or cancellation. No origin URL, request
 body, or authentication value is exposed by the capability cache diagnostics.

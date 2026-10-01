@@ -506,7 +506,7 @@ async fn receiver_reload_applies_origin_compression_without_restarting_decoder()
         tokio::time::timeout(Duration::from_secs(5), async {
             loop {
                 let stats = client.get("/__portway/stats").await.json();
-                if stats["models"]["upstream"]["origin_compression"]["mode"] == mode {
+                if stats["upstreams"]["upstream"]["origin_compression"]["mode"] == mode {
                     break;
                 }
                 tokio::time::sleep(Duration::from_millis(10)).await;

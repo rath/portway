@@ -306,7 +306,7 @@ fn sample(shared: &Shared, feed: &Feed) {
                 shared.announce(json!({
                     "event": "reloaded",
                     "generation": generation,
-                    "routes": router.models().len(),
+                    "routes": router.routes().len(),
                 }));
             }
         }

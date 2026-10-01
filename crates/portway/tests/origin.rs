@@ -170,7 +170,7 @@ async fn decoded_sender_body_is_recompressed_for_origin_and_responses_survive() 
         calls[0].headers["content-length"],
         calls[0].body.len().to_string()
     );
-    let stats = router.models()[0].1.snapshot();
+    let stats = router.routes()[0].1.snapshot();
     assert_eq!(
         stats["origin_compression"]["wire_bytes"],
         calls[0].body.len()
@@ -198,14 +198,14 @@ async fn bare_415_retries_identity_once_and_remembers_refusal_across_reload() {
         .iter()
         .map(|c| c.body.len())
         .sum();
-    let stats = router.models()[0].1.snapshot();
+    let stats = router.routes()[0].1.snapshot();
     assert_eq!(stats["wire_bytes"], expected_wire);
     assert_eq!(stats["retried_identity"], 1);
     assert_eq!(stats["origin_compression"]["wire_bytes"], expected_wire);
     assert_eq!(stats["origin_compression"]["backoff_entries"], 1);
     let next = configuration.router(Mode::Receive).unwrap();
     next.inherit_origin_state(&router);
-    let response = next.models()[0]
+    let response = next.routes()[0]
         .1
         .forward(http::Request::post("/v1/messages").body(payload()).unwrap())
         .await;
@@ -321,7 +321,7 @@ async fn reload_to_a_different_destination_does_not_inherit_refusal() {
     let new_origin = origin(vec![]).await;
     let next = config(&new_origin.url, true).router(Mode::Receive).unwrap();
     next.inherit_origin_state(&old_router);
-    let response = next.models()[0]
+    let response = next.routes()[0]
         .1
         .forward(http::Request::post("/v1/messages").body(payload()).unwrap())
         .await;
@@ -380,7 +380,7 @@ async fn compressed_upload_preserves_incremental_sse_and_cancellation() {
         b"data: one\n\ndata: two\n\n"
     );
     assert_eq!(
-        router.models()[0].1.snapshot()["origin_compression"]["encoded_attempts"],
+        router.routes()[0].1.snapshot()["origin_compression"]["encoded_attempts"],
         1
     );
     task.abort();
@@ -401,11 +401,11 @@ async fn compressed_upload_preserves_incremental_sse_and_cancellation() {
     .await
     .unwrap();
     assert_eq!(
-        router.models()[0].1.snapshot()["origin_compression"]["encoded_attempts"],
+        router.routes()[0].1.snapshot()["origin_compression"]["encoded_attempts"],
         1
     );
     assert_eq!(
-        router.models()[0].1.snapshot()["origin_compression"]["probing_entries"],
+        router.routes()[0].1.snapshot()["origin_compression"]["probing_entries"],
         0
     );
     task.abort();
@@ -431,7 +431,7 @@ async fn connection_closed_after_upload_is_not_replayed_and_trial_is_released() 
     let (client, router, task) = receiver(&config(&url, true)).await;
     assert_eq!(client.post("/v1/messages", payload()).await.status, 502);
     origin_task.await.unwrap();
-    let stats = router.models()[0].1.snapshot();
+    let stats = router.routes()[0].1.snapshot();
     assert_eq!(stats["origin_compression"]["attempts"], 1);
     assert_eq!(stats["origin_compression"]["probing_entries"], 0);
     task.abort();
@@ -460,7 +460,7 @@ async fn sender_dictionaries_and_origin_gzip_work_independently() {
         200
     );
     let stats = sender.get("/__portway/stats").await.json();
-    assert_eq!(stats["models"]["sample"]["dict_hits"], 1);
+    assert_eq!(stats["upstreams"]["sample"]["dict_hits"], 1);
     let calls = origin.calls.lock().unwrap();
     assert_eq!(calls.len(), 2);
     for (call, plain) in calls.iter().zip([first, second]) {

@@ -180,7 +180,7 @@ async fn real_sidecar_restores_dcz_and_does_not_retry_application_errors() {
         second
     );
     assert_eq!(receiver.snapshot()["dict_hits"], 1);
-    let stats = sender.models()[0].1.view();
+    let stats = sender.routes()[0].1.view();
     assert!(stats.wire_bytes < stats.body_bytes / 2);
     assert_eq!(stats.dict_hits, 1);
     for status in [400, 415] {
@@ -336,7 +336,7 @@ async fn assert_three_attempt_fallback(dcz_status: StatusCode) {
     assert!(!calls[3].headers.contains_key("x-dict-store"));
     assert_eq!(calls[3].body, next);
 
-    let stats = sender.models()[0].1.snapshot();
+    let stats = sender.routes()[0].1.snapshot();
     assert_eq!(stats["requests"], 2, "retries are not new logical requests");
     assert_eq!(stats["dict_hits"], 0);
     assert_eq!(
@@ -373,7 +373,7 @@ async fn separate_instances_have_separate_events_and_transport_counters() {
     .unwrap();
     send(&a, "POST", "/one", &[], Bytes::from_static(b"first")).await;
     for _ in 0..50 {
-        if a.models()[0].1.view().in_flight == 0 {
+        if a.routes()[0].1.view().in_flight == 0 {
             break;
         }
         tokio::task::yield_now().await;
@@ -395,7 +395,7 @@ async fn separate_instances_have_separate_events_and_transport_counters() {
     assert_eq!(requests[0].path, "/one");
     send(&b, "POST", "/two", &[], Bytes::from_static(b"second")).await;
     assert!(two.socket_bytes().0 > 0);
-    assert_eq!(a.models()[0].1.view().requests, 1);
+    assert_eq!(a.routes()[0].1.view().requests, 1);
 }
 
 #[tokio::test]
@@ -448,7 +448,7 @@ async fn a_decoder_failure_does_not_return_the_connection_to_the_pool() {
         )
         .await;
     assert!(reply.into_body().collect().await.is_err());
-    assert_eq!(router.models()[0].1.view().idle_conns, 0);
+    assert_eq!(router.routes()[0].1.view().idle_conns, 0);
     assert_eq!(
         send(&router, "POST", "/healthy", &[], Bytes::from_static(b"ok"))
             .await
@@ -508,4 +508,51 @@ async fn response_transformation_updates_encoding_vary_and_validators() {
             .to_bytes()
             .is_empty()
     );
+}
+
+/// A mount strips its own segment and keeps the upstream's path prefix, and
+/// never reads the body: an encoded body goes through as it came.
+#[tokio::test]
+async fn a_mount_keeps_the_upstream_prefix_and_strips_its_own() {
+    let origin = origin().await;
+    let router = Router::build(
+        &config(),
+        &[("codex".to_owned(), format!("{}/backend", origin.url))],
+        &[],
+        None,
+    )
+    .unwrap();
+    for (path, upstream) in [
+        (
+            "/codex/models?client_version=1",
+            "/backend/models?client_version=1",
+        ),
+        ("/codex", "/backend/"),
+        ("/codex/", "/backend/"),
+        ("/codex?x=1", "/backend/?x=1"),
+    ] {
+        let (status, _) = send(&router, "GET", path, &[], Bytes::new()).await;
+        assert_eq!(status, http::StatusCode::OK, "{path}");
+        let seen = origin.seen.lock().unwrap().last().unwrap().clone();
+        assert_eq!(seen.uri, upstream, "{path}");
+    }
+    let data = Bytes::from_static(b"{\"model\":\"anything\"}");
+    let encoded = Bytes::from(zstd::bulk::compress(&data, 3).unwrap());
+    send(
+        &router,
+        "POST",
+        "/codex/responses",
+        &[("content-encoding", "zstd")],
+        encoded.clone(),
+    )
+    .await;
+    let seen = origin.seen.lock().unwrap().last().unwrap().clone();
+    assert_eq!(seen.uri, "/backend/responses");
+    assert_eq!(seen.body, encoded);
+    assert_eq!(seen.headers["content-encoding"], "zstd");
+    // Outside the mount nothing answers, and the origin is not asked.
+    let before = origin.seen.lock().unwrap().len();
+    let (status, _) = send(&router, "POST", "/responses", &[], data).await;
+    assert_eq!(status, http::StatusCode::NOT_FOUND);
+    assert_eq!(origin.seen.lock().unwrap().len(), before);
 }

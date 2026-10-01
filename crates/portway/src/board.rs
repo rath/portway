@@ -277,7 +277,7 @@ impl Board {
     /// Resample the per-model counters and the socket throughput.
     pub fn tick(&mut self, router: &Router) {
         self.models = router
-            .models()
+            .routes()
             .iter()
             .map(|(name, forwarder)| ModelRow {
                 name: name.clone(),
