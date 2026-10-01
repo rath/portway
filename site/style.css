@@ -563,6 +563,12 @@ html:lang(zh-Hans) {
 }
 :is(html:lang(ko), html:lang(ja), html:lang(zh-Hans)) h1 { max-width: 17em; }
 
+/* Korean headings break between words, never inside one, and the phrase
+   spans in the markup pick the line breaks so a heading reads in beats:
+   "40턴은 / 39턴 더하기 / 4킬로바이트". */
+html:lang(ko) :is(h1, h2, h3) { word-break: keep-all; }
+html:lang(ko) h2 span { display: inline-block; }
+
 /* ---------- narrow screens ---------- */
 
 @media (max-width: 640px) {
@@ -636,6 +642,8 @@ html:lang(zh-Hans) {
   .chapter > :not(h2), .colophon > p { grid-column: 2; }
   /* The topology still reads left to right across the whole width. */
   .chapter > .hops { grid-column: 1 / -1; margin-inline: 0; }
+  /* In the heading column a Korean heading takes one phrase per line. */
+  html:lang(ko) .chapter h2 span { display: block; }
 }
 
 @media (prefers-reduced-motion: reduce) {

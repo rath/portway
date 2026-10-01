@@ -47,7 +47,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=Fragment+Mono&display=swap">
-<link rel="stylesheet" href="../style.css?v=0829ee468187">
+<link rel="stylesheet" href="../style.css?v=245f489f7168">
 <script type="module" src="../main.js?v=a43c79eba2e2"></script>
 <script type="module" src="../install.js?v=be55ca0cf537"></script>
 <script type="module" src="../langmenu.js"></script>
@@ -154,7 +154,7 @@
 </section>
 
 <section class="chapter" id="try" aria-labelledby="try-title">
-  <h2 id="try-title">설치하고 에이전트를 연결하세요</h2>
+  <h2 id="try-title"><span>설치하고 에이전트를</span> <span>연결하세요</span></h2>
   <p>Homebrew 패키지에는 터미널 대시보드와 브라우저 콘솔까지 들어 있어 Rust 툴체인이 필요 없습니다.</p>
 
   <ol class="steps">
@@ -215,7 +215,7 @@ codex = "https://chatgpt.com/backend-api/codex"</code></pre>
 </section>
 
 <section class="chapter" id="how" aria-labelledby="problem-title">
-  <h2 id="problem-title">40턴은 39턴 더하기 4킬로바이트</h2>
+  <h2 id="problem-title"><span>40턴은</span> <span>39턴 더하기</span> <span>4킬로바이트</span></h2>
   <p>코딩 에이전트는 서버에 아무 상태도 남기지 않습니다. 한 단계 더 나아가려면 시스템
   프롬프트와 앞서 오간 모든 메시지, 모든 도구 실행 결과를 다시 보내고, 그 뒤에 새로 생긴
   몇 킬로바이트를 덧붙입니다. 그러니 각 요청은 직전 요청을 거의 그대로 복사한 것입니다.</p>
@@ -246,7 +246,7 @@ codex = "https://chatgpt.com/backend-api/codex"</code></pre>
 </section>
 
 <section class="chapter" aria-labelledby="how-title">
-  <h2 id="how-title">직전 턴이 사전이 됩니다</h2>
+  <h2 id="how-title"><span>직전 턴이</span> <span>사전이 됩니다</span></h2>
   <p>Portway는 두 곳에서 실행됩니다. 에이전트 옆의 <em>송신기</em>와, 에이전트가 호출하는
   서비스 앞의 <em>수신기</em>입니다. 양쪽 모두 마지막으로 합의한 요청 본문을 보관합니다.
   송신기는 그 본문을 기준으로 다음 요청을 압축하고, 수신기는 서비스가 바이트 하나라도 보기
@@ -313,7 +313,7 @@ codex = "https://chatgpt.com/backend-api/codex"</code></pre>
 </section>
 
 <section class="chapter" aria-labelledby="fail-title">
-  <h2 id="fail-title">기준이 사라지면 한 단계씩 물러섭니다</h2>
+  <h2 id="fail-title"><span>기준이 사라지면</span> <span>한 단계씩</span> <span>물러섭니다</span></h2>
   <p>수신기가 재시작하거나, 오래된 본문을 밀어내거나, 처음 보는 송신기를 만날 수 있습니다.
   어느 쪽이든 요청이 실패하지는 않습니다. 수신기는 복원할 수 없는 요청을 애플리케이션이
   실행되기 <em>전에</em> 거부하고 거부했다는 표식을 남기며, 송신기는 한 단계 덜 압축해 다시
@@ -341,7 +341,7 @@ codex = "https://chatgpt.com/backend-api/codex"</code></pre>
 </section>
 
 <section class="chapter" aria-labelledby="measured-title">
-  <h2 id="measured-title">한 턴의 비용은 그 턴이 더한 만큼입니다</h2>
+  <h2 id="measured-title"><span>한 턴의 비용은</span> <span>그 턴이 더한</span> <span>만큼입니다</span></h2>
   <p>같은 벤치마크를 네 가지 컨텍스트 크기로, 각각 스무 턴씩 돌렸습니다. zstd만으로
   압축하면 요청이 약 5분의 1로 줄고, 직전 턴 사전을 쓰면 컨텍스트가 아무리 커도 약
   1킬로바이트만 나갑니다.</p>
