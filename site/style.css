@@ -149,11 +149,11 @@ code { font-size: 0.9em; }
 .hero {
   max-width: var(--wide);
   margin: 0 auto;
-  padding: clamp(16px, 4vw, 48px) var(--gutter) clamp(48px, 8vw, 96px);
+  padding: clamp(16px, 4vw, 48px) var(--gutter) clamp(32px, 4vw, 48px);
 }
 .hero-copy { max-width: 58rem; }
-.hero > h1 { max-width: none; }
-.hero h1:lang(ko), .hero-copy:lang(ko) { word-break: keep-all; }
+.hero h1 { max-width: none; }
+.hero-copy:lang(ko) { word-break: keep-all; }
 .hero h1 span { display: inline-block; }
 
 h1 {
@@ -598,14 +598,20 @@ html:lang(zh-Hans) {
 }
 
 @media (min-width: 1100px) {
+  /* The cover: copy on the left, the monitor on the right, centred on each
+     other so neither column trails off into empty space. */
   .hero {
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-    align-items: start;
-    gap: 32px 48px;
+    align-items: center;
+    gap: 48px;
   }
-  .hero > h1 { grid-column: 1 / -1; }
-  .hero .lede { margin-top: 0; }
+  .hero-copy { max-width: none; }
+  /* CJK glyphs are full-width, so in a 500px column the display size has to
+     come down for a phrase to still fit on one line. */
+  :is(html:lang(ko), html:lang(ja), html:lang(zh-Hans)) .hero h1 {
+    font-size: clamp(2.5rem, 1rem + 3vw, 3.5rem);
+  }
   .hero .monitor { margin-top: 0; padding: 20px; }
   .hero .monitor-head { gap: 16px; }
   .hero .readout { grid-template-columns: 1fr; gap: 10px; }
@@ -614,6 +620,22 @@ html:lang(zh-Hans) {
   .hero .plot { height: 220px; }
   .hero .scrub { grid-template-columns: auto 1fr; }
   .hero .scrub input { grid-column: 1 / -1; }
+
+  /* The chapters share the cover's container and its two-column rhythm: the
+     heading sits in the left column, the prose in the right. The heading is
+     not sticky on purpose; the hops figure spans both columns and a sticky
+     heading would slide over it. */
+  .chapter, .colophon {
+    max-width: var(--wide);
+    display: grid;
+    grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+    column-gap: 48px;
+    align-items: start;
+  }
+  .chapter > h2 { grid-column: 1; margin: 0; }
+  .chapter > :not(h2), .colophon > p { grid-column: 2; }
+  /* The topology still reads left to right across the whole width. */
+  .chapter > .hops { grid-column: 1 / -1; margin-inline: 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {
