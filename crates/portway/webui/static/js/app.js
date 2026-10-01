@@ -3,6 +3,7 @@
 // per animation frame (once a second while the tab is hidden).
 
 import { ApiError, api, signIn } from "./api.js";
+import { Connection } from "./connection.js";
 import { $, download, fill, h } from "./dom.js";
 import { ALL_COLUMNS, COLUMNS, eventLine, lineText } from "./eventline.js";
 import { toCsv, toJson } from "./export.js";
@@ -212,8 +213,10 @@ function gate(text) {
 function expired() {
   setConn("expired");
   source?.close();
-  gate("This console needs the address portway printed when it started — the one ending in #token=…. " +
-    "Open that link again (or run portway --status). The token is used once and is never stored by the page.");
+  connection.stop();
+  banner("");
+  gate("Sign in with the console link ending in #token=… (available from portway --status on the server). " +
+    "This browser will stay signed in across restarts. If access was reset, use the new link.");
 }
 
 // ------------------------------------------------------------------ filters
@@ -275,17 +278,9 @@ function applySnapshot(snapshot) {
   renderAll();
 }
 
-async function resync() {
-  try {
-    applySnapshot(await api.snapshot());
-    openStream();
-  } catch (err) {
-    if (err instanceof ApiError && err.status === 401) expired();
-    else {
-      setConn("offline");
-      setTimeout(resync, 2000);
-    }
-  }
+function resync() {
+  source?.close();
+  connection.start();
 }
 
 // ------------------------------------------------------------------- stream
@@ -322,26 +317,10 @@ function openStream() {
   source.addEventListener("error", () => onStreamError());
 }
 
-async function onStreamError() {
-  if (state.stopped) {
-    source?.close();
-    setConn("stopped");
-    return;
-  }
-  setConn("reconnecting");
-  try {
-    const health = await api.health();
-    if (!health.session) {
-      expired();
-      return;
-    }
-    // A refused stream (too many open) does not retry on its own.
-    if (source.readyState === EventSource.CLOSED) setTimeout(resync, 2000);
-  } catch {
-    setConn("offline");
-    source?.close();
-    setTimeout(resync, 2000);
-  }
+function onStreamError() {
+  source?.close();
+  if (state.stopped) return;
+  connection.retry();
 }
 
 function onEvent(event) {
@@ -376,9 +355,7 @@ function onControl(control) {
     toast(`configuration reloaded: ${control.routes} route(s); per-model counters restart`, "good");
     invalidate("header");
   } else if (control.event === "stopping") {
-    state.stopped = true;
-    setConn("stopped");
-    banner("The forwarder is stopping. This page keeps its last state; start portway again for a new console.", true);
+    if (!state.stopped) onStreamError();
   }
 }
 
@@ -456,16 +433,25 @@ async function reloadConfig() {
 }
 
 async function stopForwarder() {
+  const stopsConsole = state.header.mode !== "attached";
+  // Set intent before awaiting: the stopping frame can arrive before the reply.
+  if (stopsConsole) {
+    state.stopped = true;
+    connection.stop();
+    source?.close();
+    setConn("stopped");
+  }
   try {
     const answer = await api.stop();
     toast(answer.message, "good");
-    if (state.header.mode !== "attached") {
-      state.stopped = true;
-      setConn("stopped");
-    }
+    if (stopsConsole) banner("The forwarder is stopped. Reload this page after starting it again.");
   } catch (err) {
     toast(err.message, "bad");
     if (err.status === 401) expired();
+    else if (stopsConsole) {
+      state.stopped = false;
+      resync();
+    }
   }
 }
 
@@ -685,24 +671,42 @@ window.addEventListener("resize", () => invalidate("charts", "events", "insights
 
 // -------------------------------------------------------------------- boot
 
-async function boot() {
+const connection = new Connection({
+  async connect() {
+    if (!await signIn()) throw new ApiError(401, "Sign in required");
+    return api.snapshot();
+  },
+  connected(snapshot) {
+    $("#gate").hidden = true;
+    applySnapshot(snapshot);
+    route();
+    openStream();
+  },
+  retrying() {
+    source?.close();
+    setConn("reconnecting");
+    state.flights.load({ at_unix: Date.now() / 1000, total: 0, more: 0, list: [] });
+    invalidate("flights", "detail");
+    banner("Connection interrupted. Reconnecting automatically; displayed data may be out of date.");
+  },
+  expired,
+});
+
+function boot() {
   $("#gate").hidden = true;
   state.stopped = false;
   setConn("connecting");
-  let signedIn = false;
-  try {
-    signedIn = await signIn();
-  } catch (err) {
-    setConn("offline");
-    gate(`The console is not answering (${err.message}). Is portway still running?`);
-    return;
-  }
-  if (!signedIn) {
-    expired();
-    return;
-  }
-  route();
-  await resync();
+  resync();
 }
+
+// Refresh the persistent cookie even when this tab only consumes an SSE stream.
+setInterval(async () => {
+  if (state.stopped || !connection.active) return;
+  try {
+    if (!(await api.health()).session) expired();
+  } catch {
+    onStreamError();
+  }
+}, 24 * 60 * 60 * 1000);
 
 boot();

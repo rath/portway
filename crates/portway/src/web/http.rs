@@ -117,9 +117,8 @@ pub async fn handle(app: Arc<App>, request: Request<Incoming>) -> Response<WebBo
         return error(StatusCode::FORBIDDEN, "host not allowed");
     }
     let host = host.unwrap_or_default();
-    // The proxy strips the prefix before forwarding, but the console is also
-    // reachable directly, and a request outside the prefix must not be served
-    // as if it were inside it. `/` is kept as the prefix itself.
+    // The proxy forwards the prefix unchanged. A request outside the prefix
+    // must not be served as if it were inside it. `/` is kept as the prefix itself.
     let path = match strip_base(request.uri().path(), &app.base) {
         Some(path) => path,
         None => return error(StatusCode::NOT_FOUND, "not found"),
@@ -148,7 +147,7 @@ pub async fn handle(app: Arc<App>, request: Request<Incoming>) -> Response<WebBo
             return error(StatusCode::FORBIDDEN, "cross-site request refused");
         }
     }
-    match (&method, path.as_str()) {
+    let mut response = match (&method, path.as_str()) {
         (&Method::GET, "/api/health") => json(
             StatusCode::OK,
             &json!({
@@ -222,7 +221,16 @@ pub async fn handle(app: Arc<App>, request: Request<Incoming>) -> Response<WebBo
             error(StatusCode::METHOD_NOT_ALLOWED, "method not allowed")
         }
         _ => error(StatusCode::NOT_FOUND, "no such route"),
+    };
+    // Renew the browser's storage lifetime, never the session secret. Remote
+    // viewers can keep using their original cookie without updating a cache.
+    if session
+        && response.status().is_success()
+        && let Ok(cookie) = HeaderValue::from_str(&app.auth.set_cookie())
+    {
+        response.headers_mut().insert(header::SET_COOKIE, cookie);
     }
+    response
 }
 
 /// Trade the launch token, or the one-time launch code a browser this run

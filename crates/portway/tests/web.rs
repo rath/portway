@@ -552,6 +552,10 @@ async fn a_daemon_hosts_its_console_and_another_attaches() {
 /// One buffered request through the forwarder, driven to completion so the
 /// recorder has a row carrying the engine's usage.
 async fn record_one(port: u16, body: &str) {
+    record_at(port, body, "/v1/chat/completions").await;
+}
+
+async fn record_at(port: u16, body: &str, path: &str) {
     let stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
         .await
         .unwrap();
@@ -561,7 +565,7 @@ async fn record_one(port: u16, body: &str) {
     tokio::spawn(connection);
     let request = Request::builder()
         .method("POST")
-        .uri("/v1/chat/completions")
+        .uri(path)
         .header("host", format!("127.0.0.1:{port}"))
         .body(Full::new(Bytes::from(body.to_string())))
         .unwrap();
@@ -789,3 +793,88 @@ async fn a_base_path_keeps_the_console_inside_its_prefix() {
 #[cfg(feature = "tui")]
 #[path = "common/remote.rs"]
 mod remote_tests;
+
+#[tokio::test]
+async fn persistent_console_access_survives_restart_and_can_be_reset() {
+    let upstream = upstream(Health::Json(vec!["zstd"]), Reply::UsageJson).await;
+    let dir = data_dir("persistent-auth");
+    let config = config(&dir, &upstream.base);
+    let port = free_port().to_string();
+    let web_port = free_port().to_string();
+    let args = [
+        "--config",
+        config.to_str().unwrap(),
+        "--port",
+        &port,
+        "--web-base-path",
+        "/console",
+    ];
+    let (mut server, launched) = spawn_console_port(&dir, &args, &web_port);
+    let mut page = Page::new(launched.port);
+    let login = page
+        .send(
+            "POST",
+            "/console/api/session",
+            &[("x-portway-console", "1")],
+            &serde_json::json!({"token": launched.token}).to_string(),
+        )
+        .await;
+    assert_eq!(login.status, StatusCode::NO_CONTENT);
+    let cookie = login.headers["set-cookie"].to_str().unwrap();
+    assert!(cookie.contains("Max-Age=34560000"));
+    assert!(cookie.contains("HttpOnly") && cookie.contains("SameSite=Strict"));
+    page.cookie = Some(cookie.split(';').next().unwrap().to_owned());
+
+    for graceful in [true, false] {
+        if graceful {
+            assert_eq!(
+                page.post("/console/api/stop").await.status,
+                StatusCode::ACCEPTED
+            );
+            assert!(exited(&mut server, Duration::from_secs(10)).is_some());
+        } else {
+            server.0.kill().unwrap();
+            server.0.wait().unwrap();
+        }
+        assert!(dir.join("web-auth.json").exists());
+        let (restarted, link) = spawn_console_port(&dir, &args, &web_port);
+        server = restarted;
+        assert_eq!(link.token, launched.token);
+        let health = page.get("/console/api/health").await;
+        assert_eq!(health.json()["session"], true);
+        let renewal = health.headers["set-cookie"].to_str().unwrap();
+        assert!(renewal.contains("Max-Age=34560000"));
+        assert_eq!(renewal.split(';').next(), page.cookie.as_deref());
+        assert_eq!(
+            page.get("/console/api/snapshot").await.status,
+            StatusCode::OK
+        );
+    }
+
+    server.0.kill().unwrap();
+    server.0.wait().unwrap();
+    std::fs::remove_file(dir.join("web-auth.json")).unwrap();
+    let (_server, reset) = spawn_console_port(&dir, &args, &web_port);
+    assert_ne!(reset.token, launched.token);
+    let health = page.get("/console/api/health").await;
+    assert_eq!(health.json()["session"], false);
+    assert!(!health.headers.contains_key("set-cookie"));
+    assert_eq!(
+        page.get("/console/api/snapshot").await.status,
+        StatusCode::UNAUTHORIZED
+    );
+    for (token, expected) in [
+        (&launched.token, StatusCode::UNAUTHORIZED),
+        (&reset.token, StatusCode::NO_CONTENT),
+    ] {
+        let login = page
+            .send(
+                "POST",
+                "/console/api/session",
+                &[("x-portway-console", "1")],
+                &serde_json::json!({"token": token}).to_string(),
+            )
+            .await;
+        assert_eq!(login.status, expected);
+    }
+}

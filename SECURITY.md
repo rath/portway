@@ -104,12 +104,19 @@ for authentication and removing saved sessions.
 The optional `--web` console (the `web` build feature) can read every recorded
 request and stop or reload the forwarder, so it is guarded even on loopback:
 
-- **A token per run.** The launch link carries 256 random bits after `#`, which
+- **Persistent console access.** The launch link carries 256 random bits after `#`, which
   browsers do not send to servers or put in referrers. The page removes it from
   the address bar and trades it once for an `HttpOnly`, `SameSite=Strict`
   session cookie whose value is a second, independent secret. Only the
-  launching terminal, the daemon's launcher and `portway.web` see the token;
-  the log records the address without it.
+  launching terminal, the daemon's launcher and private runtime files see the
+  token; the log records the address without it. `web-auth.json` stores the
+  token and session secret with mode 0600, separately for each console port and
+  base path. Both survive restarts and remain valid until explicitly reset.
+  Cookies use a rolling 400-day browser storage lifetime. Stop all consoles
+  using the data directory, delete `web-auth.json`, then restart to revoke all
+  access; restarting alone no longer revokes credentials. Protect backups of
+  this file as credentials. It must be user-owned, private and a regular file;
+  unsafe or corrupt files are refused rather than silently regenerated.
 - **A launch code for the browser it opens.** A command line is visible to
   other local users, so the browser a foreground `--web` opens is handed a
   separate code, not the token. It opens one session and expires after two

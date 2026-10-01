@@ -449,8 +449,11 @@ The runtime directory contains `db.sqlite3`, `portway.pid` in daemon mode,
 `portway.log` for daemon output, `portway.tui` for saved dashboard settings, and
 `portway.web` (mode 0600) with the running web console's address and token.
 Remote TUI viewers save console sessions in `remote-sessions.json` (mode 0600);
-they do not create a local database. A remote daemon restart invalidates its
-saved session and requires its new console token.
+they do not create a local database. Console tokens and session secrets live
+in `web-auth.json` (mode 0600), with creation serialized by `web-auth.lock`.
+They are isolated by console port and base path and survive restarts in the
+same data directory. See [resetting console access](operations.md#optional-web-console)
+for explicit revocation.
 Old runtime directories are not discovered or automatically migrated.
 
 `--data-dir` chooses storage and, without `--config`, where the search looks

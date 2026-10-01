@@ -1,8 +1,8 @@
 //! Who may talk to the console.
 //!
-//! A run starts with a random token that only the launching terminal (and the
-//! 0600 `portway.web` file) ever sees. The page trades it once for a session
-//! cookie whose value is a second, independent secret, so the token never
+//! A console keeps its random token and independent session secret in the
+//! private `web-auth.json` file across restarts. The page trades the token for
+//! a cookie whose value is the independent session secret, so the token never
 //! rides a request after the first one and never lands in a browser store.
 //!
 //! The browser a run opens for itself gets neither: its command line is
@@ -17,8 +17,12 @@
 
 use std::io::{self, Read};
 use std::net::IpAddr;
+use std::path::Path;
+
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
+
+use super::credentials::{self, Credentials};
 
 /// The header every state-changing request must carry.
 pub const CSRF_HEADER: &str = "x-portway-console";
@@ -68,11 +72,24 @@ pub struct Auth {
 }
 
 impl Auth {
+    pub fn load(dir: &Path, port: u16, names: Vec<String>, base: &str) -> io::Result<Self> {
+        Self::with_credentials(port, names, credentials::load(dir, port, base)?)
+    }
+
+    #[cfg(test)]
     pub fn new(port: u16, names: Vec<String>) -> io::Result<Self> {
+        Self::with_credentials(port, names, Credentials::generate()?)
+    }
+
+    fn with_credentials(
+        port: u16,
+        names: Vec<String>,
+        credentials: Credentials,
+    ) -> io::Result<Self> {
         let launch_code = random_hex(32)?;
         Ok(Auth {
-            token: random_hex(32)?,
-            session: random_hex(32)?,
+            token: credentials.token,
+            session: credentials.session,
             launch: Mutex::new(Some((launch_code.clone(), Instant::now()))),
             launch_code,
             port,
@@ -123,7 +140,7 @@ impl Auth {
 
     pub fn set_cookie(&self) -> String {
         format!(
-            "{}={}; HttpOnly; SameSite=Strict; Path=/",
+            "{}={}; HttpOnly; SameSite=Strict; Path=/; Max-Age=34560000",
             self.cookie_name(),
             self.session
         )

@@ -9,6 +9,13 @@ version may contain breaking changes.
 
 ### Fixed
 
+- Web and remote TUI logins survive deployments and restarts through private,
+  persistent console credentials. Browsers remember their session after closing
+  and reconnect automatically after a server restart, refreshing their snapshot.
+  Upgrading requires one final sign-in; subsequent restarts need no new token.
+  Console access can be revoked by stopping the consoles, removing
+  `web-auth.json`, and restarting.
+
 - The console's Columns dialog names the cells each column shows or hides, read
   from the event table itself, so `upstream`, `↓ wire` and `↓ saved` appear
   under `model` and `down` where they belong. The `model` and `down` notes

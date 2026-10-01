@@ -34,7 +34,7 @@ pub enum Error {
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Expired => f.write_str("remote session expired; run --tui --attach again and enter the current console token"),
+            Self::Expired => f.write_str("remote session is no longer valid; console access may have been reset; run --tui --attach again and enter the current console token"),
             Self::Other(message) => f.write_str(message),
         }
     }

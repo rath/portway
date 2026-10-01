@@ -192,20 +192,38 @@ async fn remote_terminal_authenticates_reuses_sessions_and_leaves_the_server_run
     let mut viewer = Viewer::start(&url, &viewer_dir);
     viewer.drawn("events").await;
     assert!(!String::from_utf8_lossy(&viewer.screen).contains("Console token"));
-    // A restart invalidates the saved session; restore the terminal and erase it.
+    // A crash/redeploy keeps the viewer alive and its cached cookie valid.
     server.0.kill().unwrap();
     server.0.wait().unwrap();
     viewer.drawn("reconnecting").await;
-    let (_server, restarted) = spawn_console_port(&dir, &args, &web_port);
+    viewer.screen.clear();
+    let (mut server, restarted) = spawn_console_port(&dir, &args, &web_port);
+    assert_eq!(launched.token, restarted.token);
+    record_at(port, r#"{"model":"model-web"}"#, "/after-restart").await;
+    viewer.drawn("after-restart").await;
+    assert!(!String::from_utf8_lossy(&viewer.screen).contains("Console token"));
+    viewer.keys("q");
+    assert!(viewer.wait().await.success());
+    viewer.restored();
+    let mut viewer = Viewer::start(&url, &viewer_dir);
+    viewer.drawn("after-restart").await;
+    assert!(!String::from_utf8_lossy(&viewer.screen).contains("Console token"));
+
+    // Explicitly resetting access still revokes an open viewer and its cache.
+    server.0.kill().unwrap();
+    server.0.wait().unwrap();
+    std::fs::remove_file(dir.join("web-auth.json")).unwrap();
+    let (_server, reset) = spawn_console_port(&dir, &args, &web_port);
+    assert_ne!(reset.token, restarted.token);
     assert!(!viewer.wait().await.success());
-    assert!(String::from_utf8_lossy(&viewer.screen).contains("remote session expired"));
+    assert!(String::from_utf8_lossy(&viewer.screen).contains("remote session is no longer valid"));
     viewer.restored();
     let saved: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&cache).unwrap()).unwrap();
     assert_eq!(saved.as_object().unwrap().len(), 0);
     let mut viewer = Viewer::start(&url, &viewer_dir);
     viewer.drawn("Console token").await;
-    viewer.keys(&format!("{}\r", restarted.token));
+    viewer.keys(&format!("{}\r", reset.token));
     viewer.drawn("events").await;
     viewer.keys("q");
     assert!(viewer.wait().await.success());

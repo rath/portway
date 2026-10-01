@@ -79,8 +79,8 @@ Stopping terminates forwarding, so choose a quiet moment and let active requests
 finish before a restart. Runtime counters and in-memory dictionaries reset; the
 SQLite history stays in the same data directory. Reopen locally attached
 dashboards with the updated config to load changed prices, host, or port.
-Remote TUI viewers need the new console token after a daemon restart; they
-do not load local forwarding configuration. For a foreground instance, use
+Remote TUI viewers reconnect with their saved session after a daemon restart;
+they do not load local forwarding configuration. For a foreground instance, use
 Ctrl-C and rerun its command.
 
 ## Separate instances
@@ -194,9 +194,11 @@ exchanges it for a session and stores **only the session cookie**, with mode
 `0600`, in `<data-dir>/remote-sessions.json`. Sessions are isolated by scheme,
 host, port, and URL prefix. Later connections to that URL need no prompt.
 
-A daemon restart invalidates its sessions. An open viewer then restores the
-terminal and exits with a message to reconnect and enter the new token; the
-expired saved session is removed. To forget saved sessions yourself, remove
+Console tokens and sessions survive restarts when the server keeps its data
+directory, console port and base path. An open viewer reconnects automatically;
+starting it again reuses its saved session. If console access was explicitly
+reset, an open viewer restores the terminal and exits with a sign-in message,
+removing its invalid saved session. To forget saved sessions locally, remove
 `remote-sessions.json` while no remote viewer is running.
 
 Counters, latency, charts and active requests come from the remote console.
@@ -295,6 +297,30 @@ Without the `Origin` rewrite every page loads but signing in fails with 403.
 launcher prints the links next to the log path, `--status` prints them again while the console runs, and they
 are kept in `portway.web` (mode 0600) in the data directory. The log only ever
 contains the address without the token.
+
+The token and a separate session secret are saved in `web-auth.json` (mode
+0600), keyed by console port and base path. Keep this file across deployments;
+`portway.web` remains the temporary discovery file for the running console.
+Browser and remote TUI logins survive server restarts. The browser uses an
+HttpOnly, SameSite=Strict persistent cookie with a rolling 400-day storage
+lifetime, renewed by authenticated API responses and daily while a tab stays
+open. The server does not expire sessions on a timer. Clearing browser cookies
+or the TUI's local cache requires signing in again.
+
+An open browser reconnects after a deployment, fetching a fresh snapshot so
+counters and events reflect the new process. During the outage it marks the
+retained data as stale and clears in-flight requests. Clicking Stop in that
+browser deliberately leaves it stopped; reload the page after starting Portway
+again. Authentication failures ask for a sign-in link rather than retrying.
+
+To **reset all console access** for a data directory, stop every console using
+that directory, delete only `web-auth.json`, then restart them. This revokes
+all previous tokens and sessions and generates new ones. Do not delete the file
+while a console is running: it still has its credentials in memory. A corrupt
+or incorrectly permissioned auth file is refused, never silently replaced;
+restore it or use this explicit reset procedure. Initial upgrading from a
+version with per-run authentication requires one final sign-in in each browser
+and remote TUI. Later deployments need none.
 
 The console shows everything the terminal dashboard shows, computed by the
 same code, with these views and additions:

@@ -12,6 +12,7 @@ mod api;
 pub mod assets;
 mod auth;
 mod body;
+mod credentials;
 mod file;
 mod http;
 pub mod launch;
@@ -109,13 +110,13 @@ pub struct Options {
 /// A running console. Dropping it without `shutdown` leaves the listener to
 /// the runtime; `shutdown` is what tells the pages and removes the file.
 pub struct Console {
-    /// Every address the console answers on, with the run's token: printed
+    /// Every address the console answers on, with the persistent token: printed
     /// once, to whoever started this, and written to the 0600 `portway.web`.
     /// Never logged. The first is the one to open on this machine.
     pub urls: Vec<String>,
     /// The same addresses without the token: safe for the log.
     pub public_urls: Vec<String>,
-    /// The run's token, for a daemon to hand its launcher once.
+    /// The persistent token, for a daemon to hand its launcher once.
     pub token: String,
     /// The address with the one-time launch code instead of the token: what
     /// a browser this run opens is handed (see `launch`).
@@ -160,7 +161,8 @@ impl Console {
             .iter()
             .map(|authority| format!("http://{authority}{prefix}/"))
             .collect();
-        let auth = auth::Auth::new(local.port(), names).map_err(|err| format!("entropy: {err}"))?;
+        let auth = auth::Auth::load(&dir, local.port(), names, &base)
+            .map_err(|err| format!("console authentication: {err}"))?;
         let urls: Vec<String> = public_urls
             .iter()
             .map(|url| format!("{url}#token={}", auth.token()))
