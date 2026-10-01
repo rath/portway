@@ -152,6 +152,8 @@ code { font-size: 0.9em; }
   padding: clamp(16px, 4vw, 48px) var(--gutter) clamp(48px, 8vw, 96px);
 }
 .hero-copy { max-width: 58rem; }
+.hero > h1 { max-width: none; }
+.hero h1:lang(ko), .hero-copy:lang(ko) { word-break: keep-all; }
 .hero h1 span { display: inline-block; }
 
 h1 {
@@ -600,10 +602,10 @@ html:lang(zh-Hans) {
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
     align-items: start;
-    gap: 48px;
+    gap: 32px 48px;
   }
-  .hero-copy { padding-top: 24px; }
-  .hero h1 { max-width: 9em; }
+  .hero > h1 { grid-column: 1 / -1; }
+  .hero .lede { margin-top: 0; }
   .hero .monitor { margin-top: 0; padding: 20px; }
   .hero .monitor-head { gap: 16px; }
   .hero .readout { grid-template-columns: 1fr; gap: 10px; }
