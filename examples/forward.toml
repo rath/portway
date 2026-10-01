@@ -20,9 +20,10 @@ dict = "auto"
 level = 11
 min_bytes = 1024
 
-# Optional estimates for the TUI, in USD per million tokens.
-# The recorded route is "upstream" in this mode, regardless of JSON model name.
-# [prices.upstream]
+# Optional estimates for the dashboards, in USD per million tokens, keyed by
+# the model name requests carry in their JSON body. The route is "upstream" in
+# this mode, but prices follow the model, so name the model here.
+# [prices."model-a"]
 # input = 1.0
 # output = 2.0
 # cache_read = 0.1

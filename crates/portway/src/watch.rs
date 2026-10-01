@@ -47,16 +47,22 @@ const REQUEST_COLUMNS: &str = "id, ts_unix, model, method, path, status,
     dns_ms, tcp_ms, tls_ms, body_len, wire_len, coding, upload_ms, ttfb_ms,
     received, received_wire, upstream_encoding, download_ms, complete,
     prompt_tokens, cached_tokens, completion_tokens, reasoning_tokens,
-    received_agent";
+    received_agent, upstream";
+/// v3 has no route of its own: `model` was the route's name, and reads as both.
+const REQUEST_COLUMNS_V3: &str = "id, ts_unix, model, method, path, status,
+    dns_ms, tcp_ms, tls_ms, body_len, wire_len, coding, upload_ms, ttfb_ms,
+    received, received_wire, upstream_encoding, download_ms, complete,
+    prompt_tokens, cached_tokens, completion_tokens, reasoning_tokens,
+    received_agent, model";
 /// v2 carries the token counts but no agent figure: the column arrived at v3.
 const REQUEST_COLUMNS_V2: &str = "id, ts_unix, model, method, path, status,
     dns_ms, tcp_ms, tls_ms, body_len, wire_len, coding, upload_ms, ttfb_ms,
     received, received_wire, upstream_encoding, download_ms, complete,
-    prompt_tokens, cached_tokens, completion_tokens, reasoning_tokens, 0";
+    prompt_tokens, cached_tokens, completion_tokens, reasoning_tokens, 0, model";
 const REQUEST_COLUMNS_V1: &str = "id, ts_unix, model, method, path, status,
     dns_ms, tcp_ms, tls_ms, body_len, wire_len, coding, upload_ms, ttfb_ms,
     received, received_wire, upstream_encoding, download_ms, complete,
-    NULL, NULL, NULL, NULL, 0";
+    NULL, NULL, NULL, NULL, 0, model";
 const LOG_COLUMNS: &str = "id, ts_unix, level, message";
 
 /// Bytes on the wire per second, which is the one shape only SQL can give: the
@@ -130,6 +136,7 @@ struct Reader {
     connection: Connection,
     tokens: bool,
     agent: bool,
+    upstream: bool,
 }
 
 /// What a row is read by: a window cutoff, or the id the last poll stopped at.
@@ -191,10 +198,12 @@ impl Reader {
         };
         let tokens = store::has_token_columns(&connection)?;
         let agent = store::has_agent_column(&connection)?;
+        let upstream = store::has_upstream_column(&connection)?;
         Ok(Some(Reader {
             connection,
             tokens,
             agent,
+            upstream,
         }))
     }
 
@@ -215,9 +224,10 @@ impl Reader {
     }
 
     fn requests(&self, key: Key) -> Result<Vec<Stored>, String> {
-        let columns = match (self.tokens, self.agent) {
-            (true, true) => REQUEST_COLUMNS,
-            (true, false) => REQUEST_COLUMNS_V2,
+        let columns = match (self.tokens, self.agent, self.upstream) {
+            (true, true, true) => REQUEST_COLUMNS,
+            (true, true, false) => REQUEST_COLUMNS_V3,
+            (true, false, _) => REQUEST_COLUMNS_V2,
             _ => REQUEST_COLUMNS_V1,
         };
         let sql = read("requests", columns, key);
@@ -236,6 +246,7 @@ impl Reader {
                     ts,
                     record: Box::new(RequestRecord {
                         stamp: logfmt::clock(ts),
+                        upstream: row.get(24)?,
                         model: row.get(2)?,
                         method: Method::from_bytes(row.get::<_, String>(3)?.as_bytes())
                             .unwrap_or(Method::POST),
@@ -548,6 +559,7 @@ mod tests {
     fn request(stamp: &str) -> RequestRecord {
         RequestRecord {
             stamp: stamp.to_string(),
+            upstream: "model-alpha".to_string(),
             model: "model-alpha".to_string(),
             method: Method::POST,
             path: "/v1/chat/completions".to_string(),
@@ -734,6 +746,8 @@ mod tests {
             panic!("a request row read back as a log row");
         };
         assert_eq!(record.model, "model-alpha");
+        // Before v4 the model column was the route: it reads as both.
+        assert_eq!(record.upstream, "model-alpha");
         assert_eq!(record.coding, Coding::Zstd);
         assert_eq!(record.ttfb, 17.44);
         assert!(record.usage.is_none());

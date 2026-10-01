@@ -519,6 +519,7 @@ mod tests {
     fn record(model: &str, usage: Option<Usage>) -> RequestRecord {
         RequestRecord {
             stamp: "23:41:02".to_string(),
+            upstream: model.to_string(),
             model: model.to_string(),
             method: Method::POST,
             path: "/v1/chat/completions".to_string(),

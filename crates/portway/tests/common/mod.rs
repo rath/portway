@@ -672,8 +672,21 @@ pub async fn router(mounts: &[(&str, &str)], models: &[(&str, &str)], argv: &[&s
         None,
     )
     .unwrap();
-    router.negotiate_all().await;
+    serve(router).await
+}
 
+/// A single-upstream forwarder: everything goes to `url`, path untouched.
+pub async fn single(url: &str, argv: &[&str]) -> Fwd {
+    use clap::Parser;
+    let mut full = vec!["portway"];
+    full.extend_from_slice(argv);
+    let args = Args::parse_from(full);
+    let router = Router::single(&args.forwarder_config(), url, None).unwrap();
+    serve(router).await
+}
+
+async fn serve(router: std::sync::Arc<Router>) -> Fwd {
+    router.negotiate_all().await;
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(portway::server::serve(listener, router));

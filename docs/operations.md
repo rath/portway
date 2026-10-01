@@ -229,7 +229,7 @@ adds `--config` automatically must omit it for remote attach.
 | `PgUp` / `PgDn`, `g` / `G` | Page, oldest, or live end |
 | `Enter` | Request details |
 | `f` | Requests in flight |
-| `e` / `m` | Trouble-only filter / model filter |
+| `e` / `m` | Trouble-only filter / upstream filter |
 | `t` | Throughput bucket width |
 | `u` | Usage and cost view |
 | `←` / `→` in usage | Change the date window |
@@ -302,7 +302,7 @@ same code, with these views and additions:
 | View | What it adds |
 | --- | --- |
 | Dashboard | Requests in flight, with their phase (upload, prefill, stream), age and progress; a slow prefill (over 30s) or a stalled stream (no bytes for 60s) is flagged. A console attached to another instance cannot see that instance's flights. |
-| Events | An aligned table with a header per field and each request's full method and path, where the terminal shortens known routes to fit; a field no event has filled yet takes no room. Drag the edge of a header to set a column's width; double-click it, or run "Reset column widths", to fit the content again. Widths are kept per browser. Search (`status:5xx`, `model:`, `route:`, `is:cut`, `ttfb:>2s`, `size:>1MB`, `tok:>50K`, `-word`, `"phrase"`), CSV and JSON export of the filtered lines, and older lines on request. |
+| Events | An aligned table with a header per field and each request's full method and path, where the terminal shortens known routes to fit; a field no event has filled yet takes no room. Drag the edge of a header to set a column's width; double-click it, or run "Reset column widths", to fit the content again. Widths are kept per browser. Search (`status:5xx`, `model:`, `upstream:`, `route:`, `is:cut`, `ttfb:>2s`, `size:>1MB`, `tok:>50K`, `-word`, `"phrase"`), CSV and JSON export of the filtered lines, and older lines on request. |
 | Usage | The terminal's usage screen, refreshed every 5s. |
 | History | `--report` for any window, per model, as tables with CSV, or as the exact text. |
 | Insights | ttfb percentiles and upload savings since the page opened, and each model's share. |

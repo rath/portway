@@ -94,7 +94,7 @@ impl Column {
             Column::Time => "when the relay ended",
             Column::Status => "the code the agent got",
             Column::Cut => "one cell: ✂ on a cut relay",
-            Column::Model => "the upstream the turn went to",
+            Column::Model => "the model the turn named; - when it named none",
             Column::Route => "method and path, + . on a fresh dial",
             Column::Sizes => "raw → wire, ratio, upload time",
             Column::Ttfb => "first byte of the answer",
@@ -169,9 +169,9 @@ impl Entry {
         }
     }
 
-    fn model(&self) -> Option<&str> {
+    fn upstream(&self) -> Option<&str> {
         match self {
-            Entry::Request(record) => Some(&record.model),
+            Entry::Request(record) => Some(&record.upstream),
             Entry::Log { .. } => None,
         }
     }
@@ -189,7 +189,8 @@ pub enum Filter {
     All,
     /// 4xx/5xx, truncated streams, and WARNING or worse.
     Trouble,
-    Model(String),
+    /// One route: a mount, a model, or the single upstream.
+    Upstream(String),
 }
 
 impl Filter {
@@ -197,7 +198,7 @@ impl Filter {
         match self {
             Filter::All => "all",
             Filter::Trouble => "trouble",
-            Filter::Model(name) => name,
+            Filter::Upstream(name) => name,
         }
     }
 
@@ -205,7 +206,7 @@ impl Filter {
         match self {
             Filter::All => true,
             Filter::Trouble => entry.is_trouble(),
-            Filter::Model(name) => entry.model() == Some(name.as_str()),
+            Filter::Upstream(name) => entry.upstream() == Some(name.as_str()),
         }
     }
 }
@@ -217,7 +218,7 @@ pub struct State {
     /// Sequence numbers of the entries the current filter admits, in order.
     filtered: VecDeque<u64>,
     next_seq: u64,
-    /// Last observed request per model, independent of event filters/eviction.
+    /// Last observed request per route, independent of event filters/eviction.
     model_recency: BTreeMap<String, u64>,
     pub filter: Filter,
     /// Viewport pinned to the newest line. Any upward move leaves it.
@@ -312,7 +313,7 @@ impl State {
             },
             Event::Request(record) => {
                 self.model_recency
-                    .insert(record.model.clone(), self.next_seq);
+                    .insert(record.upstream.clone(), self.next_seq);
                 if let Some(id) = record.flight {
                     self.flights.retain(|flight| flight.id != id);
                 }
@@ -515,7 +516,7 @@ impl State {
         self.totals.in_flight = snapshot.map_or(0, |snapshot| snapshot.total);
         for model in &mut self.models {
             model.view.in_flight = snapshot
-                .and_then(|snapshot| snapshot.models.get(&model.name).copied())
+                .and_then(|snapshot| snapshot.upstreams.get(&model.name).copied())
                 .unwrap_or(0);
         }
     }
@@ -747,7 +748,7 @@ impl State {
         self.follow = true;
     }
 
-    /// `all -> trouble` and then once through the models.
+    /// `all -> trouble` and then once through the routes.
     pub fn cycle_filter(&mut self) {
         let names: Vec<&str> = self
             .board
@@ -758,13 +759,13 @@ impl State {
         let next = match &self.filter {
             Filter::All => Filter::Trouble,
             Filter::Trouble => match names.first() {
-                Some(name) => Filter::Model((*name).to_string()),
+                Some(name) => Filter::Upstream((*name).to_string()),
                 None => Filter::All,
             },
-            Filter::Model(current) => {
+            Filter::Upstream(current) => {
                 let at = names.iter().position(|name| name == current);
                 match at.and_then(|at| names.get(at + 1)) {
-                    Some(name) => Filter::Model((*name).to_string()),
+                    Some(name) => Filter::Upstream((*name).to_string()),
                     None => Filter::All,
                 }
             }

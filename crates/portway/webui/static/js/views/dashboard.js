@@ -1,4 +1,4 @@
-// The dashboard: the header's figures, the stat strip, the model table, the
+// The dashboard: the header's figures, the stat strip, the upstream table, the
 // event list, the in-flight rail and the two charts. Each part renders from
 // `ctx.state` when the scheduler says it is dirty.
 
@@ -25,7 +25,7 @@ export function renderHeader(ctx) {
     header.window_s != null
       ? chip("watching", span(header.window_s))
       : chip("coding", header.coding || "-"),
-    chip("models", String(state.models.length)),
+    chip("upstreams", String(state.models.length)),
   ];
   if (state.generation > 0) chips.push(chip("reloads", String(state.generation)));
   fill($("#chips"), chips);
@@ -107,7 +107,7 @@ export function renderHud(ctx) {
 // ------------------------------------------------------------------ models
 
 const MODEL_COLUMNS = [
-  { name: "model", left: true },
+  { name: "upstream", left: true },
   { name: "coding", left: true },
   { name: "reqs" },
   { name: "live" },
@@ -151,7 +151,7 @@ export function renderModels(ctx) {
     return h("tr", {
       class: "clickable",
       "aria-selected": selected ? "true" : "false",
-      title: selected ? "Show every model" : `Show only ${model.name}`,
+      title: selected ? "Show every upstream" : `Show only ${model.name}`,
       onclick: () => ctx.setMode(selected ? "all" : model.name),
     }, cells.map(([text, tone], at) => h("td", {
       class: [columnClass(MODEL_COLUMNS[at]), tone ? `t-${tone}` : ""].filter(Boolean).join(" "),

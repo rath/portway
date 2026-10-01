@@ -34,8 +34,25 @@ version may contain breaking changes.
   in the sitemap; the 404 picks the reader's language. English is unchanged at
   `/`.
 
+### Changed
+
+- Every recorded request keeps its route and its model apart: `upstream` is the
+  route it went through (a mount's name, a model's name, or `upstream`), and
+  `model` is what its JSON body asked for, empty when it asked for none. The
+  dashboards' per-route tables and filters are therefore labelled "upstreams",
+  the events show the model, and `--report --model` filters by the model. The
+  database moves to schema 4, copying the old column into `upstream`; rows from
+  before carry their route name as the model. The local live-flights feed is
+  version 2, so an older attached viewer reports it unavailable rather than
+  misreading it.
+
 ### Fixed
 
+- Prices now apply under a single `upstream` and under a mount: a request for
+  `claude-opus-5-5` through either is priced by `[prices."claude-opus-5-5"]`.
+  Before, every request through a single upstream was recorded as the model
+  `upstream`, so `[prices.upstream]` was the only key that matched and a
+  report could not tell one model from another.
 - The TUI model table shows at most three recently used models, prioritizes
   in-flight activity, and hides unused routes to leave more room for events.
 - The TUI's in-flight dialog stands apart from the dashboard with a muted

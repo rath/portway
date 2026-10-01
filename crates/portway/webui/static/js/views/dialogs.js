@@ -97,7 +97,7 @@ const HELP = [
   ["u", "tokens and cost per model, by window (←→ window, p costs)"],
   ["t", "1s / 10s / 60s traffic buckets"],
   ["c", "choose what a request line shows"],
-  ["/", "search: words, -word, \"phrase\", status:5xx, model:, route:, is:cut, ttfb:>2s, size:>1MB, tok:>50K"],
+  ["/", "search: words, -word, \"phrase\", status:5xx, model:, upstream:, route:, is:cut, ttfb:>2s, size:>1MB, tok:>50K"],
   ["H · I · A", "history · insights · appearance"],
   ["r", "reload the configuration"],
   ["⌘K / Ctrl-K", "every command, including every theme"],
@@ -145,7 +145,7 @@ export function openStop(ctx) {
       body.push(h("p", { class: "t-bad", text: `${live} request(s) in flight will be cut off:` }));
       if (flights.available) {
         body.push(h("ul", {}, flights.list.slice(0, 12).map((flight) =>
-          h("li", {}, h("span", { class: "t-model", text: flight.model }), ` ${flight.route} · `,
+          h("li", {}, h("span", { class: "t-model", text: flight.model || flight.upstream }), ` ${flight.route} · `,
             describe(flight, flights.times(flight, ctx.now())).text))));
       }
     }

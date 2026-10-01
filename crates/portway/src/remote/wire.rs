@@ -211,6 +211,8 @@ fn boxed_record<'de, D: Deserializer<'de>>(d: D) -> Result<Box<RequestRecord>, D
 #[serde(remote = "RequestRecord")]
 struct RecordData {
     stamp: String,
+    #[serde(default)]
+    upstream: String,
     model: String,
     #[serde(deserialize_with = "method")]
     method: http::Method,
@@ -264,6 +266,8 @@ pub struct Flight(#[serde(with = "FlightData")] pub FlightView);
 #[serde(remote = "FlightView")]
 struct FlightData {
     id: u64,
+    #[serde(default)]
+    upstream: String,
     model: String,
     #[serde(deserialize_with = "method")]
     method: http::Method,

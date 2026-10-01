@@ -528,7 +528,7 @@ function paletteCommands() {
     ...VIEWS.map((view) => ({ name: `Go to ${view}`, hint: "view", run: () => go(view) })),
     { name: "Filter: all", hint: "e / m", run: () => ctx.setMode("all") },
     { name: "Filter: trouble", hint: "e", run: () => ctx.setMode("trouble") },
-    ...state.models.map((model) => ({ name: `Filter: ${model.name}`, hint: "model", run: () => ctx.setMode(model.name) })),
+    ...state.models.map((model) => ({ name: `Filter: ${model.name}`, hint: "upstream", run: () => ctx.setMode(model.name) })),
     { name: "Search events", hint: "/", run: () => focusSearch() },
     { name: "Clear the search", hint: "search", run: () => ctx.setQuery("") },
     ...COLUMNS.map((column) => ({

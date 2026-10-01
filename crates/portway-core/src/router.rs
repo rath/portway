@@ -14,8 +14,9 @@
 use crate::relay::{OutBody, json_response};
 use crate::{config::ForwarderConfig, forwarder::Forwarder, pool::Upstream, telemetry::Telemetry};
 use bytes::Bytes;
-use http::{Method, Request, Response, StatusCode};
+use http::{HeaderMap, Method, Request, Response, StatusCode};
 use http_body::Body;
+use serde::Deserialize;
 use std::sync::Arc;
 
 pub const STATS_PATH: &str = "/__portway/stats";
@@ -199,13 +200,15 @@ impl Router {
             .get::<crate::dict::DictionaryScope>()
             .cloned()
             .unwrap_or_else(|| crate::dict::DictionaryScope::from_headers(&parts.headers));
-        // A mount is chosen by the path alone, so the body is not inspected
-        // and goes upstream as it came, encoded or not.
+        // A mount is chosen by the path alone, so the body goes upstream as
+        // it came, encoded or not; it is read only to record which model the
+        // request named.
         if let Some((forwarder, rest, rest_and_query)) = self.mount(&path, &path_and_query) {
             let body = match crate::body::collect_raw(incoming, self.config.max_body_bytes).await {
                 Ok(body) => body,
                 Err(err) => return invalid_request(err.status(), &err.to_string(), None),
             };
+            let model = named_model(&parts.headers, &body);
             return forwarder
                 .handle_scoped(
                     parts.method,
@@ -214,6 +217,7 @@ impl Router {
                     parts.headers,
                     body,
                     scope,
+                    model,
                 )
                 .await;
         }
@@ -222,6 +226,7 @@ impl Router {
                 Ok(body) => body,
                 Err(err) => return invalid_request(err.status(), &err.to_string(), None),
             };
+            let model = named_model(&parts.headers, &body);
             return root
                 .handle_scoped(
                     parts.method,
@@ -230,13 +235,16 @@ impl Router {
                     parts.headers,
                     body,
                     scope,
+                    model,
                 )
                 .await;
         }
         if self.models.is_empty() {
             // Only mounts are configured: nothing answers at the root, and
             // the message names where the upstreams are instead.
-            let mounted: Vec<String> = self.mounts.iter().map(|(n, _)| format!("/{n}")).collect();
+            let mut mounted: Vec<String> =
+                self.mounts.iter().map(|(n, _)| format!("/{n}")).collect();
+            mounted.sort();
             return invalid_request(
                 StatusCode::NOT_FOUND,
                 &format!(
@@ -307,9 +315,34 @@ impl Router {
                 parts.headers,
                 body,
                 scope,
+                model,
             )
             .await
     }
+}
+
+/// Only the one field is kept; every other value is skipped as it is read.
+#[derive(Deserialize)]
+struct ModelField {
+    #[serde(default)]
+    model: Option<serde_json::Value>,
+}
+
+/// The model a request names: the string `model` of its JSON object body.
+/// `None` for a body that is encoded, is not a JSON object, or names none.
+/// This is what the request is recorded under; routing has its own rules.
+pub fn named_model(headers: &HeaderMap, body: &[u8]) -> Option<String> {
+    let encoded = headers
+        .get(http::header::CONTENT_ENCODING)
+        .is_some_and(|v| !v.as_bytes().eq_ignore_ascii_case(b"identity"));
+    if encoded || body.is_empty() {
+        return None;
+    }
+    serde_json::from_slice::<ModelField>(body)
+        .ok()?
+        .model?
+        .as_str()
+        .map(str::to_owned)
 }
 
 /// A mount is one path segment, so a client's base URL can end in it and
@@ -424,7 +457,7 @@ mod tests {
         ];
         for (path, path_and_query, rest, rest_and_query) in cases {
             let (forwarder, got, got_and_query) = router.mount(path, path_and_query).unwrap();
-            assert_eq!(forwarder.model, path[1..].split('/').next().unwrap());
+            assert_eq!(forwarder.name, path[1..].split('/').next().unwrap());
             assert_eq!(
                 (got.as_str(), got_and_query.as_str()),
                 (rest, rest_and_query),
@@ -454,6 +487,30 @@ mod tests {
         assert!(router(&["v1"], &["model-a"]).is_err());
         assert!(router(&["same"], &["same"]).is_err());
         assert!(router(&[], &[]).is_err());
+    }
+
+    #[test]
+    fn the_named_model_is_the_string_model_of_a_plain_json_object() {
+        let plain = HeaderMap::new();
+        let mut encoded = HeaderMap::new();
+        encoded.insert("content-encoding", "zstd".parse().unwrap());
+        let mut identity = HeaderMap::new();
+        identity.insert("content-encoding", "identity".parse().unwrap());
+        let body = br#"{"messages":[{"role":"user","content":"hi"}],"model":"m-1","stream":true}"#;
+        assert_eq!(named_model(&plain, body).as_deref(), Some("m-1"));
+        assert_eq!(named_model(&identity, body).as_deref(), Some("m-1"));
+        assert_eq!(named_model(&encoded, body), None);
+        for body in [
+            &b""[..],
+            b"{}",
+            b"[]",
+            b"null",
+            b"{",
+            br#"{"model":5}"#,
+            br#"{"model":null}"#,
+        ] {
+            assert_eq!(named_model(&plain, body), None, "{body:?}");
+        }
     }
 
     #[test]

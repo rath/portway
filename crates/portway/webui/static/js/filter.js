@@ -5,7 +5,8 @@
 //   -word          and this one must not
 //   "a phrase"     an exact run of words; key:"a value" quotes one too
 //   status:5xx     a class; status:404, status:>=400, status:<300
-//   model:alpha    the upstream (substring)
+//   model:alpha    the model the turn named (substring)
+//   upstream:codex the upstream the turn went to (substring)
 //   route:chat     method + path (substring)
 //   level:warning  log level, WARNING and up with level:>=warning
 //   is:cut is:trouble is:log is:request is:fresh is:reused is:coded
@@ -98,6 +99,10 @@ function term({ text, phrase }) {
         const needle = value.toLowerCase();
         return request((event) => event.model.toLowerCase().includes(needle));
       }
+      case "upstream": {
+        const needle = value.toLowerCase();
+        return request((event) => event.upstream.toLowerCase().includes(needle));
+      }
       case "route": {
         const needle = value.toLowerCase();
         return request((event) => `${event.method} ${event.path}`.toLowerCase().includes(needle));
@@ -178,14 +183,14 @@ export function compile(query) {
   return { test: (event) => tests.every((predicate) => predicate(event)), errors, empty: tests.length === 0 };
 }
 
-/** The TUI's cycle filter: "all", "trouble", or a model name. */
+/** The TUI's cycle filter: "all", "trouble", or an upstream's name. */
 export function modeAccepts(mode, event) {
   if (mode === "all") return true;
   if (mode === "trouble") return event.trouble;
-  return event.kind === "request" && event.model === mode;
+  return event.kind === "request" && event.upstream === mode;
 }
 
-/** `all -> trouble` and then once through the models (tui::State::cycle_filter). */
+/** `all -> trouble` and then once through the upstreams (tui::State::cycle_filter). */
 export function nextMode(mode, models) {
   if (mode === "all") return "trouble";
   if (mode === "trouble") return models[0] ?? "all";

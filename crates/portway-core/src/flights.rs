@@ -46,6 +46,7 @@ impl Phase {
 /// request path moves forward.
 pub struct Flight {
     id: u64,
+    upstream: String,
     model: String,
     method: Method,
     path: String,
@@ -126,6 +127,7 @@ impl Flight {
         };
         FlightView {
             id: self.id,
+            upstream: self.upstream.clone(),
             model: self.model.clone(),
             method: self.method.clone(),
             path: self.path.clone(),
@@ -151,6 +153,9 @@ impl Flight {
 #[derive(Debug, Clone)]
 pub struct FlightView {
     pub id: u64,
+    /// The route the request is going through.
+    pub upstream: String,
+    /// The model it named; empty when it named none.
     pub model: String,
     pub method: Method,
     pub path: String,
@@ -184,19 +189,28 @@ pub struct Flights {
 /// Counts from one registry read, with a bounded list of the oldest flights.
 pub struct Snapshot {
     pub total: u64,
-    pub models: BTreeMap<String, u64>,
+    /// In flight per route.
+    pub upstreams: BTreeMap<String, u64>,
     pub flights: Vec<FlightView>,
 }
 
 impl Flights {
     /// Enter a request that has just been counted.
-    pub fn begin(&self, model: &str, method: &Method, path: &str, body_len: u64) -> Arc<Flight> {
+    pub fn begin(
+        &self,
+        upstream: &str,
+        model: &str,
+        method: &Method,
+        path: &str,
+        body_len: u64,
+    ) -> Arc<Flight> {
         let id = self.next.fetch_add(1, Ordering::Relaxed) + 1;
         let started_unix = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0.0, |elapsed| elapsed.as_secs_f64());
         let flight = Arc::new(Flight {
             id,
+            upstream: upstream.to_owned(),
             model: model.to_owned(),
             method: method.clone(),
             path: path.split('?').next().unwrap_or(path).to_owned(),
@@ -250,21 +264,21 @@ impl Flights {
     /// Count every flight, but only clone and inspect the oldest `limit`.
     /// Per-flight clocks are read after releasing the registry lock.
     pub fn snapshot(&self, limit: usize) -> Snapshot {
-        let (total, models, flights) = {
+        let (total, upstreams, flights) = {
             let map = self.map.lock().expect("flights");
-            let mut models = BTreeMap::new();
+            let mut upstreams = BTreeMap::new();
             for flight in map.values() {
-                *models.entry(flight.model.clone()).or_default() += 1;
+                *upstreams.entry(flight.upstream.clone()).or_default() += 1;
             }
             (
                 map.len() as u64,
-                models,
+                upstreams,
                 map.values().take(limit).cloned().collect::<Vec<_>>(),
             )
         };
         Snapshot {
             total,
-            models,
+            upstreams,
             flights: flights.iter().map(|flight| flight.view()).collect(),
         }
     }
@@ -277,8 +291,8 @@ mod tests {
     #[test]
     fn a_flight_moves_through_its_phases_and_leaves_once() {
         let flights = Flights::default();
-        let first = flights.begin("alpha", &Method::POST, "/v1/chat/completions?x=1", 10);
-        let empty = flights.begin("alpha", &Method::GET, "/v1/models", 0);
+        let first = flights.begin("alpha", "m", &Method::POST, "/v1/chat/completions?x=1", 10);
+        let empty = flights.begin("alpha", "", &Method::GET, "/v1/models", 0);
         assert_eq!((first.id(), empty.id()), (1, 2));
 
         let views = flights.views();

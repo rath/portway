@@ -24,7 +24,9 @@ use crate::forwarder::Coding;
 
 pub const SOCKET_FILE: &str = "portway.live.sock";
 const LOCK_FILE: &str = "portway.live.lock";
-const VERSION: u32 = 1;
+/// Bumped when a field of the snapshot changes meaning or name, so an older
+/// viewer says the live feed is unavailable rather than misreading it.
+pub const VERSION: u32 = 2;
 pub const MAX_FLIGHTS: usize = 200;
 const MAX_RESPONSE: usize = 1024 * 1024;
 const MAX_CLIENTS: usize = 8;
@@ -38,7 +40,8 @@ pub struct Snapshot {
     pub instance: String,
     pub listen: SocketAddr,
     pub total: u64,
-    pub models: BTreeMap<String, u64>,
+    /// In flight per route.
+    pub upstreams: BTreeMap<String, u64>,
     #[serde(with = "flight_list")]
     pub flights: Vec<FlightView>,
 }
@@ -48,6 +51,7 @@ pub struct Snapshot {
 #[serde(remote = "FlightView")]
 struct FlightData {
     id: u64,
+    upstream: String,
     model: String,
     #[serde(with = "method")]
     method: Method,
@@ -286,7 +290,7 @@ async fn send(
         instance,
         listen,
         total: snapshot.total,
-        models: snapshot.models,
+        upstreams: snapshot.upstreams,
         flights: snapshot.flights,
     };
     let mut bytes = Limited(Vec::new());
@@ -347,7 +351,7 @@ impl Snapshot {
                 .bytes()
                 .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
         let count = self
-            .models
+            .upstreams
             .values()
             .try_fold(0u64, |total, count| total.checked_add(*count));
         let mut previous = 0;
@@ -355,7 +359,7 @@ impl Snapshot {
         let valid_flights = self.flights.iter().all(|flight| {
             let ordered = flight.id > previous;
             previous = flight.id;
-            *listed.entry(&flight.model).or_default() += 1;
+            *listed.entry(&flight.upstream).or_default() += 1;
             ordered
                 && !flight.path.contains('?')
                 && [flight.started_unix, flight.age, flight.idle]
@@ -370,9 +374,11 @@ impl Snapshot {
             || count != Some(self.total)
             || self.flights.len() as u64 != self.total.min(MAX_FLIGHTS as u64)
             || !valid_flights
-            || listed
-                .iter()
-                .any(|(model, count)| self.models.get(*model).is_none_or(|total| total < count))
+            || listed.iter().any(|(upstream, count)| {
+                self.upstreams
+                    .get(*upstream)
+                    .is_none_or(|total| total < count)
+            })
         {
             return Err(io::Error::other("invalid or mismatched live snapshot"));
         }
@@ -501,15 +507,21 @@ mod tests {
         let dir = Dir::new("snapshot");
         let telemetry = Arc::new(Telemetry::default());
         let registry = telemetry.flights();
-        let first = registry.begin("alpha", &Method::POST, "/v1/messages?secret=hidden", 100);
+        let first = registry.begin(
+            "alpha",
+            "",
+            &Method::POST,
+            "/v1/messages?secret=hidden",
+            100,
+        );
         for _ in 0..204 {
-            registry.begin("beta", &Method::GET, "/v1/models", 0);
+            registry.begin("beta", "", &Method::GET, "/v1/models", 0);
         }
         let _server = Server::start(&dir.0, address(), Arc::clone(&telemetry)).unwrap();
         let read = fetch(&dir.0, &target()).await.unwrap();
         assert_eq!(read.total, 205);
         assert_eq!(
-            read.models,
+            read.upstreams,
             BTreeMap::from([("alpha".into(), 1), ("beta".into(), 204)])
         );
         assert_eq!(read.flights.len(), MAX_FLIGHTS);
@@ -536,7 +548,7 @@ mod tests {
         let read = fetch(&dir.0, &target()).await.unwrap();
         assert_eq!(read.total, 204);
         assert_eq!(read.flights[0].id, 2);
-        assert!(!read.models.contains_key("alpha"));
+        assert!(!read.upstreams.contains_key("alpha"));
     }
 
     async fn reply(dir: &Path, bytes: Vec<u8>) -> JoinHandle<()> {
@@ -608,7 +620,9 @@ mod tests {
     async fn client_clears_failures_reconnects_and_drops_old_instance_ids() {
         let dir = Dir::new("client");
         let telemetry = Arc::new(Telemetry::default());
-        telemetry.flights().begin("old", &Method::GET, "/old", 0);
+        telemetry
+            .flights()
+            .begin("old", "", &Method::GET, "/old", 0);
         let server = Server::start(&dir.0, address(), Arc::clone(&telemetry)).unwrap();
         let client = Client::start(dir.0.clone(), "127.0.0.1".into(), address().port());
         let mut receiver = client.snapshots();
@@ -617,11 +631,11 @@ mod tests {
         drop(server);
         assert!(changed(&mut receiver).await.is_none());
         let next = Arc::new(Telemetry::default());
-        next.flights().begin("new", &Method::GET, "/new", 0);
+        next.flights().begin("new", "", &Method::GET, "/new", 0);
         let _server = Server::start(&dir.0, address(), Arc::clone(&next)).unwrap();
         let second = changed(&mut receiver).await.unwrap();
         assert_ne!(first.instance, second.instance);
-        assert_eq!(second.flights[0].model, "new");
+        assert_eq!(second.flights[0].upstream, "new");
         assert_eq!(second.flights[0].id, 1);
         drop(client);
         assert_eq!(fetch(&dir.0, &target()).await.unwrap().total, 1);
@@ -634,7 +648,7 @@ mod tests {
         // This is larger than a Unix socket's send buffer, below the JSON cap.
         let flight = telemetry
             .flights()
-            .begin("alpha", &Method::GET, &"/".repeat(800_000), 0);
+            .begin("alpha", "", &Method::GET, &"/".repeat(800_000), 0);
         let _server = Server::start(&dir.0, address(), Arc::clone(&telemetry)).unwrap();
         let mut readers = Vec::new();
         for _ in 0..MAX_CLIENTS {
@@ -653,7 +667,7 @@ mod tests {
         }
         telemetry
             .flights()
-            .begin("huge", &Method::GET, &"/".repeat(MAX_RESPONSE + 1), 0);
+            .begin("huge", "", &Method::GET, &"/".repeat(MAX_RESPONSE + 1), 0);
         assert!(fetch(&dir.0, &target()).await.is_err());
     }
 }

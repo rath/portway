@@ -194,9 +194,11 @@ pub struct InFlight {
 }
 
 impl InFlight {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         stats: &Arc<Stats>,
         telemetry: &Arc<Telemetry>,
+        upstream: &str,
         model: &str,
         method: &Method,
         path: &str,
@@ -208,7 +210,7 @@ impl InFlight {
             telemetry: Arc::clone(telemetry),
             flight: telemetry
                 .flights()
-                .begin(model, method, path, body_len as u64),
+                .begin(upstream, model, method, path, body_len as u64),
         }
     }
 
@@ -278,7 +280,9 @@ pub struct Forwarder {
     max_body_bytes: usize,
     telemetry: Arc<Telemetry>,
     probe_path: Option<String>,
-    pub model: String,
+    /// The route's name: a mount, a model, or `upstream`. What its counters
+    /// and every request through it are recorded under.
+    pub name: String,
     upstream: Arc<Upstream>,
     coding: AtomicU8,
     want: CodingPreference,
@@ -333,14 +337,14 @@ impl Forwarder {
         )?);
         Ok(Arc::new(Self::new(name, upstream, config)))
     }
-    pub(crate) fn new(model: &str, upstream: Arc<Upstream>, args: &ForwarderConfig) -> Self {
+    pub(crate) fn new(name: &str, upstream: Arc<Upstream>, args: &ForwarderConfig) -> Self {
         Forwarder {
             origin_auto: args.origin_compression.mode == OriginCompressionMode::Auto,
             origin: RwLock::new(Arc::default()),
             max_body_bytes: args.max_body_bytes,
             telemetry: Arc::clone(&args.telemetry),
             probe_path: args.probe_path.clone(),
-            model: model.to_string(),
+            name: name.to_string(),
             upstream,
             coding: AtomicU8::new(Coding::None as u8),
             want: args.coding,
@@ -527,12 +531,12 @@ impl Forwarder {
             self.telemetry.warn(&format!(
                 "{}: upstream accepts {seen}, wanted {want}: request bodies go \
                  UNCOMPRESSED (connection reuse and response compression still apply)",
-                self.model
+                self.name
             ));
         } else {
             self.telemetry.info(&format!(
                 "{}: request bodies >= {} bytes -> {}{}",
-                self.model,
+                self.name,
                 self.min_bytes,
                 coding.name().unwrap_or("identity"),
                 if dict {
@@ -774,6 +778,7 @@ impl Forwarder {
             .get::<dict::DictionaryScope>()
             .cloned()
             .unwrap_or_else(|| dict::DictionaryScope::from_headers(&parts.headers));
+        let model = crate::router::named_model(&parts.headers, &body);
         self.handle_scoped(
             parts.method,
             path_and_query,
@@ -781,6 +786,7 @@ impl Forwarder {
             parts.headers,
             body,
             scope,
+            model,
         )
         .await
     }
@@ -794,9 +800,21 @@ impl Forwarder {
         body: Bytes,
     ) -> Response<OutBody> {
         let scope = dict::DictionaryScope::from_headers(&client_headers);
-        self.handle_scoped(method, path_and_query, path, client_headers, body, scope)
-            .await
+        let model = crate::router::named_model(&client_headers, &body);
+        self.handle_scoped(
+            method,
+            path_and_query,
+            path,
+            client_headers,
+            body,
+            scope,
+            model,
+        )
+        .await
     }
+    /// `model` is what the request is recorded as asking for — the string
+    /// `model` of its JSON body, as `router::named_model` reads it — and has
+    /// no part in where it goes: that was decided before this call.
     #[allow(clippy::too_many_arguments)]
     pub async fn handle_scoped(
         self: &Arc<Self>,
@@ -806,6 +824,7 @@ impl Forwarder {
         client_headers: HeaderMap,
         body: Bytes,
         scope: dict::DictionaryScope,
+        model: Option<String>,
     ) -> Response<OutBody> {
         if body.len() > self.max_body_bytes {
             return json_response(
@@ -885,10 +904,12 @@ impl Forwarder {
             }
         }
         self.stats.requests.fetch_add(1, Ordering::Relaxed);
+        let model = model.unwrap_or_default();
         let in_flight = InFlight::new(
             &self.stats,
             &self.telemetry,
-            &self.model,
+            &self.name,
+            &model,
             &method,
             &path,
             body.len(),
@@ -917,7 +938,7 @@ impl Forwarder {
             if coding != Coding::None && matches!(response.status().as_u16(), 400 | 415) {
                 self.telemetry.warn(&format!(
                     "origin {}: {} rejected {}; compression suspended for 600s",
-                    self.model,
+                    self.name,
                     response.status().as_u16(),
                     coding.name().unwrap_or("identity")
                 ));
@@ -1201,7 +1222,8 @@ impl Forwarder {
         }
 
         let log = RequestLog::new(
-            self.model.clone(),
+            self.name.clone(),
+            model,
             method,
             path,
             parts.status.as_u16(),
@@ -1251,7 +1273,7 @@ impl Forwarder {
             if self.dict.load(Ordering::Relaxed) {
                 self.telemetry.warn(&format!(
                     "{}: the upstream stored a different body than was sent: dictionaries OFF",
-                    self.model
+                    self.name
                 ));
                 self.dict_off(CompressionIssue::HashMismatch);
             }

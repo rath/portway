@@ -27,6 +27,7 @@ pub const READ_TIMEOUT: Duration = Duration::from_secs(600);
 /// including when the agent disconnects mid-stream.
 pub struct RequestLog {
     telemetry: Arc<Telemetry>,
+    upstream: String,
     model: String,
     method: Method,
     path: String,
@@ -58,6 +59,7 @@ pub struct RequestLog {
 impl RequestLog {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
+        upstream: String,
         model: String,
         method: Method,
         path: String,
@@ -75,6 +77,7 @@ impl RequestLog {
     ) -> Self {
         RequestLog {
             telemetry,
+            upstream,
             model,
             method,
             path,
@@ -101,6 +104,7 @@ impl RequestLog {
     fn record(&self) -> RequestRecord {
         RequestRecord {
             stamp: time::stamp(),
+            upstream: self.upstream.clone(),
             model: self.model.clone(),
             method: self.method.clone(),
             path: self.path.clone(),
@@ -395,10 +399,11 @@ mod tests {
             })
         });
         let stats = Arc::new(Stats::default());
-        let in_flight = InFlight::new(&stats, &telemetry, "alpha", &Method::POST, "/v1/x", 3);
+        let in_flight = InFlight::new(&stats, &telemetry, "alpha", "", &Method::POST, "/v1/x", 3);
         let id = in_flight.flight().id();
         let log = RequestLog::new(
             "alpha".into(),
+            String::new(),
             Method::POST,
             "/v1/x".into(),
             200,

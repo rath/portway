@@ -30,6 +30,11 @@ impl Level {
 pub struct RequestRecord {
     /// Local `HH:MM:SS` of the moment the relay ended.
     pub stamp: String,
+    /// The route the request went through: a mount's name, a model's name,
+    /// or `upstream` in single-upstream mode.
+    pub upstream: String,
+    /// The model the request named in its JSON body; empty when it named
+    /// none, such as a catalog or health request. Prices are keyed by it.
     pub model: String,
     pub method: Method,
     pub path: String,

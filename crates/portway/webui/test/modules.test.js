@@ -13,7 +13,7 @@ import { MONOCHROME, THEMES, TOKENS, contrast, css, deltaE, resolve } from "../s
 
 const request = (overrides = {}) => ({
   seq: 1, kind: "request", ts: 1727000000, stamp: "12:34:56",
-  model: "model-alpha", method: "POST", path: "/v1/chat/completions",
+  upstream: "model-alpha", model: "model-alpha", method: "POST", path: "/v1/chat/completions",
   route: "POST ../completions", route_known: true, status: 200,
   dns: null, tcp: null, tls: null, reused: true, handshake: null,
   body_len: 471859, wire_len: 113246, coding: "zstd", upload: 0.012, ttfb: 0.84,
@@ -166,7 +166,7 @@ test("search terms, phrases and negation", () => {
   assert.deepEqual(tokenize('route:"a b" http://x').map((t) => t.text), ["route:a b", "http://x"]);
 });
 
-test("the cycle filter walks all, trouble, then each model", () => {
+test("the cycle filter walks all, trouble, then each upstream", () => {
   assert.equal(nextMode("all", ["a", "b"]), "trouble");
   assert.equal(nextMode("trouble", ["a", "b"]), "a");
   assert.equal(nextMode("a", ["a", "b"]), "b");
@@ -174,6 +174,9 @@ test("the cycle filter walks all, trouble, then each model", () => {
   assert.equal(nextMode("trouble", []), "all");
   assert.ok(modeAccepts("model-alpha", request()));
   assert.ok(!modeAccepts("model-alpha", log()));
+  // The mode is the upstream's name, which is the model's only under [models].
+  assert.ok(modeAccepts("codex", request({ upstream: "codex", model: "gpt-x" })));
+  assert.ok(!modeAccepts("gpt-x", request({ upstream: "codex", model: "gpt-x" })));
 });
 
 test("the store evicts, filters and resumes without duplicates", () => {

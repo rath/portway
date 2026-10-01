@@ -18,6 +18,7 @@ use portway::forwarder::Coding;
 use portway::logfmt::Level;
 use portway::telemetry::{self, Event, RequestRecord, Sinks};
 use portway::usage::Usage;
+use std::sync::Arc;
 
 static EVENTS: OnceLock<Mutex<Receiver<Event>>> = OnceLock::new();
 static SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -204,4 +205,54 @@ async fn log_records_go_to_the_sink_instead_of_stderr() {
         })
         .expect("the failed probe warns through the sink");
     assert!(warning.contains("/health.request_encodings"), "{warning}");
+}
+
+/// The record keeps the route and the model apart: the route is where the
+/// request went, the model is what its body asked for. Under a single
+/// upstream the route is `upstream` and the model is still the model, so a
+/// price table keyed by model name applies; under a mount a request that
+/// names no model records none.
+#[tokio::test]
+async fn a_record_names_its_route_and_the_model_the_body_asked_for() {
+    let _serial = sink().await;
+    let up = upstream(Health::JsonBare, Reply::Ok).await;
+
+    let fwd = common::single(&up.base, &[]).await;
+    fwd.post("/v1/messages", chat_body("claude-3")).await;
+    let record = next_request().await;
+    assert_eq!(
+        (record.upstream.as_str(), record.model.as_str()),
+        ("upstream", "claude-3")
+    );
+
+    let fwd = common::router(&[("codex", &up.base)], &[("model-alpha", &up.base)], &[]).await;
+    fwd.post("/codex/responses", chat_body("gpt-x")).await;
+    let record = next_request().await;
+    assert_eq!(
+        (record.upstream.as_str(), record.model.as_str()),
+        ("codex", "gpt-x")
+    );
+    fwd.get("/codex/models?client_version=1").await;
+    let record = next_request().await;
+    assert_eq!(
+        (record.upstream.as_str(), record.model.as_str()),
+        ("codex", "")
+    );
+    assert_eq!(record.path, "/models");
+    fwd.post("/v1/chat/completions", chat_body("model-alpha"))
+        .await;
+    let record = next_request().await;
+    assert_eq!(
+        (record.upstream.as_str(), record.model.as_str()),
+        ("model-alpha", "model-alpha")
+    );
+    let flights = Arc::new(portway::flights::Flights::default());
+    let flight = flights.begin("codex", "gpt-x", &http::Method::POST, "/responses", 1);
+    assert_eq!(
+        (
+            flight.view().upstream.as_str(),
+            flight.view().model.as_str()
+        ),
+        ("codex", "gpt-x")
+    );
 }

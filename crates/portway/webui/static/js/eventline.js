@@ -12,7 +12,7 @@ export const COLUMNS = [
   { name: "time", note: "when the relay ended" },
   { name: "status", note: "the code the agent got" },
   { name: "cut", note: "✂ on a relay cut short" },
-  { name: "model", note: "the upstream the turn went to" },
+  { name: "model", note: "the model the turn named; - when it named none" },
   { name: "route", note: "method, full path, and the dial time of a fresh connection" },
   { name: "sizes", note: "request body raw and on the wire, saved, ↑ time" },
   { name: "ttfb", note: "first byte of the answer" },
@@ -89,7 +89,7 @@ export function requestLine(event, columns) {
         if (!event.complete) line.glue("✂", "time");
         break;
       case "model":
-        line.word(event.model, "model");
+        line.word(event.model || "-", "model");
         break;
       case "route":
         line.word(event.route, event.route_known ? "dim" : "bold");
@@ -159,7 +159,8 @@ export function detailFields(event) {
   const usage = event.usage;
   return [
     ["when", event.stamp],
-    ["model", event.model],
+    ["upstream", event.upstream],
+    ["model", event.model || "-"],
     ["request", `${event.method} ${event.path} -> ${event.status}`],
     ["connection", event.handshake == null
       ? "reused from the pool"

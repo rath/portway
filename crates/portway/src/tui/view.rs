@@ -232,6 +232,23 @@ fn flight_route(flight: &FlightView) -> String {
     format!("{} {}", flight.method, flight.path)
 }
 
+/// A request that named no model — a catalog, a health check — shows a dash
+/// where the name would be, rather than a gap that reads as a missing cell.
+pub fn shown_model(model: &str) -> &str {
+    if model.is_empty() { "-" } else { model }
+}
+
+/// What a flight is called in the dialog: the model it asked for, or the
+/// upstream it is going to when it asked for none. The dialog has one name
+/// column and no detail view, so the most specific name takes it.
+fn flight_name(flight: &FlightView) -> &str {
+    if flight.model.is_empty() {
+        &flight.upstream
+    } else {
+        &flight.model
+    }
+}
+
 /// `text` in `width` columns, ending in an ellipsis when it did not fit: a
 /// route cut short otherwise reads as a different, shorter route.
 fn clipped(text: &str, width: u16) -> String {
@@ -405,7 +422,7 @@ impl FlightColumns {
                 .unwrap_or(0) as u16
         };
         let mut spare = room.saturating_sub(columns.width());
-        let grow = longest(|flight| flight.model.clone())
+        let grow = longest(|flight| flight_name(flight).to_string())
             .min(FLIGHTS_MODEL.1)
             .saturating_sub(columns.model)
             .min(spare);
@@ -467,7 +484,7 @@ fn flights_table(flights: &[FlightView], columns: &FlightColumns) -> Table<'stat
         let (phase, shade) = flight_phase(flight);
         let mut cells = vec![
             Cell::from(Span::styled(
-                clipped(&flight.model, columns.model),
+                clipped(flight_name(flight), columns.model),
                 Style::default().fg(MODEL),
             )),
             Cell::from(Span::styled(phase, Style::default().fg(shade))),
@@ -578,7 +595,11 @@ fn hud<'a>(state: &State, header: &'a Header) -> Paragraph<'a> {
             None => title.extend(stat("coding", header.coding.clone(), GOOD)),
         }
     }
-    title.extend(stat("models", state.models.len().to_string(), Color::Reset));
+    title.extend(stat(
+        "upstreams",
+        state.models.len().to_string(),
+        Color::Reset,
+    ));
 
     let reuse = match (state.reused * 100).checked_div(state.seen) {
         Some(share) => format!("{share}%"),
@@ -763,7 +784,7 @@ const STATUS_TABLE: u16 = 136;
 fn models_table(state: &State, width: u16) -> Table<'_> {
     let roomy = width >= ROOMY_TABLE;
     let show_status = width >= STATUS_TABLE;
-    let mut names = vec!["model", "coding", "reqs", "live", "raw", "wire", "saved"];
+    let mut names = vec!["upstream", "coding", "reqs", "live", "raw", "wire", "saved"];
     if roomy {
         names.extend(["down", "idle", "err", "abort"]);
     }
@@ -773,7 +794,7 @@ fn models_table(state: &State, width: u16) -> Table<'_> {
     let header = Row::new(names).style(Style::default().fg(DIM));
 
     let models = state.recent_models();
-    let title = format!("recent models · {}/{}", models.len(), state.models.len());
+    let title = format!("recent upstreams · {}/{}", models.len(), state.models.len());
     let rows = models.into_iter().map(|row| {
         let view = &row.view;
         let errors = view.upstream_errors;
@@ -1407,7 +1428,7 @@ fn request_line(record: &RequestRecord, columns: Columns) -> Line<'static> {
             }
             Column::Model => {
                 line.word(Span::styled(
-                    record.model.clone(),
+                    shown_model(&record.model).to_string(),
                     Style::default().fg(MODEL),
                 ));
             }
@@ -1621,7 +1642,7 @@ fn footer(state: &State) -> Paragraph<'static> {
         ("↵", "detail"),
         ("f", "flights"),
         ("e", "trouble"),
-        ("m", "model"),
+        ("m", "upstream"),
         ("u", "usage"),
         ("t", "buckets"),
         ("c", "columns"),
@@ -1705,7 +1726,8 @@ fn detail_lines(record: &RequestRecord) -> Vec<Line<'static>> {
     };
     vec![
         field("when", record.stamp.clone()),
-        field("model", record.model.clone()),
+        field("upstream", record.upstream.clone()),
+        field("model", shown_model(&record.model).to_string()),
         field(
             "request",
             format!("{} {} -> {}", record.method, record.path, record.status),
@@ -1792,7 +1814,7 @@ fn help_lines() -> Vec<Line<'static>> {
         ("Enter", "details of the highlighted request"),
         ("f", "requests in flight, live"),
         ("e", "only 4xx/5xx, cut streams and warnings"),
-        ("m", "cycle the model filter"),
+        ("m", "cycle the upstream filter"),
         ("u", "tokens and cost per model, by window"),
         ("t", "1s / 10s / 60s traffic buckets"),
         ("c", "choose what a request line shows"),
@@ -1822,6 +1844,7 @@ mod tests {
     fn record(model: &str, status: u16) -> RequestRecord {
         RequestRecord {
             stamp: "23:41:02".to_string(),
+            upstream: model.to_string(),
             model: model.to_string(),
             method: http::Method::POST,
             path: "/v1/chat/completions".to_string(),
@@ -1916,6 +1939,7 @@ mod tests {
         let registry = router.telemetry().flights();
         let flight = registry.begin(
             "alpha",
+            "",
             &http::Method::POST,
             "/v1/messages?secret=hidden",
             100,
@@ -1970,7 +1994,7 @@ mod tests {
         assert!(state.flights.is_empty());
 
         // Cancellation has no completion record; the next sample removes it.
-        let cancelled = registry.begin("alpha", &http::Method::GET, "/v1/models", 0);
+        let cancelled = registry.begin("alpha", "", &http::Method::GET, "/v1/models", 0);
         state.tick(&router);
         assert_eq!(state.flights.len(), 1);
         registry.end(cancelled.id());
@@ -1987,6 +2011,7 @@ mod tests {
         for index in 0..8 {
             registry.begin(
                 &format!("live-{index}"),
+                "",
                 &http::Method::POST,
                 "/v1/messages",
                 100,
@@ -2106,6 +2131,7 @@ mod tests {
         for index in 0..20 {
             registry.begin(
                 &format!("live-{index}"),
+                "",
                 &http::Method::POST,
                 "/v1/messages",
                 100,
@@ -2185,15 +2211,15 @@ mod tests {
         let bytes = state.totals.body_bytes;
         let registry = crate::flights::Flights::default();
         for _ in 0..205 {
-            registry.begin("alpha", &http::Method::GET, "/v1/models", 0);
+            registry.begin("alpha", "", &http::Method::GET, "/v1/models", 0);
         }
         let bounded = registry.snapshot(crate::live::MAX_FLIGHTS);
         let mut snapshot = crate::live::Snapshot {
-            version: 1,
+            version: crate::live::VERSION,
             instance: "a".repeat(32),
             listen: "127.0.0.1:8789".parse().unwrap(),
             total: bounded.total,
-            models: bounded.models,
+            upstreams: bounded.upstreams,
             flights: bounded.flights,
         };
         state.apply_live(Some(&snapshot));
@@ -2230,7 +2256,7 @@ mod tests {
 
         snapshot.instance = "b".repeat(32);
         snapshot.total = 0;
-        snapshot.models.clear();
+        snapshot.upstreams.clear();
         snapshot.flights.clear();
         state.apply_live(Some(&snapshot));
         let out = screen(140, 44, &state);
@@ -2242,7 +2268,7 @@ mod tests {
     #[test]
     fn flights_flag_slow_prefill_and_stalled_streams_at_the_web_thresholds() {
         let registry = crate::flights::Flights::default();
-        let flight = registry.begin("alpha", &http::Method::GET, "/v1/models", 0);
+        let flight = registry.begin("alpha", "", &http::Method::GET, "/v1/models", 0);
         let mut view = flight.view();
         view.age = 30.0;
         assert_eq!(flight_phase(&view).0, "prefill");
@@ -2282,7 +2308,7 @@ mod tests {
     fn table_header(screen: &str) -> String {
         screen
             .lines()
-            .find(|line| line.starts_with("│ model"))
+            .find(|line| line.starts_with("│ upstream"))
             .unwrap_or_default()
             .trim_end_matches(['│', ' '])
             .to_string()
@@ -2408,7 +2434,7 @@ mod tests {
             });
         }
         assert!(state.recent_models().is_empty());
-        assert!(!screen(100, 24, &state).contains("recent models"));
+        assert!(!screen(100, 24, &state).contains("recent upstreams"));
         for n in [9, 2, 7, 4, 7] {
             state.push(Event::Request(Arc::new(record(
                 &format!("model-{n:02}"),
@@ -2425,11 +2451,11 @@ mod tests {
         assert_eq!(names(&state), ["model-07", "model-04", "model-02"]);
         state.models[10].view.in_flight = 1;
         assert_eq!(names(&state), ["model-10", "model-07", "model-04"]);
-        state.set_filter(crate::tui::state::Filter::Model("model-02".into()));
+        state.set_filter(crate::tui::state::Filter::Upstream("model-02".into()));
         assert_eq!(names(&state), ["model-10", "model-07", "model-04"]);
         for width in [78, 140] {
             let out = screen(width, 24, &state);
-            assert!(out.contains("recent models · 3/11"), "{out}");
+            assert!(out.contains("recent upstreams · 3/11"), "{out}");
             assert!(out.contains("socket bytes/s"), "{out}");
             let panes = panes(Rect::new(0, 0, width, 24), state.recent_models().len()).unwrap();
             assert_eq!(panes.models.unwrap().height, 6);
@@ -2520,7 +2546,7 @@ mod tests {
         );
 
         let medium = screen(140, 14, &state);
-        assert!(medium.contains("models"), "{medium}");
+        assert!(medium.contains("upstreams"), "{medium}");
         assert!(!medium.contains("socket bytes/s"), "{medium}");
 
         // Narrow: the tail columns go so the model names stay whole.
@@ -2607,7 +2633,7 @@ mod tests {
         let mut state = populated();
         state.help = true;
         let out = screen(140, 44, &state);
-        assert!(out.contains("cycle the model filter"), "{out}");
+        assert!(out.contains("cycle the upstream filter"), "{out}");
         assert!(out.contains("requests in flight, live"), "{out}");
 
         state.help = false;

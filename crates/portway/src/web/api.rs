@@ -43,6 +43,7 @@ fn request(seq: u64, ts: f64, record: &RequestRecord) -> Value {
         "kind": "request",
         "ts": ts,
         "stamp": record.stamp,
+        "upstream": record.upstream,
         "model": record.model,
         "method": record.method.as_str(),
         "path": record.path.split('?').next().unwrap_or(&record.path),
@@ -81,6 +82,7 @@ pub fn flight(view: &FlightView) -> Value {
     let (route, known) = board::route(&view.method, &view.path);
     json!({
         "id": view.id,
+        "upstream": view.upstream,
         "model": view.model,
         "method": view.method.as_str(),
         "path": view.path,

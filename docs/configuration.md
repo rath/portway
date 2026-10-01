@@ -277,9 +277,15 @@ cache_read = 0.1
 ```
 
 All three price fields are required together and must be finite, nonnegative
-numbers. Names match **recorded route names**. In single-upstream mode the route
-is always `upstream`, regardless of any JSON `model`, so use `[prices.upstream]`.
-A price entry can also describe a historical route no longer being served.
+numbers. Names match the **model the request named** — the string `model` of
+its JSON body — whatever route it went through: under `upstream = "…"` or a
+mount, a request for `claude-opus-5-5` is priced by `[prices."claude-opus-5-5"]`.
+A request that names no model (a catalog, a health check) is recorded with an
+empty model and stays unpriced. Each record also keeps the route it went
+through (`upstream`, a mount's name, or a model's name), which is what the
+dashboards' upstream tables and filters use; the two coincide only under a
+`[models]` table. Rows recorded before this distinction carry their route name
+as the model.
 
 Missing prices remain unpriced. Token usage also depends on what the upstream
 reports; a price table cannot fill in missing usage. TUI estimates use the
@@ -465,7 +471,7 @@ Choose mode and operations with CLI arguments:
 | `--web-allow-host NAME` | A name the console answers to besides `localhost` and IP addresses; repeat or separate with commas. `--web-host` counts when it is a name |
 | `--no-open` | Print the console's link without opening it in the default browser |
 | `--report --since SPAN` | Read a report; default window is 24h |
-| `--model NAME` | Filter a report by recorded route name |
+| `--model NAME` | Filter a report by the model requests named |
 | `--retention-days N` | Delete older rows at startup and daily; default `0` keeps all rows |
 
 `SPAN` accepts a positive integer followed by `s`, `m`, `h`, or `d`, such as

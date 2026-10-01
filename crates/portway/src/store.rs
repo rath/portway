@@ -36,7 +36,7 @@ const QUEUE: usize = 4096;
 const POLL: Duration = Duration::from_millis(200);
 const PRUNE_EVERY: Duration = Duration::from_secs(24 * 60 * 60);
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
 
 /// `ts_unix` is the epoch second the row reached the store, not the request's
 /// own clock: the writer's clock is the one the window is measured against.
@@ -71,7 +71,8 @@ CREATE TABLE IF NOT EXISTS requests (
   cached_tokens INTEGER,
   completion_tokens INTEGER,
   reasoning_tokens INTEGER,
-  received_agent INTEGER NOT NULL DEFAULT 0
+  received_agent INTEGER NOT NULL DEFAULT 0,
+  upstream TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS requests_ts ON requests(ts_unix);
 CREATE TABLE IF NOT EXISTS logs (
@@ -100,12 +101,22 @@ const MIGRATE_V2: &str = "
 ALTER TABLE requests ADD COLUMN received_agent INTEGER NOT NULL DEFAULT 0;
 ";
 
+/// v3 -> v4: the route apart from the model. Until here `model` held the
+/// route's name — `upstream` in single-upstream mode, whatever the request
+/// asked for — so the old column is copied into the new one, and `model`
+/// keeps what it had: for a `[models]` route that is the model, and for a
+/// single upstream it is the word `upstream`, which no later row repeats.
+const MIGRATE_V3: &str = "
+ALTER TABLE requests ADD COLUMN upstream TEXT NOT NULL DEFAULT '';
+UPDATE requests SET upstream = model;
+";
+
 const INSERT_REQUEST: &str = "INSERT INTO requests (
   ts_unix, model, method, path, status, dns_ms, tcp_ms, tls_ms, body_len,
   wire_len, coding, upload_ms, ttfb_ms, received, received_wire,
   upstream_encoding, download_ms, complete, prompt_tokens, cached_tokens,
-  completion_tokens, reasoning_tokens, received_agent
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+  completion_tokens, reasoning_tokens, received_agent, upstream
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
 const INSERT_LOG: &str = "INSERT INTO logs (ts_unix, level, message) VALUES (?, ?, ?)";
 
@@ -252,8 +263,9 @@ fn open_create(db: &Path) -> Result<Connection, String> {
             .map_err(|err| format!("{}: {err}", db.display()))?;
         let steps = match version {
             0 => SCHEMA.to_string(),
-            1 => format!("{MIGRATE_V1}{MIGRATE_V2}"),
-            _ => MIGRATE_V2.to_string(),
+            1 => format!("{MIGRATE_V1}{MIGRATE_V2}{MIGRATE_V3}"),
+            2 => format!("{MIGRATE_V2}{MIGRATE_V3}"),
+            _ => MIGRATE_V3.to_string(),
         };
         tx.execute_batch(&steps)
             .map_err(|err| format!("{}: {err}", db.display()))?;
@@ -313,6 +325,13 @@ pub fn has_token_columns(connection: &Connection) -> Result<bool, String> {
 pub fn has_agent_column(connection: &Connection) -> Result<bool, String> {
     const AGENT_SINCE: i64 = 3;
     Ok(schema_version(connection)? >= AGENT_SINCE)
+}
+
+/// Whether the file keeps the route apart from the model. A reader of an
+/// older file takes `model` for both, which is what that column was.
+pub fn has_upstream_column(connection: &Connection) -> Result<bool, String> {
+    const UPSTREAM_SINCE: i64 = 4;
+    Ok(schema_version(connection)? >= UPSTREAM_SINCE)
 }
 
 /// The writer thread. Nothing here is allowed to end the process: a disk that
@@ -407,6 +426,7 @@ fn insert(tx: &Transaction<'_>, batch: &[Event]) -> rusqlite::Result<()> {
                         .and_then(|usage| usage.reasoning)
                         .map(|r| r as i64),
                     record.received_agent as i64,
+                    record.upstream,
                 ])?;
             }
             Event::Log { level, message, .. } => {
@@ -470,6 +490,7 @@ mod tests {
     fn record(status: u16, complete: bool) -> RequestRecord {
         RequestRecord {
             stamp: "23:41:02".to_string(),
+            upstream: "model-alpha".to_string(),
             model: "model-alpha".to_string(),
             method: Method::POST,
             path: "/v1/chat/completions".to_string(),
@@ -783,6 +804,18 @@ mod tests {
             )
             .unwrap();
         assert_eq!(agent, (0, 40));
+
+        // And the v4 column: the old row's route is the name its model
+        // column held, the new row's is what the forwarder said.
+        let upstream: (String, String) = db
+            .query_row(
+                "SELECT (SELECT upstream FROM requests WHERE model = 'model-zeta'),
+                        (SELECT upstream FROM requests WHERE model = 'model-alpha')",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(upstream, ("model-zeta".into(), "model-alpha".into()));
     }
 
     #[test]
