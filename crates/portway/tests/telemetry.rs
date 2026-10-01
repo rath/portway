@@ -256,3 +256,34 @@ async fn a_record_names_its_route_and_the_model_the_body_asked_for() {
         ("codex", "gpt-x")
     );
 }
+
+/// An agent that stops reading at the answer's last event — Codex closes on
+/// `response.completed` — leaves the upstream's EOF unread. The relay reads
+/// on for a moment, so the answer is recorded whole, with its usage, and its
+/// connection goes back to the pool. One whose body stays open past that
+/// grace is cut, as an abort is.
+#[tokio::test]
+async fn an_answer_the_agent_stopped_reading_at_its_last_event_is_still_whole() {
+    let _serial = sink().await;
+    let up = upstream(Health::JsonBare, Reply::UsageStreamLingers(100)).await;
+    let fwd = forwarder(&[("model-alpha", &up.base)], &[]).await;
+    let after_probe = up.connections();
+    fwd.read_then_abort("/v1/chat/completions", chat_body("model-alpha"), 1)
+        .await;
+    let record = next_request().await;
+    assert!(record.complete, "{record:?}");
+    assert_eq!(record.usage.map(|usage| usage.prompt), Some(USAGE_PROMPT));
+    // Read to its end, the connection is pooled: the next request dials nothing.
+    fwd.post("/v1/chat/completions", chat_body("model-alpha"))
+        .await;
+    let _ = next_request().await;
+    assert_eq!(up.connections(), after_probe);
+
+    let up = upstream(Health::JsonBare, Reply::UsageStreamLingers(2_000)).await;
+    let fwd = forwarder(&[("model-alpha", &up.base)], &[]).await;
+    fwd.read_then_abort("/v1/chat/completions", chat_body("model-alpha"), 1)
+        .await;
+    let record = next_request().await;
+    assert!(!record.complete, "{record:?}");
+    assert!(record.usage.is_none(), "{record:?}");
+}

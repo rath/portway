@@ -80,6 +80,10 @@ pub enum Reply {
     /// An SSE answer that ends with the no-choices chunk that carries it, the
     /// way `stream_options.include_usage` is answered.
     UsageStream,
+    /// The same answer in one frame, with the body's end held back for this
+    /// many milliseconds: the last chunk and the EOF in separate segments,
+    /// as a server delivers them.
+    UsageStreamLingers(u64),
 }
 
 /// The counts both usage replies report, so a test can expect one set of
@@ -429,6 +433,13 @@ async fn respond(
             .status(200)
             .header("content-type", "text/event-stream")
             .body(boxed(usage_stream()))
+            .unwrap(),
+        Reply::UsageStreamLingers(hold) => Response::builder()
+            .status(200)
+            .header("content-type", "text/event-stream")
+            .body(
+                stream::Linger::new(usage_stream(), std::time::Duration::from_millis(hold)).boxed(),
+            )
             .unwrap(),
         Reply::UsageJson => Response::builder()
             .status(200)
@@ -883,6 +894,39 @@ mod stream {
     impl Drop for Endless {
         fn drop(&mut self) {
             *self.aborted.lock().unwrap() = true;
+        }
+    }
+
+    /// One frame, then the body stays open for `hold` before it ends.
+    pub struct Linger {
+        payload: Option<Bytes>,
+        until: Pin<Box<tokio::time::Sleep>>,
+    }
+
+    impl Linger {
+        pub fn new(payload: Bytes, hold: Duration) -> Self {
+            Linger {
+                payload: Some(payload),
+                until: Box::pin(tokio::time::sleep(hold)),
+            }
+        }
+    }
+
+    impl Body for Linger {
+        type Data = Bytes;
+        type Error = Infallible;
+
+        fn poll_frame(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+        ) -> Poll<Option<Result<Frame<Bytes>, Infallible>>> {
+            if let Some(payload) = self.payload.take() {
+                return Poll::Ready(Some(Ok(Frame::data(payload))));
+            }
+            if self.until.as_mut().poll(cx).is_pending() {
+                return Poll::Pending;
+            }
+            Poll::Ready(None)
         }
     }
 }

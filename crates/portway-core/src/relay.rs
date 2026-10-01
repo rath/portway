@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use bytes::Bytes;
 use http::{HeaderName, HeaderValue, Method, Response, StatusCode};
 use http_body::{Body, Frame, SizeHint};
+use http_body_util::BodyExt;
 use hyper::body::Incoming;
 
 use crate::body::{Decoder, Encoder};
@@ -22,6 +23,16 @@ use crate::usage::{self, Usage};
 
 /// One SSE gap may span a whole long prefill.
 pub const READ_TIMEOUT: Duration = Duration::from_secs(600);
+
+/// How much longer, and how much more, the upstream is read once the agent
+/// has gone. An agent that stops reading at the answer's last event — Codex
+/// closes on `response.completed` — leaves the EOF unread, which would make
+/// a finished answer a cut one: no usage, and a connection that cannot be
+/// pooled. Reading on for a moment lets that answer end on its own. One the
+/// agent cut short keeps streaming past the grace and is dropped as before,
+/// which is what makes the engine stop.
+const GRACE: Duration = Duration::from_millis(250);
+const GRACE_BYTES: u64 = 64 << 10;
 
 /// Everything the one-line request log needs, rendered when the relay ends —
 /// including when the agent disconnects mid-stream.
@@ -156,9 +167,10 @@ impl Drop for RequestLog {
 
 /// Streams the upstream response to the agent, decoding as it goes.
 ///
-/// Dropping this — which is what an agent disconnect does — drops the upstream
-/// body, and hyper then closes that HTTP/1.1 connection. That disconnect is
-/// what makes the engine abort the generation.
+/// Dropping this — which is what an agent disconnect does — hands the
+/// upstream body to a short grace read (`GRACE`); past that it is dropped,
+/// and hyper then closes that HTTP/1.1 connection. That disconnect is what
+/// makes the engine abort the generation.
 pub struct RelayBody {
     upstream: Option<Incoming>,
     decoder: Decoder,
@@ -213,6 +225,85 @@ impl RelayBody {
         }
         log.report_progress();
     }
+}
+
+impl Drop for RelayBody {
+    fn drop(&mut self) {
+        // `finish` has already taken the body of an answer that ended, failed
+        // or timed out; what is left here is an answer the agent walked out on.
+        let Some(upstream) = self.upstream.take() else {
+            return;
+        };
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        runtime.spawn(drain(
+            upstream,
+            std::mem::replace(&mut self.decoder, Decoder::identity()),
+            std::mem::take(&mut self.usage),
+            self.lease.take(),
+            self.log.take(),
+        ));
+    }
+}
+
+/// Read the rest of an answer the agent stopped reading, for at most `GRACE`
+/// and `GRACE_BYTES`. An answer that ends within them is recorded as complete,
+/// with the usage its last chunk carried, and its connection is pooled; one
+/// that does not is dropped here, cut, as the agent's disconnect would have
+/// dropped it at once.
+async fn drain(
+    mut upstream: Incoming,
+    mut decoder: Decoder,
+    mut usage: usage::Scanner,
+    mut lease: Option<Lease>,
+    mut log: Option<RequestLog>,
+) {
+    let rest = async {
+        let mut wire = 0u64;
+        while let Some(frame) = upstream.frame().await {
+            let Ok(frame) = frame else { return false };
+            let Ok(data) = frame.into_data() else {
+                continue;
+            };
+            wire += data.len() as u64;
+            if wire > GRACE_BYTES {
+                return false;
+            }
+            if let Some(log) = log.as_mut() {
+                log.received_wire += data.len() as u64;
+                log.stats
+                    .down_wire_bytes
+                    .fetch_add(data.len() as u64, Ordering::Relaxed);
+            }
+            let Ok(decoded) = decoder.push(data) else {
+                return false;
+            };
+            usage.push(&decoded);
+            if let Some(log) = log.as_mut() {
+                log.received += decoded.len() as u64;
+                log.stats
+                    .down_bytes
+                    .fetch_add(decoded.len() as u64, Ordering::Relaxed);
+            }
+        }
+        true
+    };
+    let ended = tokio::time::timeout(GRACE, rest).await.unwrap_or(false);
+    if ended {
+        if let Some(log) = log.as_mut() {
+            log.complete = true;
+            log.usage = usage.usage();
+        }
+        if let Some(lease) = lease.as_mut() {
+            lease.release();
+        }
+    }
+    // The connection goes back, or away, before the record says the request
+    // is over; the record is emitted by the log's drop.
+    drop(lease);
+    drop(upstream);
+    drop(log);
 }
 
 impl Body for RelayBody {

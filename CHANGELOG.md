@@ -49,6 +49,13 @@ version may contain breaking changes.
 
 ### Fixed
 
+- An answer the agent stops reading at its last event is recorded whole. Codex
+  closes the stream as soon as `response.completed` arrives, before the
+  server's EOF, which made most of its turns cut ones: no token counts, and a
+  connection that could not be pooled. The relay now reads the upstream on for
+  at most 250 ms and 64 KiB after the agent has gone; an answer that ends
+  within that grace keeps its usage and its connection, and one that does not
+  is dropped as before, which is what stops the engine.
 - Prices now apply under a single `upstream` and under a mount: a request for
   `claude-opus-5-5` through either is priced by `[prices."claude-opus-5-5"]`.
   Before, every request through a single upstream was recorded as the model
