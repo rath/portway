@@ -276,7 +276,9 @@ python3 scripts/bench.py --turns 20 --context-kb 1024</code></pre>
 
   <ol class="steps">
     <li>
-      <p><strong>从源码检出安装。</strong>再加上 <code>--features tui,web</code>，还能得到终端面板和浏览器控制台。</p>
+      <p><strong>下载发布版，或从源码检出构建。</strong>macOS（Apple 芯片）和 Linux（x86-64、arm64）的发布版二进制已包含终端面板和浏览器控制台；从源码构建时加上 <code>--features tui,web</code>。</p>
+<pre class="shell"><code>target=aarch64-apple-darwin   # 或 x86_64-unknown-linux-gnu、aarch64-unknown-linux-gnu
+curl -fsSL "https://github.com/rath/portway/releases/latest/download/portway-$target.tar.gz" | tar -xz</code></pre>
 <pre class="shell"><code>git clone https://github.com/rath/portway
 cd portway
 cargo install --path crates/portway --locked</code></pre>

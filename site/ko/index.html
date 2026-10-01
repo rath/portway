@@ -338,8 +338,11 @@ python3 scripts/bench.py --turns 20 --context-kb 1024</code></pre>
 
   <ol class="steps">
     <li>
-      <p><strong>저장소를 받아 설치합니다.</strong> 터미널 대시보드와 브라우저 콘솔까지
-      쓰려면 <code>--features tui,web</code>을 붙입니다.</p>
+      <p><strong>릴리스 바이너리를 받거나 저장소에서 빌드합니다.</strong> macOS(Apple
+      silicon)와 Linux(x86-64, arm64)용 릴리스 바이너리에는 터미널 대시보드와 브라우저 콘솔이
+      들어 있습니다. 소스에서 빌드할 때는 <code>--features tui,web</code>을 붙입니다.</p>
+<pre class="shell"><code>target=aarch64-apple-darwin   # 또는 x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu
+curl -fsSL "https://github.com/rath/portway/releases/latest/download/portway-$target.tar.gz" | tar -xz</code></pre>
 <pre class="shell"><code>git clone https://github.com/rath/portway
 cd portway
 cargo install --path crates/portway --locked</code></pre>

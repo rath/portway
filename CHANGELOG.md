@@ -20,6 +20,11 @@ version may contain breaking changes.
   endpoint now keys its per-route counters under `upstreams` rather than
   `models`. `docs/agents.md` walks through Claude Code and Codex, and the
   README, getting-started guide and project page start from them.
+- Each release publishes prebuilt binaries for macOS on Apple silicon and Linux
+  on x86-64 and arm64, with the terminal dashboard and the browser console
+  built in. The Linux builds need glibc 2.28 or later. `SHA256SUMS` lists the
+  archives' checksums, and `releases/latest/download/portway-<target>.tar.gz`
+  always names the newest one.
 - `portway receive` accepts a `[models]` table as well as a single `upstream`,
   routing each request to the origin configured for its JSON `model` field. One
   receiver can therefore front several providers from one listener: its

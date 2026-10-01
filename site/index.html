@@ -334,8 +334,11 @@ python3 scripts/bench.py --turns 20 --context-kb 1024</code></pre>
 
   <ol class="steps">
     <li>
-      <p><strong>Install from a checkout.</strong> Add <code>--features tui,web</code> for the
-      terminal dashboard and the browser console.</p>
+      <p><strong>Download a release, or build from a checkout.</strong> Release binaries for
+      macOS (Apple silicon) and Linux (x86-64, arm64) include the terminal dashboard and the
+      browser console; from source, add <code>--features tui,web</code> for them.</p>
+<pre class="shell"><code>target=aarch64-apple-darwin   # or x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu
+curl -fsSL "https://github.com/rath/portway/releases/latest/download/portway-$target.tar.gz" | tar -xz</code></pre>
 <pre class="shell"><code>git clone https://github.com/rath/portway
 cd portway
 cargo install --path crates/portway --locked</code></pre>

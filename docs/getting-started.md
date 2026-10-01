@@ -7,7 +7,20 @@ accepted by your own service.
 
 ## Install
 
-From the root of this checkout, choose one installation:
+Each [release](https://github.com/rath/portway/releases) has a binary for macOS
+on Apple silicon and for Linux on x86-64 and arm64 (glibc 2.28 or later), built
+with the terminal dashboard and the browser console:
+
+```sh
+# macOS on Apple silicon. On Linux use x86_64-unknown-linux-gnu or
+# aarch64-unknown-linux-gnu (glibc 2.28 or later).
+target=aarch64-apple-darwin
+curl -fsSL "https://github.com/rath/portway/releases/latest/download/portway-$target.tar.gz" | tar -xz
+install -m 755 "portway-$target/portway" ~/.local/bin/   # any directory on your PATH
+```
+
+To build from source instead, from the root of this checkout, choose one
+installation:
 
 ```sh
 # CLI, daemon control, recording, and reports:
@@ -17,7 +30,7 @@ cargo install --path crates/portway --locked
 cargo install --path crates/portway --locked --features tui
 ```
 
-You need Rust 1.97 or later and a C build toolchain on macOS or Linux. If your
+Building needs Rust 1.97 or later and a C build toolchain on macOS or Linux. If your
 shell cannot find the installed command, add Cargo's bin directory to `PATH`
 (normally `~/.cargo/bin`) or run it using its full path. Confirm installation:
 

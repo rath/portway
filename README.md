@@ -146,8 +146,19 @@ numbers stay flat.
 
 ## Quick start
 
-Rust 1.97 or later and a C build toolchain are required, on macOS or Linux.
-From the repository root:
+Download a release binary, which includes the terminal dashboard and the
+browser console. Checksums are in each release's `SHA256SUMS`:
+
+```sh
+# macOS on Apple silicon. On Linux use x86_64-unknown-linux-gnu or
+# aarch64-unknown-linux-gnu (glibc 2.28 or later).
+target=aarch64-apple-darwin
+curl -fsSL "https://github.com/rath/portway/releases/latest/download/portway-$target.tar.gz" | tar -xz
+install -m 755 "portway-$target/portway" ~/.local/bin/   # any directory on your PATH
+```
+
+Or build from source: Rust 1.97 or later and a C build toolchain are required,
+on macOS or Linux. From the repository root:
 
 ```sh
 cargo install --path crates/portway --locked
@@ -155,7 +166,7 @@ cargo install --path crates/portway --locked
 # console, or both.
 ```
 
-Installation puts `portway` in `~/.cargo/bin`, which must be on your `PATH`.
+That installs `portway` in `~/.cargo/bin`, which must be on your `PATH`.
 Create `portway.toml` in a directory of your choice. For Claude Code and
 Codex, mount each vendor's API under a name:
 

@@ -292,7 +292,9 @@ python3 scripts/bench.py --turns 20 --context-kb 1024</code></pre>
 
   <ol class="steps">
     <li>
-      <p><strong>チェックアウトからインストールします。</strong>ターミナルダッシュボードとブラウザーコンソールも使うなら <code>--features tui,web</code> を付けます。</p>
+      <p><strong>リリースをダウンロードするか、チェックアウトからビルドします。</strong>macOS（Apple シリコン）と Linux（x86-64、arm64）向けのリリースバイナリには、ターミナルダッシュボードとブラウザーコンソールが入っています。ソースからビルドするなら <code>--features tui,web</code> を付けます。</p>
+<pre class="shell"><code>target=aarch64-apple-darwin   # または x86_64-unknown-linux-gnu、aarch64-unknown-linux-gnu
+curl -fsSL "https://github.com/rath/portway/releases/latest/download/portway-$target.tar.gz" | tar -xz</code></pre>
 <pre class="shell"><code>git clone https://github.com/rath/portway
 cd portway
 cargo install --path crates/portway --locked</code></pre>
