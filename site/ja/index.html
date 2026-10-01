@@ -49,6 +49,7 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=Fragment+Mono&display=swap">
 <link rel="stylesheet" href="../style.css">
 <script type="module" src="../main.js"></script>
+<script type="module" src="../install.js"></script>
 <script type="module" src="../langmenu.js"></script>
 </head>
 <body>
@@ -86,12 +87,25 @@
 
 <section class="hero" aria-labelledby="hero-title">
   <div class="hero-copy">
-    <h1 id="hero-title">エージェントは毎ターン、会話全体を送り直します。</h1>
-    <p class="lede">Portway は、変わった部分だけを送るローカル HTTP プロキシです。リンクの向こう側に Portway のレシーバーがあれば、各リクエストは直前のリクエストとの差分としてネットワークを渡ります。セッションがどれだけ長く続いても、およそ 1 キロバイトです。</p>
-    <p class="actions">
-      <a class="button primary" href="https://github.com/rath/portway">GitHub でソースを見る</a>
-      <a class="button" href="#try">はじめに</a>
-    </p>
+    <h1 id="hero-title">会話が長くても、送信は軽く。</h1>
+    <p class="lede">Portway は Claude Code や Codex などのコーディングエージェント向け HTTP プロキシです。レシーバーと組み合わせると、各ターンで直前のリクエストとの差分を送信できます。</p>
+    <div class="hero-install">
+      <div class="command-block" data-install>
+        <div class="install-command">
+          <code>brew install rath/tap/portway</code>
+          <button class="copy-command" type="button" data-copy aria-label="Homebrew のインストールコマンドをコピー" hidden>
+            <svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="7" y="7" width="10" height="10" rx="2"/><path d="M13 7V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2"/></svg>
+            <span data-copy-label>コピー</span>
+          </button>
+        </div>
+        <p class="copy-status sr-only" role="status"></p>
+      </div>
+      <p class="install-note">macOS Apple シリコン · Linux x86_64 / ARM64</p>
+      <p class="install-links">
+        <a href="#try">設定ガイド</a>
+        <a href="https://github.com/rath/portway/blob/main/docs/getting-started.md#install">その他のインストール方法</a>
+      </p>
+    </div>
   </div>
 
   <figure class="monitor" id="monitor">
@@ -135,7 +149,58 @@
   </figure>
 </section>
 
-<section class="chapter" aria-labelledby="problem-title">
+<section class="chapter" id="try" aria-labelledby="try-title">
+  <h2 id="try-title">インストールして、エージェントを接続</h2>
+  <p>Homebrew でインストールして、エージェントを接続します。ターミナルダッシュボードとブラウザーコンソールが含まれており、Rust ツールチェーンは不要です。</p>
+
+  <ol class="steps">
+    <li>
+      <p><strong>Portway をインストールします。</strong>macOS Apple シリコンと Linux x86_64 / ARM64（glibc 2.28 以降）に対応しています。</p>
+      <div class="command-block" data-install>
+        <div class="install-command">
+          <code>brew install rath/tap/portway</code>
+          <button class="copy-command" type="button" data-copy aria-label="Homebrew のインストールコマンドをコピー" hidden>
+            <svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="7" y="7" width="10" height="10" rx="2"/><path d="M13 7V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2"/></svg>
+            <span data-copy-label>コピー</span>
+          </button>
+        </div>
+        <p class="copy-status sr-only" role="status"></p>
+      </div>
+      <p id="install-options">Homebrew を使わない場合は、<a href="https://github.com/rath/portway/releases/latest">リリースバイナリ</a>をダウンロードするか、<a href="https://github.com/rath/portway/blob/main/docs/getting-started.md#install">ソースからビルド</a>できます。Rust と C ツールチェーンが必要なのはソースからのビルドだけです。</p>
+    </li>
+    <li>
+      <p><strong>API のマウント設定を <code>portway.toml</code> に保存します。</strong>次にブラウザーコンソールとともに起動します：</p>
+<pre class="shell" tabindex="0"><code># portway.toml
+host = "127.0.0.1"
+port = 8787
+
+[upstreams]
+anthropic = "https://api.anthropic.com"
+codex = "https://chatgpt.com/backend-api/codex"</code></pre>
+<pre class="shell" tabindex="0"><code>portway --config ./portway.toml --web</code></pre>
+    </li>
+    <li>
+      <p><strong>エージェントを自分のマウントに向けます。</strong>変えるのはそれだけです。Claude Code は <code>ANTHROPIC_BASE_URL=http://127.0.0.1:8787/anthropic</code>、Codex はプロバイダー項目の <code>base_url = "http://127.0.0.1:8787/codex"</code> です。ログインもモデル名もそれぞれそのまま使い、Portway はリクエストに載った認証情報をそのまま通して、自分では鍵を持ちません。OpenAI 互換のサービスなら <code>upstream</code> ひとつと base URL <code>http://127.0.0.1:8787/v1</code> で済みます。</p>
+    </li>
+    <li>
+      <p><strong>デルタ圧縮を使うにはレシーバーを追加します。</strong>サービスの手前にあるゲートウェイの後ろで <code>portway receive</code> を動かし、センダーをそのゲートウェイに向けます。<a href="https://github.com/rath/portway/blob/main/docs/getting-started.md#add-a-compression-receiver">レシーバーの設定</a>に手順があります。</p>
+    </li>
+  </ol>
+
+  <p>同じリポジトリには、埋め込み可能な Rust ライブラリ <code>portway-core</code> と、デーモンモード、レポート、ターミナルダッシュボード、ブラウザーコンソールを備えた CLI が入っています。リクエストのメタデータだけを SQLite に記録し、ボディ、認証情報、辞書の中身は決して記録しません。</p>
+
+  <ul class="docs">
+    <li><a href="https://github.com/rath/portway/blob/main/docs/agents.md">Claude Code と Codex</a></li>
+    <li><a href="https://github.com/rath/portway/blob/main/docs/getting-started.md">はじめに</a></li>
+    <li><a href="https://github.com/rath/portway/blob/main/docs/faq.md">よくある質問</a></li>
+    <li><a href="https://github.com/rath/portway/blob/main/docs/configuration.md">設定</a></li>
+    <li><a href="https://github.com/rath/portway/blob/main/docs/operations.md">運用</a></li>
+    <li><a href="https://github.com/rath/portway/blob/main/docs/protocol.md">プロトコル</a></li>
+    <li><a href="https://github.com/rath/portway/blob/main/SECURITY.md">セキュリティ</a></li>
+  </ul>
+</section>
+
+<section class="chapter" id="how" aria-labelledby="problem-title">
   <h2 id="problem-title">40 ターン目は、39 ターン目に 4 キロバイトを足したもの</h2>
   <p>コーディングエージェントはサーバーに状態を持ちません。もう一歩進むために、システムプロンプトとこれまでのすべてのメッセージ、すべてのツール結果をもう一度送り、そのあとに新しく増えた数キロバイトを付け足します。どのリクエストも、直前のリクエストをほとんどそのまま写したものです。</p>
 
@@ -260,7 +325,7 @@
   </div>
   <p class="aside">最後の列は、辞書の種を蒔くためにコンテキスト全体を運ぶ最初のリクエストを含みます。合成テキストは、素の zstd が Portway 自身のソースに対して発揮するのと同程度の削減率になるよう調整してあります。どの実行もバイト単位で再現でき、復元されたボディは送信時の SHA-256 と照合されます。</p>
 
-<pre class="shell"><code>cargo build --release --locked
+<pre class="shell" tabindex="0"><code>cargo build --release --locked
 python3 scripts/bench.py --turns 20 --context-kb 1024</code></pre>
 </section>
 
@@ -284,51 +349,6 @@ python3 scripts/bench.py --turns 20 --context-kb 1024</code></pre>
       <dd>WebSocket も CONNECT も HTTP/2 も受信側 TLS もありません。TLS と認証は手前のゲートウェイに任せてください。リクエストは設定可能な 256&nbsp;MiB までバッファリングし、応答はストリーミングします。</dd>
     </div>
   </dl>
-</section>
-
-<section class="chapter" id="try" aria-labelledby="try-title">
-  <h2 id="try-title">試してみる</h2>
-  <p>macOS か Linux で、Rust 1.97 以降と C ツールチェーンが必要です。プロバイダーもエンドポイントも認証情報も価格も、どれ一つとして組み込まれていません。</p>
-
-  <ol class="steps">
-    <li>
-      <p><strong>リリースをダウンロードするか、チェックアウトからビルドします。</strong>macOS（Apple シリコン）と Linux（x86-64、arm64）向けのリリースバイナリには、ターミナルダッシュボードとブラウザーコンソールが入っています。ソースからビルドするなら <code>--features tui,web</code> を付けます。</p>
-<pre class="shell"><code>target=aarch64-apple-darwin   # または x86_64-unknown-linux-gnu、aarch64-unknown-linux-gnu
-curl -fsSL "https://github.com/rath/portway/releases/latest/download/portway-$target.tar.gz" | tar -xz</code></pre>
-<pre class="shell"><code>git clone https://github.com/rath/portway
-cd portway
-cargo install --path crates/portway --locked</code></pre>
-    </li>
-    <li>
-      <p><strong>各ベンダーの API を名前でマウントして起動します。</strong></p>
-<pre class="shell"><code># portway.toml
-host = "127.0.0.1"
-port = 8787
-
-[upstreams]
-anthropic = "https://api.anthropic.com"
-codex = "https://chatgpt.com/backend-api/codex"</code></pre>
-<pre class="shell"><code>portway --config ./portway.toml</code></pre>
-    </li>
-    <li>
-      <p><strong>エージェントを自分のマウントに向けます。</strong>変えるのはそれだけです。Claude Code は <code>ANTHROPIC_BASE_URL=http://127.0.0.1:8787/anthropic</code>、Codex はプロバイダー項目の <code>base_url = "http://127.0.0.1:8787/codex"</code> です。ログインもモデル名もそれぞれそのまま使い、Portway はリクエストに載った認証情報をそのまま通して、自分では鍵を持ちません。OpenAI 互換のサービスなら <code>upstream</code> ひとつと base URL <code>http://127.0.0.1:8787/v1</code> で済みます。</p>
-    </li>
-    <li>
-      <p><strong>向こう側にレシーバーを置きます。</strong>サービスの手前にあるゲートウェイの後ろで <code>portway receive</code> を動かし、センダーをそのゲートウェイに向けます。<a href="https://github.com/rath/portway/blob/main/docs/getting-started.md#add-a-compression-receiver">レシーバーの設定</a>に手順があります。</p>
-    </li>
-  </ol>
-
-  <p>同じリポジトリには、埋め込み可能な Rust ライブラリ <code>portway-core</code> と、デーモンモード、レポート、ターミナルダッシュボード、ブラウザーコンソールを備えた CLI が入っています。リクエストのメタデータだけを SQLite に記録し、ボディ、認証情報、辞書の中身は決して記録しません。</p>
-
-  <ul class="docs">
-    <li><a href="https://github.com/rath/portway/blob/main/docs/agents.md">Claude Code と Codex</a></li>
-    <li><a href="https://github.com/rath/portway/blob/main/docs/getting-started.md">はじめに</a></li>
-    <li><a href="https://github.com/rath/portway/blob/main/docs/faq.md">よくある質問</a></li>
-    <li><a href="https://github.com/rath/portway/blob/main/docs/configuration.md">設定</a></li>
-    <li><a href="https://github.com/rath/portway/blob/main/docs/operations.md">運用</a></li>
-    <li><a href="https://github.com/rath/portway/blob/main/docs/protocol.md">プロトコル</a></li>
-    <li><a href="https://github.com/rath/portway/blob/main/SECURITY.md">セキュリティ</a></li>
-  </ul>
 </section>
 
 </main>

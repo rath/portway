@@ -217,19 +217,5 @@ new ResizeObserver(() => {
 
 build();
 
-// One orchestrated moment: the session plays once when the graph first comes
-// into view. Everything after that is the reader's to drive.
-const seen = new IntersectionObserver(
-  (entries) => {
-    if (entries.some((e) => e.isIntersecting)) {
-      seen.disconnect();
-      if (!reduceMotion.matches) {
-        position = 1;
-        paint();
-        setTimeout(play, 350);
-      }
-    }
-  },
-  { threshold: 0.3 },
-);
-seen.observe(monitor);
+// Show the complete comparison on arrival. Replay is an explicit action so
+// the first viewport explains the result without waiting for an animation.

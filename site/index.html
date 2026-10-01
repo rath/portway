@@ -48,6 +48,7 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=Fragment+Mono&display=swap">
 <link rel="stylesheet" href="style.css">
 <script type="module" src="main.js"></script>
+<script type="module" src="install.js"></script>
 <script type="module" src="langmenu.js"></script>
 </head>
 <body>
@@ -85,14 +86,25 @@
 
 <section class="hero" aria-labelledby="hero-title">
   <div class="hero-copy">
-    <h1 id="hero-title">Your agent resends its whole conversation every turn.</h1>
-    <p class="lede">Portway is a local HTTP proxy that sends only what changed. With a Portway
-    receiver on the far side of the link, each request crosses the network as a delta
-    against the one before it: about a kilobyte, however long the session has run.</p>
-    <p class="actions">
-      <a class="button primary" href="https://github.com/rath/portway">View source on GitHub</a>
-      <a class="button" href="#try">Get started</a>
-    </p>
+    <h1 id="hero-title">Smaller uploads for longer conversations.</h1>
+    <p class="lede">Portway is an HTTP proxy for Claude Code, Codex and other coding agents. Pair it with a receiver to send each new turn as a delta of the previous request.</p>
+    <div class="hero-install">
+      <div class="command-block" data-install>
+        <div class="install-command">
+          <code>brew install rath/tap/portway</code>
+          <button class="copy-command" type="button" data-copy aria-label="Copy Homebrew install command" hidden>
+            <svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="7" y="7" width="10" height="10" rx="2"/><path d="M13 7V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2"/></svg>
+            <span data-copy-label>Copy</span>
+          </button>
+        </div>
+        <p class="copy-status sr-only" role="status"></p>
+      </div>
+      <p class="install-note">macOS Apple silicon · Linux x86_64 / ARM64</p>
+      <p class="install-links">
+        <a href="#try">Setup guide</a>
+        <a href="https://github.com/rath/portway/blob/main/docs/getting-started.md#install">Other installation options</a>
+      </p>
+    </div>
   </div>
 
   <figure class="monitor" id="monitor">
@@ -140,7 +152,68 @@
   </figure>
 </section>
 
-<section class="chapter" aria-labelledby="problem-title">
+<section class="chapter" id="try" aria-labelledby="try-title">
+  <h2 id="try-title">Install, then connect your agent</h2>
+  <p>Install with Homebrew, then connect your agent. The package includes the terminal dashboard and browser console; no Rust toolchain is needed.</p>
+
+  <ol class="steps">
+    <li>
+      <p><strong>Install Portway.</strong> Supports macOS Apple silicon and Linux x86_64 / ARM64 (glibc 2.28 or later).</p>
+      <div class="command-block" data-install>
+        <div class="install-command">
+          <code>brew install rath/tap/portway</code>
+          <button class="copy-command" type="button" data-copy aria-label="Copy Homebrew install command" hidden>
+            <svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="7" y="7" width="10" height="10" rx="2"/><path d="M13 7V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2"/></svg>
+            <span data-copy-label>Copy</span>
+          </button>
+        </div>
+        <p class="copy-status sr-only" role="status"></p>
+      </div>
+      <p id="install-options">Without Homebrew? <a href="https://github.com/rath/portway/releases/latest">Download a release</a> or <a href="https://github.com/rath/portway/blob/main/docs/getting-started.md#install">build from source</a>. Only source builds need Rust and a C toolchain.</p>
+    </li>
+    <li>
+      <p><strong>Save your API mounts as <code>portway.toml</code>.</strong> Then start Portway with its browser console:</p>
+<pre class="shell" tabindex="0"><code># portway.toml
+host = "127.0.0.1"
+port = 8787
+
+[upstreams]
+anthropic = "https://api.anthropic.com"
+codex = "https://chatgpt.com/backend-api/codex"</code></pre>
+<pre class="shell" tabindex="0"><code>portway --config ./portway.toml --web</code></pre>
+    </li>
+    <li>
+      <p><strong>Point your agent at its mount and change nothing else.</strong> Claude Code:
+      <code>ANTHROPIC_BASE_URL=http://127.0.0.1:8787/anthropic</code>. Codex:
+      <code>base_url = "http://127.0.0.1:8787/codex"</code> in its provider entry. Each keeps its
+      own login and model names; Portway passes the request's credentials through and has no key
+      of its own. An OpenAI-compatible service takes a single <code>upstream</code> and the base
+      URL <code>http://127.0.0.1:8787/v1</code>.</p>
+    </li>
+    <li>
+      <p><strong>Add a receiver to enable delta compression.</strong> Run <code>portway receive</code> behind
+      the gateway in front of your service, then point the sender at the gateway.
+      <a href="https://github.com/rath/portway/blob/main/docs/getting-started.md#add-a-compression-receiver">Receiver setup</a>
+      walks through it.</p>
+    </li>
+  </ol>
+
+  <p>The same repository ships <code>portway-core</code>, an embeddable Rust library, and a CLI
+  with daemon mode, reports, a terminal dashboard and a browser console. It records request
+  metadata in SQLite, never bodies, credentials or dictionary contents.</p>
+
+  <ul class="docs">
+    <li><a href="https://github.com/rath/portway/blob/main/docs/agents.md">Claude Code and Codex</a></li>
+    <li><a href="https://github.com/rath/portway/blob/main/docs/getting-started.md">Getting started</a></li>
+    <li><a href="https://github.com/rath/portway/blob/main/docs/faq.md">FAQ</a></li>
+    <li><a href="https://github.com/rath/portway/blob/main/docs/configuration.md">Configuration</a></li>
+    <li><a href="https://github.com/rath/portway/blob/main/docs/operations.md">Operations</a></li>
+    <li><a href="https://github.com/rath/portway/blob/main/docs/protocol.md">Protocol</a></li>
+    <li><a href="https://github.com/rath/portway/blob/main/SECURITY.md">Security</a></li>
+  </ul>
+</section>
+
+<section class="chapter" id="how" aria-labelledby="problem-title">
   <h2 id="problem-title">Turn 40 is turn 39 plus four kilobytes</h2>
   <p>A coding agent keeps no state on the server. To take one more step, it sends the system
   prompt, every earlier message and every tool result again, followed by the few kilobytes
@@ -294,7 +367,7 @@
   as much as it does on Portway's own source. Every run is reproducible byte for byte, and every
   restored body is checked against the SHA-256 of what was sent.</p>
 
-<pre class="shell"><code>cargo build --release --locked
+<pre class="shell" tabindex="0"><code>cargo build --release --locked
 python3 scripts/bench.py --turns 20 --context-kb 1024</code></pre>
 </section>
 
@@ -325,64 +398,6 @@ python3 scripts/bench.py --turns 20 --context-kb 1024</code></pre>
       stream.</dd>
     </div>
   </dl>
-</section>
-
-<section class="chapter" id="try" aria-labelledby="try-title">
-  <h2 id="try-title">Try it</h2>
-  <p>You need Rust 1.97 or later and a C toolchain, on macOS or Linux. No provider, endpoint,
-  credential or price is built in.</p>
-
-  <ol class="steps">
-    <li>
-      <p><strong>Download a release, or build from a checkout.</strong> Release binaries for
-      macOS (Apple silicon) and Linux (x86-64, arm64) include the terminal dashboard and the
-      browser console; from source, add <code>--features tui,web</code> for them.</p>
-<pre class="shell"><code>target=aarch64-apple-darwin   # or x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu
-curl -fsSL "https://github.com/rath/portway/releases/latest/download/portway-$target.tar.gz" | tar -xz</code></pre>
-<pre class="shell"><code>git clone https://github.com/rath/portway
-cd portway
-cargo install --path crates/portway --locked</code></pre>
-    </li>
-    <li>
-      <p><strong>Mount your vendors' APIs and start it.</strong></p>
-<pre class="shell"><code># portway.toml
-host = "127.0.0.1"
-port = 8787
-
-[upstreams]
-anthropic = "https://api.anthropic.com"
-codex = "https://chatgpt.com/backend-api/codex"</code></pre>
-<pre class="shell"><code>portway --config ./portway.toml</code></pre>
-    </li>
-    <li>
-      <p><strong>Point your agent at its mount and change nothing else.</strong> Claude Code:
-      <code>ANTHROPIC_BASE_URL=http://127.0.0.1:8787/anthropic</code>. Codex:
-      <code>base_url = "http://127.0.0.1:8787/codex"</code> in its provider entry. Each keeps its
-      own login and model names; Portway passes the request's credentials through and has no key
-      of its own. An OpenAI-compatible service takes a single <code>upstream</code> and the base
-      URL <code>http://127.0.0.1:8787/v1</code>.</p>
-    </li>
-    <li>
-      <p><strong>Put a receiver on the far side.</strong> Run <code>portway receive</code> behind
-      the gateway in front of your service, then point the sender at the gateway.
-      <a href="https://github.com/rath/portway/blob/main/docs/getting-started.md#add-a-compression-receiver">Receiver setup</a>
-      walks through it.</p>
-    </li>
-  </ol>
-
-  <p>The same repository ships <code>portway-core</code>, an embeddable Rust library, and a CLI
-  with daemon mode, reports, a terminal dashboard and a browser console. It records request
-  metadata in SQLite, never bodies, credentials or dictionary contents.</p>
-
-  <ul class="docs">
-    <li><a href="https://github.com/rath/portway/blob/main/docs/agents.md">Claude Code and Codex</a></li>
-    <li><a href="https://github.com/rath/portway/blob/main/docs/getting-started.md">Getting started</a></li>
-    <li><a href="https://github.com/rath/portway/blob/main/docs/faq.md">FAQ</a></li>
-    <li><a href="https://github.com/rath/portway/blob/main/docs/configuration.md">Configuration</a></li>
-    <li><a href="https://github.com/rath/portway/blob/main/docs/operations.md">Operations</a></li>
-    <li><a href="https://github.com/rath/portway/blob/main/docs/protocol.md">Protocol</a></li>
-    <li><a href="https://github.com/rath/portway/blob/main/SECURITY.md">Security</a></li>
-  </ul>
 </section>
 
 </main>

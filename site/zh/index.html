@@ -33,6 +33,7 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=Fragment+Mono&display=swap">
 <link rel="stylesheet" href="../style.css">
 <script type="module" src="../main.js"></script>
+<script type="module" src="../install.js"></script>
 <script type="module" src="../langmenu.js"></script>
 </head>
 <body>
@@ -70,12 +71,25 @@
 
 <section class="hero" aria-labelledby="hero-title">
   <div class="hero-copy">
-    <h1 id="hero-title">你的智能体每一轮都在重发整个对话。</h1>
-    <p class="lede">Portway 是一个只发送变化部分的本地 HTTP 代理。链路对端只要有 Portway 接收端，每个请求就以相对上一次请求的增量穿过网络：无论会话跑了多久，都只有约 1 KB。</p>
-    <p class="actions">
-      <a class="button primary" href="https://github.com/rath/portway">在 GitHub 上查看源码</a>
-      <a class="button" href="#try">快速开始</a>
-    </p>
+    <h1 id="hero-title"><span>对话再长，</span><span>上传也轻量。</span></h1>
+    <p class="lede">Portway 是面向 Claude Code、Codex 等编程智能体的 HTTP 代理。配合接收端，每一轮只需传输相对上一次请求的增量。</p>
+    <div class="hero-install">
+      <div class="command-block" data-install>
+        <div class="install-command">
+          <code>brew install rath/tap/portway</code>
+          <button class="copy-command" type="button" data-copy aria-label="复制 Homebrew 安装命令" hidden>
+            <svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="7" y="7" width="10" height="10" rx="2"/><path d="M13 7V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2"/></svg>
+            <span data-copy-label>复制</span>
+          </button>
+        </div>
+        <p class="copy-status sr-only" role="status"></p>
+      </div>
+      <p class="install-note">macOS Apple 芯片 · Linux x86_64 / ARM64</p>
+      <p class="install-links">
+        <a href="#try">配置指南</a>
+        <a href="https://github.com/rath/portway/blob/main/docs/getting-started.md#install">其他安装方式</a>
+      </p>
+    </div>
   </div>
 
   <figure class="monitor" id="monitor">
@@ -119,7 +133,58 @@
   </figure>
 </section>
 
-<section class="chapter" aria-labelledby="problem-title">
+<section class="chapter" id="try" aria-labelledby="try-title">
+  <h2 id="try-title">安装，然后连接你的智能体</h2>
+  <p>通过 Homebrew 安装，然后连接你的智能体。安装包已包含终端面板和浏览器控制台，无需 Rust 工具链。</p>
+
+  <ol class="steps">
+    <li>
+      <p><strong>安装 Portway。</strong>支持 macOS Apple 芯片和 Linux x86_64 / ARM64（glibc 2.28 或更高版本）。</p>
+      <div class="command-block" data-install>
+        <div class="install-command">
+          <code>brew install rath/tap/portway</code>
+          <button class="copy-command" type="button" data-copy aria-label="复制 Homebrew 安装命令" hidden>
+            <svg viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="7" y="7" width="10" height="10" rx="2"/><path d="M13 7V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2"/></svg>
+            <span data-copy-label>复制</span>
+          </button>
+        </div>
+        <p class="copy-status sr-only" role="status"></p>
+      </div>
+      <p id="install-options">不使用 Homebrew？可以<a href="https://github.com/rath/portway/releases/latest">下载发布版二进制</a>或<a href="https://github.com/rath/portway/blob/main/docs/getting-started.md#install">从源码构建</a>。只有从源码构建时才需要 Rust 和 C 工具链。</p>
+    </li>
+    <li>
+      <p><strong>将 API 挂载配置保存为 <code>portway.toml</code>。</strong>然后启动 Portway 和浏览器控制台：</p>
+<pre class="shell" tabindex="0"><code># portway.toml
+host = "127.0.0.1"
+port = 8787
+
+[upstreams]
+anthropic = "https://api.anthropic.com"
+codex = "https://chatgpt.com/backend-api/codex"</code></pre>
+<pre class="shell" tabindex="0"><code>portway --config ./portway.toml --web</code></pre>
+    </li>
+    <li>
+      <p><strong>让智能体指向自己的挂载点，其余一概不动。</strong>Claude Code 用 <code>ANTHROPIC_BASE_URL=http://127.0.0.1:8787/anthropic</code>；Codex 在 provider 条目里写 <code>base_url = "http://127.0.0.1:8787/codex"</code>。各自的登录和模型名照旧；Portway 原样透传请求里的凭据，自己不持有密钥。OpenAI 兼容的服务只需一个 <code>upstream</code>，base URL 设为 <code>http://127.0.0.1:8787/v1</code>。</p>
+    </li>
+    <li>
+      <p><strong>添加接收端以启用增量压缩。</strong>在你服务前面的网关后面运行 <code>portway receive</code>，然后让发送端指向那个网关。<a href="https://github.com/rath/portway/blob/main/docs/getting-started.md#add-a-compression-receiver">接收端设置</a>里有完整步骤。</p>
+    </li>
+  </ol>
+
+  <p>同一个仓库还提供可嵌入的 Rust 库 <code>portway-core</code>，以及一个自带守护模式、报表、终端面板和浏览器控制台的 CLI。它把请求元数据记进 SQLite，绝不记录请求体、凭据或词典内容。</p>
+
+  <ul class="docs">
+    <li><a href="https://github.com/rath/portway/blob/main/docs/agents.md">Claude Code 与 Codex</a></li>
+    <li><a href="https://github.com/rath/portway/blob/main/docs/getting-started.md">快速开始</a></li>
+    <li><a href="https://github.com/rath/portway/blob/main/docs/faq.md">常见问题</a></li>
+    <li><a href="https://github.com/rath/portway/blob/main/docs/configuration.md">配置</a></li>
+    <li><a href="https://github.com/rath/portway/blob/main/docs/operations.md">运维</a></li>
+    <li><a href="https://github.com/rath/portway/blob/main/docs/protocol.md">协议</a></li>
+    <li><a href="https://github.com/rath/portway/blob/main/SECURITY.md">安全</a></li>
+  </ul>
+</section>
+
+<section class="chapter" id="how" aria-labelledby="problem-title">
   <h2 id="problem-title">第 40 轮，就是第 39 轮加上 4 KB</h2>
   <p>编程智能体不在服务端保存任何状态。为了往前走一步，它会把系统提示词、此前的每一条消息、每一条工具调用结果重新发一遍，末尾再附上新产生的那几 KB。所以每个请求几乎都是上一个请求的副本。</p>
 
@@ -244,7 +309,7 @@
   </div>
   <p class="aside">最后一列包含了第一个请求，它要带上整个上下文来播下词典。合成文本经过调校，让只用 zstd 的压缩效果与它在 Portway 自身源码上大致相同。每次运行都能逐字节复现，每个还原出来的请求体都会与发送时计算的 SHA-256 比对。</p>
 
-<pre class="shell"><code>cargo build --release --locked
+<pre class="shell" tabindex="0"><code>cargo build --release --locked
 python3 scripts/bench.py --turns 20 --context-kb 1024</code></pre>
 </section>
 
@@ -268,51 +333,6 @@ python3 scripts/bench.py --turns 20 --context-kb 1024</code></pre>
       <dd>没有 WebSocket、CONNECT、HTTP/2，也没有入站 TLS；TLS 和认证请交给前面的网关。请求最多缓冲到可配置的 256&nbsp;MiB，响应则是流式的。</dd>
     </div>
   </dl>
-</section>
-
-<section class="chapter" id="try" aria-labelledby="try-title">
-  <h2 id="try-title">试一试</h2>
-  <p>你需要 Rust 1.97 或更高版本，以及一套 C 工具链，运行在 macOS 或 Linux 上。没有内置任何服务商、端点、凭据或价格。</p>
-
-  <ol class="steps">
-    <li>
-      <p><strong>下载发布版，或从源码检出构建。</strong>macOS（Apple 芯片）和 Linux（x86-64、arm64）的发布版二进制已包含终端面板和浏览器控制台；从源码构建时加上 <code>--features tui,web</code>。</p>
-<pre class="shell"><code>target=aarch64-apple-darwin   # 或 x86_64-unknown-linux-gnu、aarch64-unknown-linux-gnu
-curl -fsSL "https://github.com/rath/portway/releases/latest/download/portway-$target.tar.gz" | tar -xz</code></pre>
-<pre class="shell"><code>git clone https://github.com/rath/portway
-cd portway
-cargo install --path crates/portway --locked</code></pre>
-    </li>
-    <li>
-      <p><strong>按名字挂载各家的 API，然后启动。</strong></p>
-<pre class="shell"><code># portway.toml
-host = "127.0.0.1"
-port = 8787
-
-[upstreams]
-anthropic = "https://api.anthropic.com"
-codex = "https://chatgpt.com/backend-api/codex"</code></pre>
-<pre class="shell"><code>portway --config ./portway.toml</code></pre>
-    </li>
-    <li>
-      <p><strong>让智能体指向自己的挂载点，其余一概不动。</strong>Claude Code 用 <code>ANTHROPIC_BASE_URL=http://127.0.0.1:8787/anthropic</code>；Codex 在 provider 条目里写 <code>base_url = "http://127.0.0.1:8787/codex"</code>。各自的登录和模型名照旧；Portway 原样透传请求里的凭据，自己不持有密钥。OpenAI 兼容的服务只需一个 <code>upstream</code>，base URL 设为 <code>http://127.0.0.1:8787/v1</code>。</p>
-    </li>
-    <li>
-      <p><strong>在对端放上接收端。</strong>在你服务前面的网关后面运行 <code>portway receive</code>，然后让发送端指向那个网关。<a href="https://github.com/rath/portway/blob/main/docs/getting-started.md#add-a-compression-receiver">接收端设置</a>里有完整步骤。</p>
-    </li>
-  </ol>
-
-  <p>同一个仓库还提供可嵌入的 Rust 库 <code>portway-core</code>，以及一个自带守护模式、报表、终端面板和浏览器控制台的 CLI。它把请求元数据记进 SQLite，绝不记录请求体、凭据或词典内容。</p>
-
-  <ul class="docs">
-    <li><a href="https://github.com/rath/portway/blob/main/docs/agents.md">Claude Code 与 Codex</a></li>
-    <li><a href="https://github.com/rath/portway/blob/main/docs/getting-started.md">快速开始</a></li>
-    <li><a href="https://github.com/rath/portway/blob/main/docs/faq.md">常见问题</a></li>
-    <li><a href="https://github.com/rath/portway/blob/main/docs/configuration.md">配置</a></li>
-    <li><a href="https://github.com/rath/portway/blob/main/docs/operations.md">运维</a></li>
-    <li><a href="https://github.com/rath/portway/blob/main/docs/protocol.md">协议</a></li>
-    <li><a href="https://github.com/rath/portway/blob/main/SECURITY.md">安全</a></li>
-  </ul>
 </section>
 
 </main>
