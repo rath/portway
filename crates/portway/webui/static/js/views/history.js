@@ -107,9 +107,9 @@ export class HistoryView {
     const rows = report.total ? [...report.rows, report.total] : [];
     const volumeHead = ["model", "reqs", "2xx", "3xx", "4xx", "5xx", "trunc", "reused"];
     const volume = rows.map((row) => [row.model, row.requests, row.ok, row.redirect, row.client, row.server, row.truncated, row.reused].map(String));
-    const timingHead = ["model", "up raw", "up wire", "saved", "down", "ttfb p50", "ttfb p95", "up p50", "up p95", "conn mean"];
+    const timingHead = ["model", "up raw", "up wire", "up saved", "down", "down wire", "down saved", "ttfb p50", "ttfb p95", "up p50", "up p95", "conn mean"];
     const timing = rows.map((row) => [
-      row.model, human(row.body), human(row.wire), row.saved, human(row.received),
+      row.model, human(row.body), human(row.wire), row.saved, human(row.received), human(row.received_wire), row.down_saved,
       maybeTime(row.ttfb_p50), maybeTime(row.ttfb_p95), maybeTime(row.up_p50), maybeTime(row.up_p95), maybeTime(row.conn_mean),
     ]);
     const table = (title, head, body, file) => h("section", { class: "panel" },

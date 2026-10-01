@@ -232,6 +232,19 @@ fn flight_route(flight: &FlightView) -> String {
     format!("{} {}", flight.method, flight.path)
 }
 
+/// The size the answer crossed a hop as, for the line's download pair: the
+/// upstream hop when it was coded, else the agent leg when the hop recoded
+/// it, else nothing.
+pub fn down_wire(record: &RequestRecord) -> Option<u64> {
+    if record.upstream_encoding != "identity" && record.received_wire > 0 {
+        Some(record.received_wire)
+    } else if record.received_agent > 0 && record.received_agent != record.received {
+        Some(record.received_agent)
+    } else {
+        None
+    }
+}
+
 /// A request that named no model — a catalog, a health check — shows a dash
 /// where the name would be, rather than a gap that reads as a missing cell.
 pub fn shown_model(model: &str) -> &str {
@@ -778,15 +791,15 @@ fn coding_span(coding: Coding, dict: bool) -> Span<'static> {
 
 /// Below this the table sheds columns rather than letting every one of them
 /// shrink until the model names are unreadable.
-const ROOMY_TABLE: u16 = 100;
-const STATUS_TABLE: u16 = 136;
+const ROOMY_TABLE: u16 = 108;
+const STATUS_TABLE: u16 = 140;
 
 fn models_table(state: &State, width: u16) -> Table<'_> {
     let roomy = width >= ROOMY_TABLE;
     let show_status = width >= STATUS_TABLE;
     let mut names = vec!["upstream", "coding", "reqs", "live", "raw", "wire", "saved"];
     if roomy {
-        names.extend(["down", "idle", "err", "abort"]);
+        names.extend(["down", "↓ saved", "idle", "err", "abort"]);
     }
     if show_status {
         names.push("compression status");
@@ -829,6 +842,10 @@ fn models_table(state: &State, width: u16) -> Table<'_> {
                     human(view.down_bytes),
                     Style::default().fg(RAW),
                 )),
+                Cell::from(Span::styled(
+                    human(view.down_saved_bytes().max(0) as u64),
+                    Style::default().fg(GOOD),
+                )),
                 Cell::from(view.idle_conns.to_string()),
                 Cell::from(Span::styled(
                     errors.to_string(),
@@ -865,6 +882,7 @@ fn models_table(state: &State, width: u16) -> Table<'_> {
     ];
     if roomy {
         widths.extend([
+            Constraint::Length(8),
             Constraint::Length(8),
             Constraint::Length(5),
             Constraint::Length(4),
@@ -1483,18 +1501,16 @@ fn request_line(record: &RequestRecord, columns: Columns) -> Line<'static> {
                     human(record.received),
                     Style::default().fg(RAW),
                 ));
-                // What the hop actually sent, when it re-encoded: the same pair
-                // the upload column shows, spaced the same way — one cell, no
-                // gap. A row from before the column, or an identity hop, keeps
-                // the single size it always had.
-                if record.received_agent > 0 && record.received_agent != record.received {
+                // The answer and what it crossed a hop as: the same pair the
+                // upload column shows, spaced the same way. The upstream hop
+                // first, since behind a receiver that is where the download is
+                // saved; the agent leg when only it was coded. An identity
+                // answer keeps the single size it always had.
+                if let Some(wire) = down_wire(record) {
                     line.glue(Span::styled("→", Style::default().fg(DIM)));
+                    line.word(Span::styled(human(wire), Style::default().fg(WIRE)));
                     line.word(Span::styled(
-                        human(record.received_agent),
-                        Style::default().fg(WIRE),
-                    ));
-                    line.word(Span::styled(
-                        ratio(record.received, record.received_agent),
+                        ratio(record.received, wire),
                         Style::default().fg(GOOD),
                     ));
                 }
@@ -1760,10 +1776,16 @@ fn detail_lines(record: &RequestRecord) -> Vec<Line<'static>> {
         field(
             "download",
             format!(
-                "{} on the wire -> {} decoded ({}){}",
+                "{} on the wire -> {} decoded ({}{}){}",
                 human(record.received_wire),
                 human(record.received),
                 record.upstream_encoding,
+                // The upload field's `(coding, -N%)`, for the upstream hop.
+                if record.upstream_encoding == "identity" {
+                    String::new()
+                } else {
+                    format!(", {}", ratio(record.received, record.received_wire))
+                },
                 match record.received_agent {
                     agent if agent > 0 && agent != record.received => format!(
                         " -> {} sent to the agent ({})",
@@ -2403,9 +2425,12 @@ mod tests {
         state.viewport = 4;
         // The tally only runs for the rows this state replays.
         state.recorded = true;
-        // An encoded hop: a megabyte of answer left as a tenth of one.
+        // An encoded hop: a megabyte of answer left as a tenth of one. The
+        // upstream hop is identity, so the agent leg is the pair the line shows.
         let mut paired = record("model-zeta", 200);
         paired.received = 1_000_000;
+        paired.received_wire = 1_000_000;
+        paired.upstream_encoding = "identity".to_string();
         paired.received_agent = 100_000;
         state.push(Event::Request(Arc::new(paired)));
         state.tick_recorded(&crate::watch::Window::default());
@@ -2422,6 +2447,64 @@ mod tests {
         // keeps the single-size row every other test asserts.
         let plain = screen(140, 44, &populated());
         assert!(!plain.contains("agent"), "{plain}");
+    }
+
+    /// Behind a receiver the download is saved on the upstream hop, and an
+    /// agent that asks for no coding (Codex) gets the answer as decoded. The
+    /// line pairs the answer with what that hop carried, as the upload side
+    /// does, and the upstream table counts what it kept off the wire.
+    #[test]
+    fn the_download_row_shows_what_the_upstream_hop_saved() {
+        let mut state = State::new();
+        state.viewport = 4;
+        state.recorded = true;
+        let mut hop = record("model-zeta", 200);
+        hop.received = 1_000_000;
+        hop.received_wire = 100_000;
+        hop.upstream_encoding = "zstd".to_string();
+        hop.received_agent = 0;
+        state.push(Event::Request(Arc::new(hop.clone())));
+        // Coded on both legs: the upstream hop is the pair, since that is
+        // the one a receiver saves on.
+        let mut both = hop;
+        both.received_agent = 50_000;
+        state.push(Event::Request(Arc::new(both)));
+        state.tick_recorded(&crate::watch::Window::default());
+        let out = screen(140, 44, &state);
+        assert_eq!(out.matches("down 977KB→98KB -90%").count(), 2, "{out}");
+
+        let mut view = StatsView {
+            down_bytes: 1_000_000,
+            down_wire_bytes: 100_000,
+            ..StatsView::default()
+        };
+        assert_eq!(view.down_saved_bytes(), 900_000);
+        view.down_wire_bytes = 1_100_000;
+        assert_eq!(
+            view.down_saved_bytes(),
+            -100_000,
+            "clamped where it is drawn"
+        );
+        state.models = vec![crate::tui::state::ModelRow {
+            name: "codex".into(),
+            view: StatsView {
+                requests: 1,
+                down_bytes: 1_000_000,
+                down_wire_bytes: 100_000,
+                ..StatsView::default()
+            },
+        }];
+        let wide = screen(ROOMY_TABLE, 44, &state);
+        let header = table_header(&wide);
+        assert!(
+            header.contains("down ") && header.contains("↓ saved"),
+            "{wide}"
+        );
+        let row = wide
+            .lines()
+            .find(|line| line.starts_with("│ codex"))
+            .expect("the codex row");
+        assert!(row.contains("879KB"), "900,000 bytes saved:\n{wide}");
     }
 
     #[test]

@@ -80,6 +80,14 @@ export const CELLS = [
     read: (e) => ({ text: human(e.received), tone: null, title: `${human(e.received_wire)} on the wire (${e.upstream_encoding})` }),
   },
   {
+    key: "downwire", column: "down", label: "↓ wire", numeric: true, note: "response bytes as they crossed the upstream hop, when it was coded",
+    read: (e) => (e.upstream_encoding === "identity" ? null : { text: human(e.received_wire), tone: null, title: e.upstream_encoding }),
+  },
+  {
+    key: "downsaved", column: "down", label: "↓ saved", numeric: true, note: "download saved on the upstream hop",
+    read: (e) => (e.upstream_encoding === "identity" ? null : { text: ratio(e.received, e.received_wire), tone: "good", title: e.upstream_encoding }),
+  },
+  {
     key: "agent", column: "down", label: "to agent", numeric: true, note: "what the agent got, when it differs",
     read: (e) => (e.received_agent > 0 && e.received_agent !== e.received
       ? { text: human(e.received_agent), tone: null, title: `${ratio(e.received, e.received_agent)} (${e.agent_encoding ?? "identity"})` }

@@ -101,9 +101,11 @@ python3 scripts/bench.py --turns 20 --context-kb 1024
 
 For your own traffic, run an agent session through a sender whose destination
 has a receiver, then read the sender's counters. In the stats, `saved_bytes`
-is `body_bytes` minus `wire_bytes`, and `dict_hits` counts requests sent as a
-delta; the report shows the same comparison as `up raw`, `up wire`, and
-`saved`.
+is `body_bytes` minus `wire_bytes`, `down_saved_bytes` is the same for the
+answers on their way back (`down_bytes` minus `down_wire_bytes`), and
+`dict_hits` counts requests sent as a delta. The report shows the same
+comparison as `up raw`, `up wire`, `up saved` and `down`, `down wire`,
+`down saved`.
 
 ```sh
 curl --fail-with-body http://127.0.0.1:8787/__portway/stats

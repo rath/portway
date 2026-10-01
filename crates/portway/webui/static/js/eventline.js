@@ -16,7 +16,7 @@ export const COLUMNS = [
   { name: "route", note: "method, full path, and the dial time of a fresh connection" },
   { name: "sizes", note: "request body raw and on the wire, saved, ↑ time" },
   { name: "ttfb", note: "first byte of the answer" },
-  { name: "down", note: "response bytes, what the agent got, ↓ time" },
+  { name: "down", note: "response bytes decoded and on the wire, saved, what the agent got, ↓ time" },
   { name: "tokens", note: "in, cached and out, as the engine counted" },
 ];
 
@@ -31,6 +31,17 @@ export function parseColumns(list) {
     }
   }
   return new Set(names);
+}
+
+/**
+ * The size the answer crossed a hop as, for the line's download pair: the
+ * upstream hop when it was coded, else the agent leg when the hop recoded it
+ * (tui::view::down_wire).
+ */
+export function downWire(event) {
+  if (event.upstream_encoding !== "identity" && event.received_wire > 0) return event.received_wire;
+  if (event.received_agent > 0 && event.received_agent !== event.received) return event.received_agent;
+  return null;
 }
 
 /** The tone a status code is drawn in. */
@@ -107,16 +118,18 @@ export function requestLine(event, columns) {
         line.word("ttfb", "dim");
         line.word(humanTime(event.ttfb), "time");
         break;
-      case "down":
+      case "down": {
         line.word("down", "dim");
         line.word(human(event.received), "raw");
-        if (event.received_agent > 0 && event.received_agent !== event.received) {
+        const wire = downWire(event);
+        if (wire != null) {
           line.glue("→", "dim");
-          line.word(human(event.received_agent), "wire");
-          line.word(ratio(event.received, event.received_agent), "good");
+          line.word(human(wire), "wire");
+          line.word(ratio(event.received, wire), "good");
         }
         if (event.download != null) line.word(humanTime(event.download), "time");
         break;
+      }
       case "tokens": {
         const usage = event.usage;
         if (!usage) break;
@@ -168,7 +181,7 @@ export function detailFields(event) {
     ["upload", `${human(event.body_len)} -> ${human(event.wire_len)} (${event.coding ?? "identity"}, ${ratio(event.body_len, event.wire_len)})`],
     ["upload acked in", optional(event.upload)],
     ["ttfb", humanTime(event.ttfb)],
-    ["download", `${human(event.received_wire)} on the wire -> ${human(event.received)} decoded (${event.upstream_encoding})${agent}`],
+    ["download", `${human(event.received_wire)} on the wire -> ${human(event.received)} decoded (${event.upstream_encoding}${event.upstream_encoding === "identity" ? "" : `, ${ratio(event.received, event.received_wire)}`})${agent}`],
     ["download took", optional(event.download)],
     ["tokens", usage
       ? `${usage.prompt} in${usage.cached != null ? ` (${usage.cached} cached)` : ""} -> ${usage.completion} out${usage.reasoning != null ? ` (${usage.reasoning} reasoning)` : ""}`

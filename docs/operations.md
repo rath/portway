@@ -302,7 +302,7 @@ same code, with these views and additions:
 | View | What it adds |
 | --- | --- |
 | Dashboard | Requests in flight, with their phase (upload, prefill, stream), age and progress; a slow prefill (over 30s) or a stalled stream (no bytes for 60s) is flagged. A console attached to another instance cannot see that instance's flights. |
-| Events | An aligned table with a header per field and each request's full method and path, where the terminal shortens known routes to fit; a field no event has filled yet takes no room. Drag the edge of a header to set a column's width; double-click it, or run "Reset column widths", to fit the content again. Widths are kept per browser. Search (`status:5xx`, `model:`, `upstream:`, `route:`, `is:cut`, `ttfb:>2s`, `size:>1MB`, `tok:>50K`, `-word`, `"phrase"`), CSV and JSON export of the filtered lines, and older lines on request. |
+| Events | An aligned table with a header per field and each request's full method and path, where the terminal shortens known routes to fit; a field no event has filled yet takes no room. Downloads read like uploads: `down` is the answer decoded, `↓ wire` and `↓ saved` what the upstream hop carried and kept off the wire (behind a receiver, its download saving), and `to agent` the leg to the agent when the agent asked for a coding. Drag the edge of a header to set a column's width; double-click it, or run "Reset column widths", to fit the content again. Widths are kept per browser. Search (`status:5xx`, `model:`, `upstream:`, `route:`, `is:cut`, `ttfb:>2s`, `size:>1MB`, `tok:>50K`, `-word`, `"phrase"`), CSV and JSON export of the filtered lines, and older lines on request. |
 | Usage | The terminal's usage screen, refreshed every 5s. |
 | History | `--report` for any window, per model, as tables with CSV, or as the exact text. |
 | Insights | ttfb percentiles and upload savings since the page opened, and each model's share. |
@@ -368,6 +368,7 @@ or `upstream` in single-upstream mode. Useful fields include:
 | `coding` | Sender-negotiated request coding; `null` means identity. Origin auto selects per context; see below. |
 | `encoded_requests` | Requests actually sent with compression |
 | `body_bytes`, `wire_bytes`, `saved_bytes` | Original body size, sent body size, and savings counters |
+| `down_bytes`, `down_wire_bytes`, `down_saved_bytes` | Answers decoded, as they crossed the upstream hop, and the difference: behind a receiver, its download saving. It is counted whatever the agent asked for; `agent_bytes` is the separate leg to the agent, re-encoded only when the agent offered a coding |
 | `dict` | Whether dictionary support is enabled for the route |
 | `dict_hits`, `dict_misses` | Dictionary reuse and misses reported during forwarding |
 | `identity_reason` | Why request compression is off: `not_negotiated`, `configured_off`, `probe_failed`, `no_supported_coding`, or `encoding_refused`; `null` when compression is enabled |

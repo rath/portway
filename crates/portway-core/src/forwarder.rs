@@ -272,6 +272,13 @@ impl StatsView {
     pub fn saved_bytes(&self) -> i64 {
         self.body_bytes as i64 - self.wire_bytes as i64
     }
+
+    /// Response bytes the upstream hop's compression kept off the wire: the
+    /// answers decoded, less what crossed that hop. Behind a receiver this is
+    /// the download half of what it saves.
+    pub fn down_saved_bytes(&self) -> i64 {
+        self.down_bytes as i64 - self.down_wire_bytes as i64
+    }
 }
 
 pub struct Forwarder {
@@ -1366,6 +1373,7 @@ impl Forwarder {
             "upstream_errors": view.upstream_errors,
             "coding": view.coding.name(),
             "saved_bytes": view.saved_bytes(),
+            "down_saved_bytes": view.down_saved_bytes(),
         })
     }
 }

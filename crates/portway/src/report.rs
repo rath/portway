@@ -106,14 +106,21 @@ impl Row {
         }
     }
 
-    /// The `saved` column: `-` without a body, else the whole percent saved.
+    /// The `up saved` column: `-` without a body, else the whole percent saved.
     pub fn saved(&self) -> String {
         let Aggregate { body, wire, .. } = self.counts;
-        if body == 0 {
-            "-".to_string()
-        } else {
-            format!("{}%", (body - wire) * 100 / body)
-        }
+        percent_saved(body, wire)
+    }
+
+    /// The `down saved` column: the same figure for the answers, on the hop
+    /// they came in over. Behind a receiver this is its download saving.
+    pub fn down_saved(&self) -> String {
+        let Aggregate {
+            received,
+            received_wire,
+            ..
+        } = self.counts;
+        percent_saved(received, received_wire)
     }
 }
 
@@ -363,13 +370,25 @@ fn totals(aggregates: &[Aggregate]) -> Aggregate {
     total
 }
 
+/// `-` for nothing sent, else the whole percent the wire kept off; never
+/// negative, since zstd can round an incompressible body up.
+fn percent_saved(raw: i64, wire: i64) -> String {
+    if raw <= 0 {
+        "-".to_string()
+    } else {
+        format!("{}%", (raw - wire).max(0) * 100 / raw)
+    }
+}
+
 fn timing_table(rows: &[&Row]) -> String {
     let header = [
         "model",
         "up raw",
         "up wire",
-        "saved",
+        "up saved",
         "down",
+        "down wire",
+        "down saved",
         "ttfb p50",
         "ttfb p95",
         "up p50",
@@ -388,6 +407,8 @@ fn timing_row(row: &Row) -> Vec<String> {
         logfmt::human(counts.wire as u64),
         row.saved(),
         logfmt::human(counts.received as u64),
+        logfmt::human(counts.received_wire as u64),
+        row.down_saved(),
         ms(row.ttfb_p50),
         ms(row.ttfb_p95),
         ms(row.up_p50),
@@ -694,7 +715,7 @@ mod tests {
         let timing = rows(&text, "total");
         assert_eq!(timing.len(), 2, "{timing:?}");
         let timing = &timing[1];
-        assert_eq!(timing.len(), 10, "{timing:?}");
+        assert_eq!(timing.len(), 12, "{timing:?}");
         assert_eq!(timing[1], logfmt::human(2048 + 7_000_000 + 2048));
         assert_eq!(timing[3], "71%");
 
@@ -736,10 +757,10 @@ model-alpha     2    2    0    0    0      0       1
 model-zeta      1    0    0    0    1      1       0
 total           3    2    0    0    1      1       1
 
-model        up raw  up wire  saved  down  ttfb p50  ttfb p95  up p50  up p95  conn mean
-model-alpha   6.7MB    1.9MB    71%   2KB     500ms     500ms    10ms    10ms       77ms
-model-zeta      2KB    0.5KB    75%   1KB     500ms     500ms    10ms    10ms       77ms
-total         6.7MB    1.9MB    71%   3KB     500ms     500ms    10ms    10ms       77ms
+model        up raw  up wire  up saved  down  down wire  down saved  ttfb p50  ttfb p95  up p50  up p95  conn mean
+model-alpha   6.7MB    1.9MB       71%   2KB      0.5KB         75%     500ms     500ms    10ms    10ms       77ms
+model-zeta      2KB    0.5KB       75%   1KB      0.2KB         75%     500ms     500ms    10ms    10ms       77ms
+total         6.7MB    1.9MB       71%   3KB      0.8KB         75%     500ms     500ms    10ms    10ms       77ms
 
 trouble (last 20 in the window)
 <when>  500  model-zeta  POST /v1/chat/completions  (truncated after 1KB)

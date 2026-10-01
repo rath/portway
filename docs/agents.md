@@ -134,10 +134,13 @@ The dashboards list `anthropic` and `codex` as upstreams and each request
 under its model; `portway --report --model claude-opus-5-5` narrows to one.
 A catalog request names no model and shows `-`.
 
-Codex asks for no response compression (its HTTP client sends no
-`Accept-Encoding`), so its answers reach it as they were decoded, and the
-console's "to agent" column stays empty for it. Claude Code accepts a
-compressed answer and shows the smaller figure there.
+Both clients' answers are compressed across the receiver hop, and the
+console shows that saving as `↓ wire` and `↓ saved` for each request (and
+`↓ saved` per upstream). The `to agent` column is the last leg, from the
+sender to the client: Claude Code accepts a compressed answer there, while
+Codex asks for none (its HTTP client sends no `Accept-Encoding`), so for Codex
+that column stays empty. Next to the agent that leg is loopback or a LAN and
+costs nothing worth saving.
 
 ## If it does not work
 

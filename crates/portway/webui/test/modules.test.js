@@ -34,7 +34,7 @@ const every = new Set(ALL_COLUMNS);
 test("a request line reads like the terminal's", () => {
   assert.equal(
     lineText(eventLine(request(), every)),
-    "12:34:56 200 model-alpha POST ../completions 461KB→111KB -76% 12ms ttfb 840ms down 2KB 1.50s tok 91.2K(91.1K cached)→891",
+    "12:34:56 200 model-alpha POST ../completions 461KB→111KB -76% 12ms ttfb 840ms down 2KB→0.9KB -56% 1.50s tok 91.2K(91.1K cached)→891",
   );
 });
 
@@ -49,9 +49,21 @@ test("marks take a separator's place, and off fields close their gap", () => {
   assert.equal(lineText(eventLine(bare, new Set(["sizes", "tokens", "status"]))), "200");
 });
 
+test("a coded upstream hop pairs the answer with what it carried", () => {
+  // Behind a receiver: what the tunnel carried, though the agent got it decoded.
+  const line = lineText(eventLine(request({ download: null }), new Set(["down"])));
+  assert.equal(line, "down 2KB→0.9KB -56%");
+  const both = lineText(eventLine(request({ received_agent: 512, download: null }), new Set(["down"])));
+  assert.equal(both, "down 2KB→0.9KB -56%", "the upstream hop wins");
+  const fields = Object.fromEntries(detailFields(request()));
+  assert.equal(fields.download, "0.9KB on the wire -> 2KB decoded (gzip, -56%)");
+});
+
 test("a re-encoded download shows what the agent got", () => {
-  const line = lineText(eventLine(request({ received_agent: 512, download: null }), new Set(["down"])));
+  const identity = { upstream_encoding: "identity", received_wire: 2048 };
+  const line = lineText(eventLine(request({ ...identity, received_agent: 512, download: null }), new Set(["down"])));
   assert.equal(line, "down 2KB→0.5KB -75%");
+  assert.equal(lineText(eventLine(request({ ...identity, download: null }), new Set(["down"]))), "down 2KB");
 });
 
 test("a log line names the level from WARNING up", () => {

@@ -58,23 +58,7 @@ pub fn render(record: &RequestRecord) -> String {
             logfmt::c(DIM, "ttfb"),
             logfmt::c(YELLOW, &logfmt::human_time(record.ttfb))
         ),
-        match agent_coding {
-            // Two sizes, like the upload: what the answer was, and what the
-            // agent received after the hop re-encoded it.
-            Some(agent) => format!(
-                "{} {} -> {} {}{download}",
-                logfmt::c(DIM, "down"),
-                logfmt::c(CYAN, &logfmt::human(record.received)),
-                logfmt::c(CYAN, &logfmt::human(record.received_agent)),
-                logfmt::c(DIM, &format!("({} -> {agent})", record.upstream_encoding)),
-            ),
-            None => format!(
-                "{} {} {}{download}",
-                logfmt::c(DIM, "down"),
-                logfmt::c(CYAN, &logfmt::human(record.received)),
-                logfmt::c(DIM, &format!("({})", record.upstream_encoding)),
-            ),
-        },
+        down(record, agent_coding, &download),
     ];
     let mut line = format!(
         "{} {} -> {}{sep}{}",
@@ -91,6 +75,51 @@ pub fn render(record: &RequestRecord) -> String {
         line.push_str(&tokens(usage));
     }
     line
+}
+
+/// The answer and the hops it crossed, the upload's `raw -> wire (coding,
+/// -N%)` read the other way round:
+///
+/// - `down 95KB (identity)`: nothing coded on either side;
+/// - `down 95KB <- 11KB (zstd, -88%)`: what the upstream hop carried, which
+///   behind a receiver is the download it saved;
+/// - `down 92KB -> 11KB (identity -> zstd)`: what the agent got, re-encoded;
+/// - `down 37KB <- 5KB (zstd, -86%) -> 0.6KB (zstd)`: both.
+fn down(record: &RequestRecord, agent_coding: Option<&str>, download: &str) -> String {
+    let coded = record.upstream_encoding != "identity";
+    let mut out = format!(
+        "{} {}",
+        logfmt::c(DIM, "down"),
+        logfmt::c(CYAN, &logfmt::human(record.received))
+    );
+    if coded {
+        let saved =
+            record.received.saturating_sub(record.received_wire) * 100 / record.received.max(1);
+        out.push_str(&format!(
+            " <- {} {}",
+            logfmt::c(CYAN, &logfmt::human(record.received_wire)),
+            logfmt::c(DIM, &format!("({}, -{saved}%)", record.upstream_encoding)),
+        ));
+    }
+    match agent_coding {
+        Some(agent) if coded => out.push_str(&format!(
+            " -> {} {}",
+            logfmt::c(CYAN, &logfmt::human(record.received_agent)),
+            logfmt::c(DIM, &format!("({agent})")),
+        )),
+        Some(agent) => out.push_str(&format!(
+            " -> {} {}",
+            logfmt::c(CYAN, &logfmt::human(record.received_agent)),
+            logfmt::c(DIM, &format!("({} -> {agent})", record.upstream_encoding)),
+        )),
+        None if coded => {}
+        None => out.push_str(&format!(
+            " {}",
+            logfmt::c(DIM, &format!("({})", record.upstream_encoding))
+        )),
+    }
+    out.push_str(download);
+    out
 }
 
 /// `tok N in (M cached) -> N out (N reasoning)`: what the engine said the turn
@@ -111,4 +140,84 @@ fn tokens(usage: Usage) -> String {
         logfmt::c(CYAN, &format!("{} in", usage.prompt)),
         logfmt::c(CYAN, &usage.completion.to_string()),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::forwarder::Coding;
+
+    fn record(
+        received_wire: u64,
+        upstream: &str,
+        agent: Option<&str>,
+        received_agent: u64,
+    ) -> RequestRecord {
+        RequestRecord {
+            stamp: "12:00:00".into(),
+            upstream: "codex".into(),
+            model: "gpt-x".into(),
+            method: http::Method::POST,
+            path: "/responses".into(),
+            status: 200,
+            dns: None,
+            tcp: None,
+            tls: None,
+            body_len: 0,
+            wire_len: 0,
+            coding: Coding::None,
+            upload: None,
+            ttfb: 1.0,
+            received: 100_000,
+            received_wire,
+            received_agent,
+            upstream_encoding: upstream.into(),
+            agent_encoding: agent.map(str::to_owned),
+            download: None,
+            complete: true,
+            usage: None,
+            flight: None,
+        }
+    }
+
+    /// The segment after `| down`: ANSI codes stripped, since a terminal may
+    /// have turned colour on.
+    fn down_segment(record: &RequestRecord) -> String {
+        let line = render(record);
+        let mut plain = String::new();
+        let mut chars = line.chars();
+        while let Some(c) = chars.next() {
+            if c == '\x1b' {
+                for c in chars.by_ref() {
+                    if c == 'm' {
+                        break;
+                    }
+                }
+            } else {
+                plain.push(c);
+            }
+        }
+        plain.rsplit(" | ").next().unwrap().to_string()
+    }
+
+    #[test]
+    fn the_down_segment_names_every_hop_that_saved_bytes() {
+        assert_eq!(
+            down_segment(&record(100_000, "identity", None, 0)),
+            "down 98KB (identity)"
+        );
+        // Behind a receiver, an agent that asks for no coding: the tunnel's saving.
+        assert_eq!(
+            down_segment(&record(12_000, "zstd", None, 0)),
+            "down 98KB <- 12KB (zstd, -88%)"
+        );
+        assert_eq!(
+            down_segment(&record(100_000, "identity", Some("zstd"), 11_000)),
+            "down 98KB -> 11KB (identity -> zstd)"
+        );
+        assert_eq!(
+            down_segment(&record(12_000, "zstd", Some("zstd"), 11_000)),
+            "down 98KB <- 12KB (zstd, -88%) -> 11KB (zstd)"
+        );
+    }
 }

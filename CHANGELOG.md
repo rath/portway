@@ -7,6 +7,17 @@ version may contain breaking changes.
 
 ## [Unreleased]
 
+### Changed
+
+- Download savings are shown wherever upload savings are. The event line pairs
+  the answer with what the upstream hop carried (`down 128KB→11KB -91%`), the
+  console's event table gains `↓ wire` and `↓ saved`, the upstream tables gain
+  `↓ saved`, `--report` gains `down wire` and `down saved` (its `saved` column
+  is now `up saved`), the log line reads `down 128KB <- 11KB (zstd, -91%)`, and
+  `/__portway/stats` adds `down_saved_bytes`. Before, a receiver's download
+  saving showed only as a tooltip, and an agent that asks for no response
+  coding, such as Codex, looked as if nothing had been saved.
+
 ### Fixed
 
 - A response Portway decodes or re-encodes keeps its `ETag`, weakened, instead
