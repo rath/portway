@@ -7,9 +7,19 @@ accepted by your own service.
 
 ## Install
 
-Each [release](https://github.com/rath/portway/releases) has a binary for macOS
-on Apple silicon and for Linux on x86-64 and arm64 (glibc 2.28 or later), built
-with the terminal dashboard and the browser console:
+With [Homebrew](https://github.com/rath/homebrew-tap), install on macOS Apple
+silicon or Linux x86_64/ARM64 (glibc 2.28 or later):
+
+```sh
+brew install rath/tap/portway
+```
+
+The package includes the terminal dashboard and the browser console. Update it
+with `brew update` followed by `brew upgrade portway`, then restart any running
+Portway process to use the new binary.
+
+Each [release](https://github.com/rath/portway/releases) also provides the same
+binaries for manual installation:
 
 ```sh
 # macOS on Apple silicon. On Linux use x86_64-unknown-linux-gnu or

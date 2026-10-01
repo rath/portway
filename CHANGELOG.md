@@ -7,6 +7,12 @@ version may contain breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- Homebrew installation through `brew install rath/tap/portway`, using the
+  published binaries for macOS Apple silicon and Linux x86_64/ARM64 with both
+  the terminal dashboard and the browser console included.
+
 ## [0.2.2] - 2026-10-01
 
 ### Fixed

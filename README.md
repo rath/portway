@@ -148,8 +148,16 @@ numbers stay flat.
 
 ## Quick start
 
-Download a release binary, which includes the terminal dashboard and the
-browser console. Checksums are in each release's `SHA256SUMS`:
+Install with [Homebrew](https://github.com/rath/homebrew-tap) on macOS Apple
+silicon or Linux x86_64/ARM64 (glibc 2.28 or later). The package includes the
+terminal dashboard and the browser console:
+
+```sh
+brew install rath/tap/portway
+```
+
+Or download a release binary with the same features. Checksums are in each
+release's `SHA256SUMS`:
 
 ```sh
 # macOS on Apple silicon. On Linux use x86_64-unknown-linux-gnu or
