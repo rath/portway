@@ -20,6 +20,14 @@ version may contain breaking changes.
 
 ### Fixed
 
+- Codex turns in long sessions record their token counts. The ChatGPT
+  backend's `usage` object attributes the turn to every item of the
+  conversation, about 250 bytes an item, and Portway dropped a usage object
+  over 8 KiB whenever a chunk boundary cut it, so most turns of a long session
+  had no counts. The object is now read as it streams past, keeping only its
+  own fields and their `…_details`, whatever its size.
+  Reasoning tokens are read from the Responses API's `output_tokens_details`
+  as well.
 - A response Portway decodes or re-encodes keeps its `ETag`, weakened, instead
   of losing it. Codex keys its model catalog on that tag and compares it with
   the `X-Models-Etag` of every answer; without it, Codex downloaded the whole

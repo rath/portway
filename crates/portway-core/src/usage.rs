@@ -12,6 +12,14 @@
 //! does not need one. An escaped `\"usage\"` is inside a string, and an object
 //! that does not read back as counts is dropped, so prose that happens to look
 //! like usage cannot become a number in the record.
+//!
+//! The object is read as it streams past, keeping only what the counts can
+//! be: its own fields and the `…_details` objects beside them. Anything
+//! nested deeper is skipped, its brackets kept so what is held still parses.
+//! That is what makes the size of the object irrelevant: the ChatGPT backend
+//! attributes the turn to every item of the conversation inside its `usage`,
+//! about 250 bytes an item, so a long Codex session reports counts in an
+//! object of tens of kilobytes that any chunk boundary may cut.
 
 use serde_json::{Map, Value};
 
@@ -27,33 +35,33 @@ pub struct Usage {
     pub cached: Option<u64>,
     /// `completion_tokens`: what the decode generated.
     pub completion: u64,
-    /// `completion_tokens_details.reasoning_tokens`, or the top-level
-    /// `reasoning_tokens`: the thinking inside `completion`, which on these
-    /// models is most of it and is not part of the answer. `None` when the
-    /// engine did not break it out.
+    /// `completion_tokens_details.reasoning_tokens` (the Responses API's
+    /// `output_tokens_details`), or the top-level `reasoning_tokens`: the
+    /// thinking inside `completion`, which on these models is most of it and
+    /// is not part of the answer. `None` when the engine did not break it out.
     pub reasoning: Option<u64>,
 }
 
 /// The field the counts live under, quotes included.
 const KEY: &[u8] = b"\"usage\"";
 
-/// How long a candidate the chunk boundary cut in half may be held. A real
-/// usage object is a few hundred bytes; a stream that opens one and never
-/// closes it is content that merely looks like a field, and holding it would
-/// be a leak in a process that outlives agent sessions by design.
+/// How deep inside the usage object a byte may sit and still be kept: its own
+/// fields are at depth 1, the fields of a `…_details` object at depth 2.
+const KEEP_DEPTH: usize = 2;
+
+/// How much of one candidate may be kept. A real usage object's shallow part
+/// is a few hundred bytes; one that outgrows this is content that merely
+/// looks like a field, and holding it would be a leak in a process that
+/// outlives agent sessions by design.
 const HOLD: usize = 8 * 1024;
 
 /// Finds the counts in a response as it is relayed. One per relay, fed every
 /// decoded chunk in order.
 #[derive(Default)]
 pub struct Scanner {
-    /// Bytes held back for the next chunk: the tail of a key, or a key whose
-    /// object has not closed yet. Empty whenever nothing is undecided.
-    held: Vec<u8>,
-    /// The byte immediately before `held`, for the escaped-key check.
-    before: Option<u8>,
-    /// The last byte of the previous chunk: the same check for a key that
-    /// starts a chunk.
+    state: State,
+    /// The last byte of the previous chunk: the escaped-key check for a key
+    /// that starts a chunk.
     prev: Option<u8>,
     /// The last complete usage object seen. A stream may carry more than one —
     /// an engine that reports the running total per chunk — and the last one is
@@ -61,40 +69,104 @@ pub struct Scanner {
     last: Option<Usage>,
 }
 
+/// Where the scan is. Every state survives a chunk boundary, so a key or an
+/// object cut anywhere reads the same as one that arrived whole.
+enum State {
+    /// Looking for the key, this many of its bytes just seen.
+    Search(usize),
+    /// After the key: whitespace, then the colon.
+    Colon,
+    /// After the colon: whitespace, then the object.
+    Open,
+    /// Inside the object.
+    Object(Candidate),
+}
+
+impl Default for State {
+    fn default() -> Self {
+        State::Search(0)
+    }
+}
+
+/// A usage object being read, reduced to its shallow part.
+struct Candidate {
+    kept: Vec<u8>,
+    depth: usize,
+    in_string: bool,
+    escaped: bool,
+}
+
+enum Step {
+    More,
+    Closed,
+    /// Its shallow part outgrew `HOLD`.
+    Abandoned,
+}
+
+impl Candidate {
+    fn new() -> Self {
+        Candidate {
+            kept: vec![b'{'],
+            depth: 1,
+            in_string: false,
+            escaped: false,
+        }
+    }
+
+    fn take(&mut self, byte: u8) -> Step {
+        // The depth the byte sits at: a bracket belongs to the container
+        // around it, not to the one it opens or closes.
+        let mut at = self.depth;
+        if self.in_string {
+            if self.escaped {
+                self.escaped = false;
+            } else if byte == b'\\' {
+                self.escaped = true;
+            } else if byte == b'"' {
+                self.in_string = false;
+            }
+        } else {
+            match byte {
+                b'"' => self.in_string = true,
+                b'{' | b'[' => self.depth += 1,
+                b'}' | b']' => {
+                    self.depth -= 1;
+                    at = self.depth;
+                }
+                _ => {}
+            }
+        }
+        if at <= KEEP_DEPTH {
+            self.kept.push(byte);
+        }
+        if self.depth == 0 {
+            Step::Closed
+        } else if self.kept.len() > HOLD {
+            Step::Abandoned
+        } else {
+            Step::More
+        }
+    }
+}
+
 impl Scanner {
     /// Feed decoded response bytes, in the order they are relayed.
     pub fn push(&mut self, data: &[u8]) {
-        if self.held.is_empty() {
-            // The common path: nothing is undecided, so the chunk is scanned
-            // where it is and only an unresolved tail is copied out of it.
-            if let Some(from) = scan(&mut self.last, data, self.prev) {
-                self.before = if from == 0 {
-                    self.prev
-                } else {
-                    Some(data[from - 1])
-                };
-                self.held.extend_from_slice(&data[from..]);
-            }
-        } else {
-            let mut buf = std::mem::take(&mut self.held);
-            buf.extend_from_slice(data);
-            match scan(&mut self.last, &buf, self.before) {
-                None => buf.clear(),
-                Some(from) => {
-                    self.before = if from == 0 {
-                        self.before
-                    } else {
-                        Some(buf[from - 1])
-                    };
-                    buf.drain(..from);
+        let mut i = 0;
+        while i < data.len() {
+            if matches!(self.state, State::Search(0)) {
+                // Nothing is under way, and only a quote can start the key.
+                match data[i..].iter().position(|&byte| byte == b'"') {
+                    Some(skip) => i += skip,
+                    None => break,
                 }
             }
-            // The buffer is kept: its capacity is the most a candidate ever
-            // held, and a stream that split one key usually splits another.
-            self.held = buf;
+            let before = if i == 0 { self.prev } else { Some(data[i - 1]) };
+            self.step(data[i], before);
+            i += 1;
         }
-        if let Some(last) = data.last() {
-            self.prev = Some(*last);
+        if let Some(&last) = data.last() {
+            self.prev = Some(last);
         }
     }
 
@@ -102,107 +174,44 @@ impl Scanner {
     pub fn usage(&self) -> Option<Usage> {
         self.last
     }
-}
 
-/// Scan one run of bytes whose first byte was preceded by `before`, recording
-/// every usage object it completes. `Some(i)` means the run is undecided from
-/// `i` on, and the caller holds those bytes for the next chunk.
-fn scan(last: &mut Option<Usage>, data: &[u8], before: Option<u8>) -> Option<usize> {
-    let mut from = 0;
-    loop {
-        let Some(at) = find(&data[from..]).map(|offset| from + offset) else {
-            // The key may still be half-typed at the end of this run.
-            let keep = (KEY.len() - 1).min(data.len());
-            return (keep > 0).then_some(data.len() - keep);
-        };
-        let preceded = if at == 0 { before } else { Some(data[at - 1]) };
-        if preceded == Some(b'\\') {
-            // `\"usage\"`: generated content, not a field.
-            from = at + KEY.len();
-            continue;
-        }
-        match object(data, at + KEY.len()) {
-            Extent::Object(start, end) => {
-                if let Some(usage) = read(&data[start..end]) {
-                    *last = Some(usage);
+    /// Advance by one byte, which `before` preceded.
+    fn step(&mut self, byte: u8, before: Option<u8>) {
+        match &mut self.state {
+            State::Search(seen) => {
+                // `\"usage\"` is generated content, not a field: an escaped
+                // quote never opens the key.
+                let opens = byte == b'"' && before != Some(b'\\');
+                *seen = if *seen > 0 && byte == KEY[*seen] {
+                    *seen + 1
+                } else {
+                    usize::from(opens)
+                };
+                if *seen == KEY.len() {
+                    self.state = State::Colon;
                 }
-                from = end;
             }
-            Extent::No => from = at + KEY.len(),
-            // Undecided — unless the candidate has run past what a usage
-            // object can be, which makes it content that looked like one.
-            Extent::Partial if data.len() - at <= HOLD => return Some(at),
-            Extent::Partial => from = at + KEY.len(),
+            State::Colon | State::Open if byte.is_ascii_whitespace() => {}
+            State::Colon if byte == b':' => self.state = State::Open,
+            State::Open if byte == b'{' => self.state = State::Object(Candidate::new()),
+            // `null`, a string, or another field: this byte may itself start
+            // the next key.
+            State::Colon | State::Open => {
+                self.state = State::Search(0);
+                self.step(byte, before);
+            }
+            State::Object(candidate) => match candidate.take(byte) {
+                Step::More => {}
+                Step::Closed => {
+                    if let Some(usage) = read(&candidate.kept) {
+                        self.last = Some(usage);
+                    }
+                    self.state = State::Search(0);
+                }
+                Step::Abandoned => self.state = State::Search(0),
+            },
         }
     }
-}
-
-/// Seven bytes against one decoded chunk, and only a stream is scanned: the
-/// naive scan is the right one.
-fn find(haystack: &[u8]) -> Option<usize> {
-    haystack.windows(KEY.len()).position(|window| window == KEY)
-}
-
-/// Where the value behind a key ends, when it is an object.
-enum Extent {
-    /// A `{` at the first index, its matching `}` at the second.
-    Object(usize, usize),
-    /// Something else: `null`, a string, or another field's key.
-    No,
-    /// The run ends inside what might be one.
-    Partial,
-}
-
-fn object(data: &[u8], from: usize) -> Extent {
-    let mut i = skip_space(data, from);
-    if i == data.len() {
-        return Extent::Partial;
-    }
-    if data[i] != b':' {
-        return Extent::No;
-    }
-    i = skip_space(data, i + 1);
-    if i == data.len() {
-        return Extent::Partial;
-    }
-    if data[i] != b'{' {
-        return Extent::No;
-    }
-
-    let start = i;
-    let mut depth = 0usize;
-    let mut in_string = false;
-    let mut escaped = false;
-    while i < data.len() {
-        let byte = data[i];
-        if in_string {
-            if escaped {
-                escaped = false;
-            } else if byte == b'\\' {
-                escaped = true;
-            } else if byte == b'"' {
-                in_string = false;
-            }
-        } else if byte == b'"' {
-            in_string = true;
-        } else if matches!(byte, b'{' | b'[') {
-            depth += 1;
-        } else if matches!(byte, b'}' | b']') {
-            depth -= 1;
-            if depth == 0 {
-                return Extent::Object(start, i + 1);
-            }
-        }
-        i += 1;
-    }
-    Extent::Partial
-}
-
-fn skip_space(data: &[u8], mut i: usize) -> usize {
-    while i < data.len() && data[i].is_ascii_whitespace() {
-        i += 1;
-    }
-    i
 }
 
 /// Read the counts out of one usage object. Anything else — another field's
@@ -234,9 +243,11 @@ fn read(object: &[u8]) -> Option<Usage> {
             .or_else(|| count("cached_tokens"))
             .or_else(|| count("cache_read_input_tokens")),
         completion,
-        // vLLM breaks thinking out under `completion_tokens_details`; SGLang
-        // reports it beside the totals.
+        // vLLM breaks thinking out under `completion_tokens_details`, the
+        // Responses API under `output_tokens_details`; SGLang reports it
+        // beside the totals.
         reasoning: nested(&map, "completion_tokens_details", "reasoning_tokens")
+            .or_else(|| nested(&map, "output_tokens_details", "reasoning_tokens"))
             .or_else(|| count("reasoning_tokens")),
     })
 }
@@ -398,6 +409,40 @@ data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input
             scan_all(&[answer]).map(|usage| (usage.prompt, usage.cached)),
             Some((5000, Some(4096)))
         );
+    }
+
+    /// The ChatGPT backend's `usage` attributes the turn to every item of the
+    /// conversation, so a long Codex session reports its counts in an object
+    /// far larger than `HOLD`. Only its shallow part is kept, so its size does
+    /// not matter, nor where a chunk boundary cuts it.
+    #[test]
+    fn a_usage_object_of_any_size_is_read_wherever_it_is_cut() {
+        let items = (0..2_000)
+            .map(|item| {
+                format!(
+                    r#""at_{item:04}":{{"cache_write_tokens":0,"cached_tokens":96,"input_tokens":96,"output_tokens":0}}"#
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        let event = format!(
+            "event: response.completed\ndata: {{\"type\":\"response.completed\",\"response\":{{\"tools\":[],\"usage\":{{\"attribution\":{{\"items\":{{{items}}}}},\"input_tokens\":204339,\"input_tokens_details\":{{\"cache_write_tokens\":0,\"cached_tokens\":203392}},\"output_tokens\":737,\"output_tokens_details\":{{\"reasoning_tokens\":516}},\"total_tokens\":205076}},\"user\":null}}}}\n\n"
+        );
+        assert!(event.len() > 20 * HOLD, "{}", event.len());
+
+        for size in [1, 7, 1_000, 4_096, 16_384, 65_536, event.len()] {
+            let chunks = event.as_bytes().chunks(size).collect::<Vec<_>>();
+            assert_eq!(
+                scan_all(&chunks),
+                Some(Usage {
+                    prompt: 204_339,
+                    cached: Some(203_392),
+                    completion: 737,
+                    reasoning: Some(516),
+                }),
+                "chunks of {size}"
+            );
+        }
     }
 
     #[test]
