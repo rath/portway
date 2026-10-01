@@ -341,17 +341,23 @@ cd portway
 cargo install --path crates/portway --locked</code></pre>
     </li>
     <li>
-      <p><strong>Point it at your service and start it.</strong></p>
+      <p><strong>Mount your vendors' APIs and start it.</strong></p>
 <pre class="shell"><code># portway.toml
-upstream = "https://api.example.com"
 host = "127.0.0.1"
-port = 8787</code></pre>
+port = 8787
+
+[upstreams]
+anthropic = "https://api.anthropic.com"
+codex = "https://chatgpt.com/backend-api/codex"</code></pre>
 <pre class="shell"><code>portway --config ./portway.toml</code></pre>
     </li>
     <li>
-      <p><strong>Point your agent at Portway.</strong> Set its API base URL to
-      <code>http://127.0.0.1:8787/v1</code> and keep its key and model name. Portway passes the
-      <code>Authorization</code> header through and has no key of its own.</p>
+      <p><strong>Point your agent at its mount and change nothing else.</strong> Claude Code:
+      <code>ANTHROPIC_BASE_URL=http://127.0.0.1:8787/anthropic</code>. Codex:
+      <code>base_url = "http://127.0.0.1:8787/codex"</code> in its provider entry. Each keeps its
+      own login and model names; Portway passes the request's credentials through and has no key
+      of its own. An OpenAI-compatible service takes a single <code>upstream</code> and the base
+      URL <code>http://127.0.0.1:8787/v1</code>.</p>
     </li>
     <li>
       <p><strong>Put a receiver on the far side.</strong> Run <code>portway receive</code> behind
@@ -366,6 +372,7 @@ port = 8787</code></pre>
   metadata in SQLite, never bodies, credentials or dictionary contents.</p>
 
   <ul class="docs">
+    <li><a href="https://github.com/rath/portway/blob/main/docs/agents.md">Claude Code and Codex</a></li>
     <li><a href="https://github.com/rath/portway/blob/main/docs/getting-started.md">Getting started</a></li>
     <li><a href="https://github.com/rath/portway/blob/main/docs/faq.md">FAQ</a></li>
     <li><a href="https://github.com/rath/portway/blob/main/docs/configuration.md">Configuration</a></li>

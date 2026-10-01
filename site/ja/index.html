@@ -298,15 +298,18 @@ cd portway
 cargo install --path crates/portway --locked</code></pre>
     </li>
     <li>
-      <p><strong>サービスを指定して起動します。</strong></p>
+      <p><strong>各ベンダーの API を名前でマウントして起動します。</strong></p>
 <pre class="shell"><code># portway.toml
-upstream = "https://api.example.com"
 host = "127.0.0.1"
-port = 8787</code></pre>
+port = 8787
+
+[upstreams]
+anthropic = "https://api.anthropic.com"
+codex = "https://chatgpt.com/backend-api/codex"</code></pre>
 <pre class="shell"><code>portway --config ./portway.toml</code></pre>
     </li>
     <li>
-      <p><strong>エージェントを Portway に向けます。</strong>API の base URL を <code>http://127.0.0.1:8787/v1</code> にして、キーとモデル名はそのままにします。Portway は <code>Authorization</code> ヘッダーをそのまま通し、自分では鍵を持ちません。</p>
+      <p><strong>エージェントを自分のマウントに向けます。</strong>変えるのはそれだけです。Claude Code は <code>ANTHROPIC_BASE_URL=http://127.0.0.1:8787/anthropic</code>、Codex はプロバイダー項目の <code>base_url = "http://127.0.0.1:8787/codex"</code> です。ログインもモデル名もそれぞれそのまま使い、Portway はリクエストに載った認証情報をそのまま通して、自分では鍵を持ちません。OpenAI 互換のサービスなら <code>upstream</code> ひとつと base URL <code>http://127.0.0.1:8787/v1</code> で済みます。</p>
     </li>
     <li>
       <p><strong>向こう側にレシーバーを置きます。</strong>サービスの手前にあるゲートウェイの後ろで <code>portway receive</code> を動かし、センダーをそのゲートウェイに向けます。<a href="https://github.com/rath/portway/blob/main/docs/getting-started.md#add-a-compression-receiver">レシーバーの設定</a>に手順があります。</p>
@@ -316,6 +319,7 @@ port = 8787</code></pre>
   <p>同じリポジトリには、埋め込み可能な Rust ライブラリ <code>portway-core</code> と、デーモンモード、レポート、ターミナルダッシュボード、ブラウザーコンソールを備えた CLI が入っています。リクエストのメタデータだけを SQLite に記録し、ボディ、認証情報、辞書の中身は決して記録しません。</p>
 
   <ul class="docs">
+    <li><a href="https://github.com/rath/portway/blob/main/docs/agents.md">Claude Code と Codex</a></li>
     <li><a href="https://github.com/rath/portway/blob/main/docs/getting-started.md">はじめに</a></li>
     <li><a href="https://github.com/rath/portway/blob/main/docs/faq.md">よくある質問</a></li>
     <li><a href="https://github.com/rath/portway/blob/main/docs/configuration.md">設定</a></li>

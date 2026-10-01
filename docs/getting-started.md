@@ -1,8 +1,9 @@
 # Getting started
 
-This guide starts with one upstream service, then shows how to register several
-models and add a compression receiver. Example domains and model names are
-placeholders: substitute the URL and model accepted by your own service.
+This guide starts with one upstream service, then shows how to connect Claude
+Code and Codex, register several models, and add a compression receiver.
+Example domains and model names are placeholders: substitute the URL and model
+accepted by your own service.
 
 ## Install
 
@@ -119,6 +120,33 @@ use its normal method, path, headers, and body against `http://127.0.0.1:8787`.
 If the upstream base URL you were given ends in `/v1`, see
 [URL composition](configuration.md#choose-the-upstream-url) before copying it
 into TOML. The client path and upstream prefix are appended, not deduplicated.
+
+## Connect Claude Code or Codex
+
+A vendor's own client speaks that vendor's API and lets you set its base URL.
+Mount the vendor's API under a name and end the base URL in that name:
+
+```toml
+host = "127.0.0.1"
+port = 8787
+
+[upstreams]
+anthropic = "https://api.anthropic.com"
+codex = "https://chatgpt.com/backend-api/codex"
+```
+
+Restart Portway, then:
+
+| Client | Setting |
+| --- | --- |
+| Claude Code | `ANTHROPIC_BASE_URL=http://127.0.0.1:8787/anthropic` |
+| Codex | `base_url = "http://127.0.0.1:8787/codex"` in its provider entry, with `wire_api = "responses"` and `requires_openai_auth = true` |
+
+Portway removes the name and forwards the rest of the path to the URL, so
+`/anthropic/v1/messages` reaches `https://api.anthropic.com/v1/messages`. The
+client keeps its own login and model names; nothing in the file lists them.
+[Claude Code and Codex](agents.md) has both clients' settings in full, the
+API-key variant for Codex, and the two-hop layout.
 
 ## Add a second model destination
 

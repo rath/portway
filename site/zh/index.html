@@ -282,15 +282,18 @@ cd portway
 cargo install --path crates/portway --locked</code></pre>
     </li>
     <li>
-      <p><strong>指向你的服务并启动。</strong></p>
+      <p><strong>按名字挂载各家的 API，然后启动。</strong></p>
 <pre class="shell"><code># portway.toml
-upstream = "https://api.example.com"
 host = "127.0.0.1"
-port = 8787</code></pre>
+port = 8787
+
+[upstreams]
+anthropic = "https://api.anthropic.com"
+codex = "https://chatgpt.com/backend-api/codex"</code></pre>
 <pre class="shell"><code>portway --config ./portway.toml</code></pre>
     </li>
     <li>
-      <p><strong>让你的智能体指向 Portway。</strong>把它的 API base URL 设为 <code>http://127.0.0.1:8787/v1</code>，密钥和模型名保持不变。Portway 原样透传 <code>Authorization</code> 头，自己不持有密钥。</p>
+      <p><strong>让智能体指向自己的挂载点，其余一概不动。</strong>Claude Code 用 <code>ANTHROPIC_BASE_URL=http://127.0.0.1:8787/anthropic</code>；Codex 在 provider 条目里写 <code>base_url = "http://127.0.0.1:8787/codex"</code>。各自的登录和模型名照旧；Portway 原样透传请求里的凭据，自己不持有密钥。OpenAI 兼容的服务只需一个 <code>upstream</code>，base URL 设为 <code>http://127.0.0.1:8787/v1</code>。</p>
     </li>
     <li>
       <p><strong>在对端放上接收端。</strong>在你服务前面的网关后面运行 <code>portway receive</code>，然后让发送端指向那个网关。<a href="https://github.com/rath/portway/blob/main/docs/getting-started.md#add-a-compression-receiver">接收端设置</a>里有完整步骤。</p>
@@ -300,6 +303,7 @@ port = 8787</code></pre>
   <p>同一个仓库还提供可嵌入的 Rust 库 <code>portway-core</code>，以及一个自带守护模式、报表、终端面板和浏览器控制台的 CLI。它把请求元数据记进 SQLite，绝不记录请求体、凭据或词典内容。</p>
 
   <ul class="docs">
+    <li><a href="https://github.com/rath/portway/blob/main/docs/agents.md">Claude Code 与 Codex</a></li>
     <li><a href="https://github.com/rath/portway/blob/main/docs/getting-started.md">快速开始</a></li>
     <li><a href="https://github.com/rath/portway/blob/main/docs/faq.md">常见问题</a></li>
     <li><a href="https://github.com/rath/portway/blob/main/docs/configuration.md">配置</a></li>

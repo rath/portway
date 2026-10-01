@@ -134,6 +134,7 @@ numbers stay flat.
 
 | You want to… | Read |
 | --- | --- |
+| Put Claude Code or Codex behind Portway | [Claude Code and Codex](docs/agents.md) |
 | Install Portway, create a TOML file, and send a first request | [Getting started](docs/getting-started.md) |
 | Put a compression receiver in front of a service you run | [Receiver setup](docs/getting-started.md#add-a-compression-receiver) |
 | Know whether Portway fits your setup | [FAQ](docs/faq.md) |
@@ -155,13 +156,16 @@ cargo install --path crates/portway --locked
 ```
 
 Installation puts `portway` in `~/.cargo/bin`, which must be on your `PATH`.
-Create `portway.toml` in a directory of your choice. For an OpenAI-compatible
-service, replace the example address with its origin:
+Create `portway.toml` in a directory of your choice. For Claude Code and
+Codex, mount each vendor's API under a name:
 
 ```toml
-upstream = "https://api.example.com"
 host = "127.0.0.1"
 port = 8787
+
+[upstreams]
+anthropic = "https://api.anthropic.com"
+codex = "https://chatgpt.com/backend-api/codex"
 ```
 
 Start Portway in that directory:
@@ -170,17 +174,25 @@ Start Portway in that directory:
 portway --config ./portway.toml
 ```
 
-In your client, set the API base URL to `http://127.0.0.1:8787/v1` and keep the
-upstream service's API key and model name. Portway forwards the request's
-`Authorization` header; it has no API key of its own. The upstream URL is a
-prefix: a request to `/v1/chat/completions` reaches
+Then point each client at its mount and change nothing else: Claude Code with
+`ANTHROPIC_BASE_URL=http://127.0.0.1:8787/anthropic`, Codex with
+`base_url = "http://127.0.0.1:8787/codex"` in its provider entry. Each keeps
+its own login and model names; Portway forwards the request's credentials and
+has no key of its own. The name is removed and the rest of the path reaches the
+vendor unchanged, so `/anthropic/v1/messages` arrives as `/v1/messages`. See
+[Claude Code and Codex](docs/agents.md) for both clients' settings and the
+two-hop layout.
+
+For an OpenAI-compatible service, a single `upstream = "https://api.example.com"`
+sends everything to it: set the client's API base URL to
+`http://127.0.0.1:8787/v1` and keep its key and model name. The upstream URL
+is a prefix: a request to `/v1/chat/completions` reaches
 `https://api.example.com/v1/chat/completions`, so do not put `/v1` in both the
 upstream URL and the client path. See
-[a complete curl example](docs/getting-started.md#send-a-request).
-
-Single-upstream mode forwards any HTTP API with finite request bodies; it does
-not require JSON or a `model` field. To send different models to different
-services, replace `upstream` with a `[models]` table; see
+[a complete curl example](docs/getting-started.md#send-a-request). This mode
+forwards any HTTP API with finite request bodies; it does not require JSON or
+a `model` field. To send different model names to different services from one
+base URL, use a `[models]` table; see
 [model registration](docs/configuration.md#register-models) and the annotated
 files in [examples/](examples/).
 

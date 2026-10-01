@@ -345,17 +345,23 @@ cd portway
 cargo install --path crates/portway --locked</code></pre>
     </li>
     <li>
-      <p><strong>서비스를 지정하고 실행합니다.</strong></p>
+      <p><strong>벤더의 API를 이름으로 마운트하고 실행합니다.</strong></p>
 <pre class="shell"><code># portway.toml
-upstream = "https://api.example.com"
 host = "127.0.0.1"
-port = 8787</code></pre>
+port = 8787
+
+[upstreams]
+anthropic = "https://api.anthropic.com"
+codex = "https://chatgpt.com/backend-api/codex"</code></pre>
 <pre class="shell"><code>portway --config ./portway.toml</code></pre>
     </li>
     <li>
-      <p><strong>에이전트를 Portway로 향하게 합니다.</strong> API base URL을
-      <code>http://127.0.0.1:8787/v1</code>로 바꾸고 키와 모델 이름은 그대로 둡니다. Portway는
-      <code>Authorization</code> 헤더를 그대로 넘겨주며 키를 따로 갖지 않습니다.</p>
+      <p><strong>에이전트를 자기 마운트로 향하게 합니다.</strong> 바꿀 것은 그것뿐입니다.
+      Claude Code는 <code>ANTHROPIC_BASE_URL=http://127.0.0.1:8787/anthropic</code>, Codex는
+      프로바이더 항목의 <code>base_url = "http://127.0.0.1:8787/codex"</code>입니다. 로그인과 모델
+      이름은 각자 그대로 쓰고, Portway는 요청에 실린 자격 증명을 그대로 넘겨주며 키를 따로
+      갖지 않습니다. OpenAI 호환 서비스라면 <code>upstream</code> 하나와 base URL
+      <code>http://127.0.0.1:8787/v1</code>이면 됩니다.</p>
     </li>
     <li>
       <p><strong>건너편에 수신기를 둡니다.</strong> 서비스 앞의 게이트웨이 뒤에서
@@ -370,6 +376,7 @@ port = 8787</code></pre>
   메타데이터만 SQLite에 기록하고, 본문과 자격 증명, 사전 내용은 기록하지 않습니다.</p>
 
   <ul class="docs">
+    <li><a href="https://github.com/rath/portway/blob/main/docs/agents.md">Claude Code와 Codex</a></li>
     <li><a href="https://github.com/rath/portway/blob/main/docs/getting-started.md">시작하기</a></li>
     <li><a href="https://github.com/rath/portway/blob/main/docs/faq.md">자주 묻는 질문</a></li>
     <li><a href="https://github.com/rath/portway/blob/main/docs/configuration.md">설정</a></li>

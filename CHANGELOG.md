@@ -18,7 +18,8 @@ version may contain breaking changes.
   else to set. Mounts combine with `[models]` on one listener and work in
   `receive` mode too, so one receiver can front several providers. The stats
   endpoint now keys its per-route counters under `upstreams` rather than
-  `models`.
+  `models`. `docs/agents.md` walks through Claude Code and Codex, and the
+  README, getting-started guide and project page start from them.
 - `portway receive` accepts a `[models]` table as well as a single `upstream`,
   routing each request to the origin configured for its JSON `model` field. One
   receiver can therefore front several providers from one listener: its
