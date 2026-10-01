@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 import { ALL_COLUMNS, detailFields, eventLine, lineText, parseColumns } from "../static/js/eventline.js";
-import { CELLS, HAND_MAX, PATH_FLOOR, Widths, handWidth, parseHand, rowCells, shown, template } from "../static/js/eventtable.js";
+import { CELLS, HAND_MAX, PATH_FLOOR, Widths, cellsOf, handWidth, parseHand, rowCells, shown, template } from "../static/js/eventtable.js";
 import { compile, modeAccepts, nextMode, tokenize } from "../static/js/filter.js";
 import { EventStore } from "../static/js/ring.js";
 import { Bars, Traffic, rate } from "../static/js/series.js";
@@ -150,6 +150,12 @@ test("a width set by hand wins, is bounded, and survives only when valid", () =>
 test("every table cell belongs to a picker column, and every column has one", () => {
   assert.ok(CELLS.every((cell) => ALL_COLUMNS.includes(cell.column)));
   assert.ok(ALL_COLUMNS.every((name) => CELLS.some((cell) => cell.column === name)));
+});
+
+test("the column picker names the cells each column holds, from the table", () => {
+  assert.deepEqual(cellsOf("down").map((cell) => cell.label), ["down", "↓ wire", "↓ saved", "to agent", "↓ time"]);
+  assert.deepEqual(cellsOf("model").map((cell) => cell.label), ["model", "upstream"]);
+  assert.deepEqual(cellsOf("ttfb").map((cell) => cell.label), ["ttfb"]);
 });
 
 test("column lists are validated", () => {

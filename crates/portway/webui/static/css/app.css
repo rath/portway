@@ -470,6 +470,8 @@ dialog.drawer .dialog-body { max-height: calc(100vh - 130px); }
 .keylist dd { margin: 0; color: var(--text-dim); }
 .pick { display: flex; gap: 10px; align-items: center; padding: 5px 0; cursor: pointer; }
 .pick .name { font-family: var(--mono); min-width: 7em; font-weight: 500; }
+.pick .what { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.pick .cells { display: flex; flex-wrap: wrap; gap: 2px 6px; font-family: var(--mono); font-size: 12px; }
 
 dialog.palette { margin-top: 12vh; width: min(560px, calc(100vw - 32px)); }
 .palette input {

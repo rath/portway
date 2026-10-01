@@ -98,7 +98,7 @@ impl Column {
             Column::Route => "method and path, + . on a fresh dial",
             Column::Sizes => "raw → wire, ratio, upload time",
             Column::Ttfb => "first byte of the answer",
-            Column::Down => "response bytes and time",
+            Column::Down => "decoded → wire, ratio, download time",
             Column::Tokens => "in (cached) → out, what the engine counted",
         }
     }

@@ -189,6 +189,11 @@ export function parseHand(text) {
   return hand;
 }
 
+/** The cells one picker column shows or hides, in draw order. */
+export function cellsOf(column) {
+  return CELLS.filter((cell) => cell.column === column);
+}
+
 /** The cells `columns` (a Set of picker names) shows and some event filled, in draw order. */
 export function shown(columns, widths) {
   return CELLS.filter((cell) => columns.has(cell.column) && widths.seen.has(cell.key));

@@ -3,6 +3,7 @@
 
 import { $, copy, dialogFrame, fill, h, segments } from "../dom.js";
 import { COLUMNS, detailFields, eventLine, lineText } from "../eventline.js";
+import { cellsOf } from "../eventtable.js";
 import { describe } from "../flights.js";
 import { dollars, human, humanTime, maybeTime } from "../format.js";
 
@@ -116,14 +117,26 @@ export function openHelp() {
 
 export function openColumns(ctx) {
   const dialog = $("#columns");
-  const picks = COLUMNS.map((column) => h("label", { class: "pick" },
-    h("input", {
-      type: "checkbox",
-      checked: ctx.state.columns.has(column.name),
-      onchange: (event) => ctx.toggleColumn(column.name, event.target.checked),
-    }),
-    h("span", { class: "name", text: column.name }),
-    h("span", { class: "t-dim", text: column.note })));
+  const picks = COLUMNS.map((column) => {
+    // A column of several cells names them as the table heads them, read
+    // from the table itself, so a cell added there is listed here too.
+    const cells = cellsOf(column.name);
+    return h("label", { class: "pick" },
+      h("input", {
+        type: "checkbox",
+        checked: ctx.state.columns.has(column.name),
+        onchange: (event) => ctx.toggleColumn(column.name, event.target.checked),
+      }),
+      h("span", { class: "name", text: column.name }),
+      h("span", { class: "what" },
+        cells.length > 1
+          ? h("span", { class: "cells" }, cells.flatMap((cell, at) => [
+            at > 0 ? h("span", { class: "t-dim", text: "·" }) : null,
+            h("span", { text: cell.label, title: cell.note }),
+          ]))
+          : null,
+        h("span", { class: "t-dim", text: column.note })));
+  });
   dialogFrame(dialog, "Columns", picks, [h("span", { class: "note", text: "kept for this browser" })]);
   open(dialog);
 }

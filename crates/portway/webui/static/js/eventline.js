@@ -12,11 +12,11 @@ export const COLUMNS = [
   { name: "time", note: "when the relay ended" },
   { name: "status", note: "the code the agent got" },
   { name: "cut", note: "✂ on a relay cut short" },
-  { name: "model", note: "the model the turn named; - when it named none" },
+  { name: "model", note: "the model the turn named (- when none), and the upstream when it differs" },
   { name: "route", note: "method, full path, and the dial time of a fresh connection" },
   { name: "sizes", note: "request body raw and on the wire, saved, ↑ time" },
   { name: "ttfb", note: "first byte of the answer" },
-  { name: "down", note: "response bytes decoded and on the wire, saved, what the agent got, ↓ time" },
+  { name: "down", note: "response bytes decoded and on the upstream hop, saved, what the agent got, ↓ time" },
   { name: "tokens", note: "in, cached and out, as the engine counted" },
 ];
 

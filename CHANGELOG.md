@@ -7,6 +7,13 @@ version may contain breaking changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- The console's Columns dialog names the cells each column shows or hides, read
+  from the event table itself, so `upstream`, `↓ wire` and `↓ saved` appear
+  under `model` and `down` where they belong. The `model` and `down` notes
+  describe those cells, in the console and in the terminal dashboard's picker.
+
 ## [0.2.1] - 2026-10-01
 
 ### Changed
