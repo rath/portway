@@ -1,5 +1,5 @@
 import { SESSION } from "./session.js";
-import { strings } from "./i18n.js";
+import { strings } from "./i18n.js?v=c31a877af605";
 
 const TURNS = SESSION.body.length;
 const KIB = 1024;
