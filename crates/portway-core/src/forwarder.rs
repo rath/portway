@@ -1167,9 +1167,21 @@ impl Forwarder {
                 if transformed
                     && matches!(
                         name.as_str(),
-                        "etag" | "content-md5" | "digest" | "content-digest" | "repr-digest"
+                        "content-md5" | "digest" | "content-digest" | "repr-digest"
                     )
                 {
+                    continue;
+                }
+                // A recoded body is not the bytes a strong validator names, but
+                // it is the same content, which is what a weak one promises
+                // (RFC 9110 8.8.1): keep the tag, weakened, as nginx does when it
+                // gzips. Dropping it breaks clients that key a cache on it —
+                // Codex refetches its whole model catalog after every turn when
+                // the catalog arrives without the tag its answers point to.
+                if transformed && name == http::header::ETAG {
+                    if let Some(weak) = weak_etag(value) {
+                        slot.append(name.clone(), weak);
+                    }
                     continue;
                 }
                 if !drop_from_response(name.as_str())
@@ -1404,6 +1416,19 @@ fn compress_zstd(body: &[u8], level: i32) -> std::io::Result<Vec<u8>> {
 
 /// Counts an agent that hung up before the response head arrived. The 499 the
 /// Python forwarder returned had no one left to read it.
+/// `W/"x"` as it is; `"x"` as `W/"x"`. `None` for a value that is not an
+/// entity tag, which is then not forwarded at all.
+fn weak_etag(value: &HeaderValue) -> Option<HeaderValue> {
+    let raw = value.to_str().ok()?.trim();
+    if raw.starts_with("W/\"") && raw.ends_with('"') && raw.len() >= 4 {
+        return Some(value.clone());
+    }
+    if raw.starts_with('"') && raw.ends_with('"') && raw.len() >= 2 {
+        return HeaderValue::from_str(&format!("W/{raw}")).ok();
+    }
+    None
+}
+
 struct AbortGuard {
     forwarder: Arc<Forwarder>,
     method: Method,

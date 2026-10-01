@@ -9,6 +9,10 @@ version may contain breaking changes.
 
 ### Fixed
 
+- A response Portway decodes or re-encodes keeps its `ETag`, weakened, instead
+  of losing it. Codex keys its model catalog on that tag and compares it with
+  the `X-Models-Etag` of every answer; without it, Codex downloaded the whole
+  catalog (about 600 KB) again after every turn through Portway.
 - `scripts/bench.py` reads the sender's counters under `upstreams`, the key
   `/__portway/stats` uses since 0.2.0. The 0.2.0 tag's copy still reads
   `models` and stops with a `KeyError`; the released binaries are unaffected.

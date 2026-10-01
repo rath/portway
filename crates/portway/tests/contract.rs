@@ -212,6 +212,9 @@ async fn compressed_responses_reach_the_agent_as_identity() {
         .await;
     assert_eq!(answer.body, Bytes::from(b"data: hello\n\n".repeat(200)));
     assert_eq!(answer.header("content-encoding"), None);
+    // A weak tag names the content, not its coding, and goes through as it
+    // came: Codex matches it against the tag its answers carry.
+    assert_eq!(answer.header("etag"), Some("W/\"catalog-1\""));
     assert!(
         answer
             .header("content-type")

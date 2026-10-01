@@ -469,7 +469,8 @@ async fn response_transformation_updates_encoding_vary_and_validators() {
         .unwrap();
     let response = router.clone().handle(request).await;
     assert_eq!(response.headers()["content-encoding"], "gzip");
-    assert!(!response.headers().contains_key("etag"));
+    // Recoded bytes keep the validator, weakened: same content, other bytes.
+    assert_eq!(response.headers()["etag"], "W/\"example\"");
     assert!(
         response
             .headers()

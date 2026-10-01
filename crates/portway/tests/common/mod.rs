@@ -415,6 +415,7 @@ async fn respond(
         Reply::GzipStream => Response::builder()
             .status(200)
             .header("content-encoding", "gzip")
+            .header("etag", "W/\"catalog-1\"")
             .header("content-type", "text/event-stream")
             .body(boxed(gzip(&b"data: hello\n\n".repeat(200))))
             .unwrap(),

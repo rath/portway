@@ -124,8 +124,9 @@ HTTP/1.1 connection. Only fully consumed responses return a connection to the
 pool.
 
 Hop-by-hop headers, including those named by `Connection`, are not forwarded.
-Content length and encoding are recomputed after transformations; representation
-validators are removed when the response changes encoding and `Vary` includes
-`Accept-Encoding`. HEAD, 204/304, partial responses, and `no-transform` responses
+Content length and encoding are recomputed after transformations. When the
+response changes encoding, digests (`Content-MD5`, `Digest`, `Content-Digest`,
+`Repr-Digest`) are removed, an `ETag` is kept but weakened (`"x"` becomes
+`W/"x"`, a weak tag is unchanged), and `Vary` includes `Accept-Encoding`. HEAD, 204/304, partial responses, and `no-transform` responses
 are not re-encoded. Authentication headers and application payload bytes retain
 their meaning across the compression boundary.
