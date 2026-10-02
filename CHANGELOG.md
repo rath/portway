@@ -13,14 +13,14 @@ version may contain breaking changes.
   published binaries for macOS Apple silicon and Linux x86_64/ARM64 with both
   the terminal dashboard and the browser console included.
 - Prices per service tier. `[prices."model".tiers.TIER]` gives the rates for
-  requests whose body names `"service_tier": "TIER"`, such as Codex's fast
-  speed (sent as `priority`); the model's own rates apply to requests that
-  name no tier. Every request records the tier it named (database schema v5),
-  the usage screens and costs popups add each model up once per tier
+  requests whose body names that tier: its `"speed"`, such as Claude Code's
+  fast mode (`fast`), or else its `"service_tier"`, such as Codex's fast speed
+  (sent as `priority`). The model's own rates apply to requests that name no
+  tier. Every request records the tier it named (database schema v5), the
+  usage screens and costs popups add each model up once per tier
   (`model · tier`), and a tier without rates stays unpriced instead of being
   billed at the standard rates. Embedders: `Forwarder::handle_scoped` takes a
-  `router::Named` in place of the model, and `RequestRecord` gains
-  `service_tier`.
+  `router::Named` in place of the model, and `RequestRecord` gains `tier`.
 
 ## [0.2.2] - 2026-10-01
 

@@ -15,7 +15,7 @@
 //! billed at the input rate and flagged, and a model the price table does not
 //! name gets no cost at all rather than a free one.
 //!
-//! A model is added up once per `service_tier` its requests named, because a
+//! A model is added up once per tier its requests named, because a
 //! vendor bills a faster class at rates of its own: a tier the price table
 //! does not name gets no cost either, rather than the standard one.
 
@@ -124,7 +124,7 @@ impl Charge {
 #[derive(Debug, Clone, Default)]
 pub struct Row {
     pub model: String,
-    /// The `service_tier` the requests named; `None` for the standard class.
+    /// The tier the requests named; `None` for the standard class.
     pub tier: Option<String>,
     pub requests: u64,
     /// The context every answer read, the cached part included.
@@ -324,7 +324,7 @@ pub fn load(db: &Path, since: f64, until: f64, prices: &Prices) -> Result<Table,
     };
 
     let tier = if store::has_tier_column(&connection)? {
-        "service_tier"
+        "tier"
     } else {
         "NULL"
     };
@@ -563,7 +563,7 @@ mod tests {
             stamp: "23:41:02".to_string(),
             upstream: model.to_string(),
             model: model.to_string(),
-            service_tier: None,
+            tier: None,
             method: Method::POST,
             path: "/v1/chat/completions".to_string(),
             status: 200,
@@ -692,7 +692,7 @@ mod tests {
         };
         for tier in [None, Some("tier-a"), Some("tier-a"), Some("tier-b")] {
             let mut answer = record("model-alpha", Some(usage));
-            answer.service_tier = tier.map(str::to_string);
+            answer.tier = tier.map(str::to_string);
             sender.send(Event::Request(Arc::new(answer))).unwrap();
         }
         store.shutdown();

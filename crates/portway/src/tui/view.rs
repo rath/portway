@@ -1765,7 +1765,7 @@ fn detail_lines(record: &RequestRecord) -> Vec<Line<'static>> {
         field("upstream", record.upstream.clone()),
         field(
             "model",
-            spend::label(shown_model(&record.model), record.service_tier.as_deref()),
+            spend::label(shown_model(&record.model), record.tier.as_deref()),
         ),
         field(
             "request",
@@ -1891,7 +1891,7 @@ mod tests {
             stamp: "23:41:02".to_string(),
             upstream: model.to_string(),
             model: model.to_string(),
-            service_tier: None,
+            tier: None,
             method: http::Method::POST,
             path: "/v1/chat/completions".to_string(),
             status,

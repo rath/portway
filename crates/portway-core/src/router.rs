@@ -277,7 +277,7 @@ impl Router {
             Err(err) => return invalid_request(err.status(), &err.to_string(), None),
         };
         let mut model = query_model(parts.uri.query());
-        let mut service_tier = None;
+        let mut tier = None;
         if !body.is_empty() {
             let Ok(serde_json::Value::Object(mut payload)) =
                 serde_json::from_slice::<serde_json::Value>(&body)
@@ -285,7 +285,10 @@ impl Router {
                 return invalid_request(StatusCode::BAD_REQUEST, "Expected a JSON object.", None);
             };
             model = string(payload.remove("model"));
-            service_tier = string(payload.remove("service_tier"));
+            tier = pricing_class(
+                string(payload.remove("speed")),
+                string(payload.remove("service_tier")),
+            );
         }
         let Some(forwarder) = model
             .as_deref()
@@ -314,10 +317,7 @@ impl Router {
                 parts.headers,
                 body,
                 scope,
-                Named {
-                    model,
-                    service_tier,
-                },
+                Named { model, tier },
             )
             .await
     }
@@ -331,6 +331,8 @@ struct NamedFields {
     model: Option<serde_json::Value>,
     #[serde(default)]
     service_tier: Option<serde_json::Value>,
+    #[serde(default)]
+    speed: Option<serde_json::Value>,
 }
 
 /// What a request names in its JSON body and is recorded under. Neither
@@ -339,14 +341,23 @@ struct NamedFields {
 pub struct Named {
     /// The string `model`. Prices are keyed by it.
     pub model: Option<String>,
-    /// The string `service_tier`: the speed or priority class a vendor bills
-    /// at rates of its own. A vendor's standard class is usually its absence.
-    pub service_tier: Option<String>,
+    /// The class a vendor bills the request in at rates of its own: the
+    /// string `speed` when there is one (Anthropic's fast mode), else the
+    /// string `service_tier` (OpenAI's Fast and Ultrafast). A vendor's
+    /// standard class is usually the absence of both.
+    pub tier: Option<String>,
 }
 
-/// What a request names: the string `model` and `service_tier` of its JSON
-/// object body, read in one pass. Empty for a body that is encoded or is not
-/// a JSON object, and each field `None` where the body names no string.
+/// `speed` decides where a body names both: Anthropic prices by it, while its
+/// `service_tier` asks for capacity rather than for a price.
+fn pricing_class(speed: Option<String>, service_tier: Option<String>) -> Option<String> {
+    speed.or(service_tier)
+}
+
+/// What a request names: the string `model`, and the tier from `speed` and
+/// `service_tier`, of its JSON object body, read in one pass. Empty for a body
+/// that is encoded or is not a JSON object, and each field `None` where the
+/// body names no string.
 pub fn named(headers: &HeaderMap, body: &[u8]) -> Named {
     let encoded = headers
         .get(http::header::CONTENT_ENCODING)
@@ -359,7 +370,7 @@ pub fn named(headers: &HeaderMap, body: &[u8]) -> Named {
     };
     Named {
         model: string(fields.model),
-        service_tier: string(fields.service_tier),
+        tier: pricing_class(string(fields.speed), string(fields.service_tier)),
     }
 }
 
@@ -524,7 +535,7 @@ mod tests {
         let body = br#"{"messages":[{"role":"user","content":"hi"}],"model":"m-1","service_tier":"tier-a","stream":true}"#;
         let both = Named {
             model: Some("m-1".into()),
-            service_tier: Some("tier-a".into()),
+            tier: Some("tier-a".into()),
         };
         assert_eq!(named(&plain, body), both);
         assert_eq!(named(&identity, body), both);
@@ -535,8 +546,8 @@ mod tests {
             b"[]",
             b"null",
             b"{",
-            br#"{"model":5,"service_tier":5}"#,
-            br#"{"model":null,"service_tier":null}"#,
+            br#"{"model":5,"service_tier":5,"speed":5}"#,
+            br#"{"model":null,"service_tier":null,"speed":null}"#,
         ] {
             assert_eq!(named(&plain, body), Named::default(), "{body:?}");
         }
@@ -545,8 +556,23 @@ mod tests {
             named(&plain, br#"{"model":"m-1"}"#),
             Named {
                 model: Some("m-1".into()),
-                service_tier: None,
+                tier: None,
             }
+        );
+        // A `speed` is the tier, and outranks a `service_tier` beside it.
+        let speed = |body: &[u8]| named(&plain, body).tier;
+        assert_eq!(
+            speed(br#"{"model":"m-1","speed":"tier-b"}"#).as_deref(),
+            Some("tier-b")
+        );
+        assert_eq!(
+            speed(br#"{"model":"m-1","service_tier":"tier-a","speed":"tier-b"}"#).as_deref(),
+            Some("tier-b")
+        );
+        assert_eq!(
+            speed(br#"{"model":"m-1","service_tier":"tier-a","speed":7}"#).as_deref(),
+            Some("tier-a"),
+            "a speed that is not a string names nothing"
         );
     }
 

@@ -38,6 +38,10 @@ claude
 Claude Code sends `POST /anthropic/v1/messages`; Portway forwards
 `/v1/messages` to `api.anthropic.com` with the request's own credentials:
 the login Claude Code already has, or `ANTHROPIC_API_KEY` if you use one.
+
+Claude Code 2.1.287 sends fast mode (`/fast`) as `"speed": "fast"` and no
+`service_tier` at all, so a fast turn is recorded with the tier `fast` and
+priced by [tier prices](configuration.md#service-tiers) under `fast`.
 Model names travel in the body and are recorded, not matched: a model works
 the day it ships.
 
@@ -71,7 +75,7 @@ before the first turn. The mount forwards it like any other request, which is
 why routing by path matters here: there is no model in that request to route
 by.
 
-Codex's speed setting reaches the body as `service_tier`, which is what
+Codex's speed setting reaches the body as `service_tier`, which is the tier
 [tier prices](configuration.md#service-tiers) are keyed by. Codex 0.160 sends
 `service_tier = "fast"` as `"priority"`, `"ultrafast"` as `"ultrafast"`, and
 nothing at all for the standard speed. The ChatGPT backend's answer reports

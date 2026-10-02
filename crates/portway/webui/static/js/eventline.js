@@ -173,7 +173,7 @@ export function detailFields(event) {
   return [
     ["when", event.stamp],
     ["upstream", event.upstream],
-    ["model", label(event.model || "-", event.service_tier)],
+    ["model", label(event.model || "-", event.tier)],
     ["request", `${event.method} ${event.path} -> ${event.status}`],
     ["connection", event.handshake == null
       ? "reused from the pool"

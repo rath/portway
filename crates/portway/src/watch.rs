@@ -48,7 +48,7 @@ const REQUEST_COLUMNS: &str = "id, ts_unix, model, method, path, status,
     dns_ms, tcp_ms, tls_ms, body_len, wire_len, coding, upload_ms, ttfb_ms,
     received, received_wire, upstream_encoding, download_ms, complete,
     prompt_tokens, cached_tokens, completion_tokens, reasoning_tokens,
-    received_agent, upstream, service_tier";
+    received_agent, upstream, tier";
 const REQUEST_COLUMNS_V4: &str = "id, ts_unix, model, method, path, status,
     dns_ms, tcp_ms, tls_ms, body_len, wire_len, coding, upload_ms, ttfb_ms,
     received, received_wire, upstream_encoding, download_ms, complete,
@@ -257,7 +257,7 @@ impl Reader {
                         stamp: logfmt::clock(ts),
                         upstream: row.get(24)?,
                         model: row.get(2)?,
-                        service_tier: row.get(25)?,
+                        tier: row.get(25)?,
                         method: Method::from_bytes(row.get::<_, String>(3)?.as_bytes())
                             .unwrap_or(Method::POST),
                         path: row.get(4)?,
@@ -571,7 +571,7 @@ mod tests {
             stamp: stamp.to_string(),
             upstream: "model-alpha".to_string(),
             model: "model-alpha".to_string(),
-            service_tier: Some("tier-a".to_string()),
+            tier: Some("tier-a".to_string()),
             method: Method::POST,
             path: "/v1/chat/completions".to_string(),
             status: 200,
@@ -622,7 +622,7 @@ mod tests {
         // batch can reach the disk a moment after the answer did.
         written.stamp.clone_from(&record.stamp);
         assert_eq!(record.model, written.model);
-        assert_eq!(record.service_tier, written.service_tier);
+        assert_eq!(record.tier, written.tier);
         assert_eq!(record.method, written.method);
         assert_eq!(record.path, written.path);
         assert_eq!(record.status, written.status);

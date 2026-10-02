@@ -157,7 +157,7 @@ mod tests {
             stamp: "12:00:00".into(),
             upstream: "codex".into(),
             model: "gpt-x".into(),
-            service_tier: None,
+            tier: None,
             method: http::Method::POST,
             path: "/responses".into(),
             status: 200,

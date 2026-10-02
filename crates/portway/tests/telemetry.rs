@@ -257,11 +257,12 @@ async fn a_record_names_its_route_and_the_model_the_body_asked_for() {
     );
 }
 
-/// The `service_tier` a body names rides beside its model, through a mount
-/// and through a `[models]` route alike; a body that names none, as a vendor's
-/// standard class does, records none.
+/// The tier a body names rides beside its model, through a mount and through
+/// a `[models]` route alike, read from `service_tier` or from a `speed` that
+/// outranks it; a body that names neither, as a vendor's standard class does,
+/// records none.
 #[tokio::test]
-async fn a_record_keeps_the_service_tier_the_body_asked_for() {
+async fn a_record_keeps_the_tier_the_body_asked_for() {
     let _serial = sink().await;
     let up = upstream(Health::JsonBare, Reply::Ok).await;
     let fwd = common::router(&[("codex", &up.base)], &[("model-alpha", &up.base)], &[]).await;
@@ -280,16 +281,27 @@ async fn a_record_keeps_the_service_tier_the_body_asked_for() {
         .await;
     let record = next_request().await;
     assert_eq!(
-        (record.model.as_str(), record.service_tier.as_deref()),
+        (record.model.as_str(), record.tier.as_deref()),
         ("gpt-x", Some("tier-a"))
     );
     fwd.post("/codex/responses", chat_body("gpt-x")).await;
-    assert_eq!(next_request().await.service_tier, None);
+    assert_eq!(next_request().await.tier, None);
+    let fast = Bytes::from(
+        serde_json::to_vec(&serde_json::json!({
+            "model": "claude-x",
+            "service_tier": "auto",
+            "speed": "tier-c",
+            "messages": [{"role": "user", "content": "hi"}],
+        }))
+        .unwrap(),
+    );
+    fwd.post("/codex/v1/messages", fast).await;
+    assert_eq!(next_request().await.tier.as_deref(), Some("tier-c"));
     fwd.post("/v1/chat/completions", tiered("model-alpha", "tier-b"))
         .await;
     let record = next_request().await;
     assert_eq!(
-        (record.model.as_str(), record.service_tier.as_deref()),
+        (record.model.as_str(), record.tier.as_deref()),
         ("model-alpha", Some("tier-b"))
     );
 }

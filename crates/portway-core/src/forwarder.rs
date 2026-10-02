@@ -820,7 +820,7 @@ impl Forwarder {
         .await
     }
     /// `named` is what the request is recorded as asking for — the `model`
-    /// and `service_tier` of its JSON body, as `router::named` reads them —
+    /// and tier of its JSON body, as `router::named` reads them —
     /// and has no part in where it goes: that was decided before this call.
     #[allow(clippy::too_many_arguments)]
     pub async fn handle_scoped(
@@ -1243,7 +1243,7 @@ impl Forwarder {
         let log = RequestLog::new(
             self.name.clone(),
             model,
-            named.service_tier,
+            named.tier,
             method,
             path,
             parts.status.as_u16(),

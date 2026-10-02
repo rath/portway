@@ -13,14 +13,15 @@ pub struct Rates {
     pub cache_read: f64,
 }
 /// A model's rates: the standard ones, for a request that names no
-/// `service_tier`, and one set for each tier the vendor bills apart.
+/// tier, and one set for each tier the vendor bills apart.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Price {
     pub input: f64,
     pub output: f64,
     pub cache_read: f64,
-    /// Keyed by the `service_tier` value exactly as requests send it.
+    /// Keyed by the tier exactly as requests send it: their `speed`, or
+    /// else their `service_tier`.
     #[serde(default)]
     pub tiers: BTreeMap<String, Rates>,
 }

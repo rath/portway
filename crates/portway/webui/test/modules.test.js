@@ -61,8 +61,8 @@ test("a coded upstream hop pairs the answer with what it carried", () => {
 
 test("the detail names the tier a request asked for beside its model", () => {
   assert.equal(Object.fromEntries(detailFields(request())).model, "model-alpha");
-  assert.equal(Object.fromEntries(detailFields(request({ service_tier: "tier-a" }))).model, "model-alpha · tier-a");
-  assert.equal(Object.fromEntries(detailFields(request({ model: "", service_tier: "tier-a" }))).model, "- · tier-a");
+  assert.equal(Object.fromEntries(detailFields(request({ tier: "tier-a" }))).model, "model-alpha · tier-a");
+  assert.equal(Object.fromEntries(detailFields(request({ model: "", tier: "tier-a" }))).model, "- · tier-a");
 });
 
 test("a re-encoded download shows what the agent got", () => {

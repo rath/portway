@@ -36,11 +36,12 @@ pub struct RequestRecord {
     /// The model the request named in its JSON body; empty when it named
     /// none, such as a catalog or health request. Prices are keyed by it.
     pub model: String,
-    /// The `service_tier` the request named in its JSON body; `None` when it
-    /// named none, which is a vendor's standard class. Prices are keyed by it
-    /// within the model. What the request asked for, not what the answer
-    /// says: the ChatGPT backend reports `default` whichever it was sent.
-    pub service_tier: Option<String>,
+    /// The tier the request named in its JSON body, as `router::Named`
+    /// reads it from `speed` or `service_tier`; `None` when it named none,
+    /// which is a vendor's standard class. Prices are keyed by it within the
+    /// model. What the request asked for, not what the answer says: the
+    /// ChatGPT backend reports `default` whichever tier it was sent.
+    pub tier: Option<String>,
     pub method: Method,
     pub path: String,
     pub status: u16,

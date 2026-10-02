@@ -261,7 +261,7 @@ Keys are sent by the client, not registered in the routing table. See
 | `[upstreams]` | empty | Name → upstream URL, mounted at `/<name>/` |
 | `[models]` | empty | Model name → upstream URL, chosen by the JSON `model` field |
 | `[prices.NAME]` | absent | Optional `input`, `output`, `cache_read` rates in USD per million tokens |
-| `[prices.NAME.tiers.TIER]` | absent | The same three rates for requests that name `service_tier = TIER` |
+| `[prices.NAME.tiers.TIER]` | absent | The same three rates for requests whose tier is `TIER` (their `speed`, else their `service_tier`) |
 
 Prices are optional inputs to the TUI's usage and cost estimates. They do not
 change requests, charge a balance, or discover provider rates. For example:
@@ -291,12 +291,13 @@ as the model.
 ### Service tiers
 
 Some vendors bill a faster or prioritized class of the same model at rates of
-its own, chosen by a `service_tier` field in the request body. Give each such
-tier its own rates under the model's price:
+its own, chosen by a field in the request body: `service_tier` in OpenAI's
+APIs, `speed` in Anthropic's. Portway records it as the request's tier and
+gives each tier its own rates under the model's price:
 
 ```toml
 # Illustrative numbers only; replace with your own comparison rates.
-[prices."model-b.1"]            # requests that name no service_tier
+[prices."model-b.1"]            # requests that name no tier
 input = 1.0
 output = 2.0
 cache_read = 0.1
@@ -307,8 +308,10 @@ output = 4.0
 cache_read = 0.2
 ```
 
-The tier name is the string `service_tier` of the request body, matched
-exactly, which is not always the name the client's settings use. The base
+The tier is the string `speed` of the request body, or else its string
+`service_tier`, matched exactly. `speed` decides where a body names both,
+because Anthropic prices by it while its `service_tier` asks for capacity, not
+a price. Neither is always the name the client's settings use. The base
 rates apply only to a request that names no tier; a request that names one
 the table lacks, even `default` or `auto`, stays unpriced rather than being
 billed at the base rates, and the usage screen counts it among the unpriced

@@ -73,7 +73,7 @@ CREATE TABLE IF NOT EXISTS requests (
   reasoning_tokens INTEGER,
   received_agent INTEGER NOT NULL DEFAULT 0,
   upstream TEXT NOT NULL DEFAULT '',
-  service_tier TEXT
+  tier TEXT
 );
 CREATE INDEX IF NOT EXISTS requests_ts ON requests(ts_unix);
 CREATE TABLE IF NOT EXISTS logs (
@@ -112,18 +112,19 @@ ALTER TABLE requests ADD COLUMN upstream TEXT NOT NULL DEFAULT '';
 UPDATE requests SET upstream = model;
 ";
 
-/// v4 -> v5: the `service_tier` the request named, NULL where it named none.
+/// v4 -> v5: the tier the request named (its `speed`, or else its
+/// `service_tier`), NULL where it named none.
 /// Every row recorded before the upgrade reads as having named none, so it is
 /// priced at its model's standard rates whatever class it actually ran in.
 const MIGRATE_V4: &str = "
-ALTER TABLE requests ADD COLUMN service_tier TEXT;
+ALTER TABLE requests ADD COLUMN tier TEXT;
 ";
 
 const INSERT_REQUEST: &str = "INSERT INTO requests (
   ts_unix, model, method, path, status, dns_ms, tcp_ms, tls_ms, body_len,
   wire_len, coding, upload_ms, ttfb_ms, received, received_wire,
   upstream_encoding, download_ms, complete, prompt_tokens, cached_tokens,
-  completion_tokens, reasoning_tokens, received_agent, upstream, service_tier
+  completion_tokens, reasoning_tokens, received_agent, upstream, tier
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
 const INSERT_LOG: &str = "INSERT INTO logs (ts_unix, level, message) VALUES (?, ?, ?)";
@@ -343,7 +344,7 @@ pub fn has_upstream_column(connection: &Connection) -> Result<bool, String> {
     Ok(schema_version(connection)? >= UPSTREAM_SINCE)
 }
 
-/// Whether the file keeps the `service_tier` a request named. A reader of an
+/// Whether the file keeps the tier a request named. A reader of an
 /// older file selects `NULL`, which is what the upgrade gives those rows.
 pub fn has_tier_column(connection: &Connection) -> Result<bool, String> {
     const TIER_SINCE: i64 = 5;
@@ -443,7 +444,7 @@ fn insert(tx: &Transaction<'_>, batch: &[Event]) -> rusqlite::Result<()> {
                         .map(|r| r as i64),
                     record.received_agent as i64,
                     record.upstream,
-                    record.service_tier,
+                    record.tier,
                 ])?;
             }
             Event::Log { level, message, .. } => {
@@ -509,7 +510,7 @@ mod tests {
             stamp: "23:41:02".to_string(),
             upstream: "model-alpha".to_string(),
             model: "model-alpha".to_string(),
-            service_tier: Some("tier-a".to_string()),
+            tier: Some("tier-a".to_string()),
             method: Method::POST,
             path: "/v1/chat/completions".to_string(),
             status,
@@ -839,8 +840,8 @@ mod tests {
         // the one its request named.
         let tier: (Option<String>, Option<String>) = db
             .query_row(
-                "SELECT (SELECT service_tier FROM requests WHERE model = 'model-zeta'),
-                        (SELECT service_tier FROM requests WHERE model = 'model-alpha')",
+                "SELECT (SELECT tier FROM requests WHERE model = 'model-zeta'),
+                        (SELECT tier FROM requests WHERE model = 'model-alpha')",
                 [],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )

@@ -215,7 +215,7 @@ struct RecordData {
     upstream: String,
     model: String,
     #[serde(default)]
-    service_tier: Option<String>,
+    tier: Option<String>,
     #[serde(deserialize_with = "method")]
     method: http::Method,
     path: String,
