@@ -7,6 +7,8 @@ version may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-10-02
+
 ### Added
 
 - Homebrew installation through `brew install rath/tap/portway`, using the
@@ -63,6 +65,9 @@ version may contain breaking changes.
   both dashboards, as `/v1/chat/completions` always was. The terminal
   dashboard draws every route dim; one an agent's turns do not take keeps its
   full path.
+- The project page leads with Homebrew installation, lays every section on one
+  two-column grid, and says what Portway saves more plainly in all four
+  languages.
 
 ## [0.2.2] - 2026-10-01
 
@@ -239,7 +244,8 @@ The first public release.
   FAQ; the request compression protocol; a security policy; and contribution
   guidelines.
 
-[Unreleased]: https://github.com/rath/portway/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/rath/portway/compare/v0.2.3...HEAD
+[0.2.3]: https://github.com/rath/portway/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/rath/portway/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/rath/portway/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/rath/portway/compare/v0.1.0...v0.2.0
