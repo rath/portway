@@ -1782,7 +1782,7 @@ fn column_lines(state: &State) -> Vec<Line<'static>> {
                 Span::styled(column.note(), Style::default().fg(t.dim)),
             ]);
             if at == state.picker_at {
-                line.style(t.cursor())
+                line.style(t.raised_cursor())
             } else {
                 line
             }
@@ -1954,7 +1954,7 @@ mod tests {
     use super::*;
     use crate::forwarder::{CompressionIssue, StatsView};
     use crate::telemetry::Event;
-    use crate::tui::theme::TERMINAL;
+    use crate::tui::theme::{TERMINAL, THEMES};
     use crate::usage::Usage;
     use crate::watch;
     use ratatui::Terminal;
@@ -3279,6 +3279,82 @@ mod tests {
         for case in cases("label") {
             let (model, tier) = (case[0][0].as_str().unwrap(), case[0][1].as_str());
             assert_eq!(spend::label(model, tier), text(&case));
+        }
+    }
+
+    /// One of each screen the dashboard draws, with something on every part
+    /// of it: the panes with a highlighted line, then each popup and dialog.
+    fn scenes() -> Vec<(&'static str, State)> {
+        let dashboard = || {
+            let mut state = populated();
+            state.models = vec![crate::tui::state::ModelRow {
+                name: "codex".into(),
+                view: StatsView {
+                    requests: 2,
+                    in_flight: 1,
+                    body_bytes: 1_000_000,
+                    wire_bytes: 35_000,
+                    down_bytes: 1_000_000,
+                    down_wire_bytes: 100_000,
+                    upstream_errors: 1,
+                    ..StatsView::default()
+                },
+            }];
+            state.scroll(-1);
+            state
+        };
+        let registry = crate::flights::Flights::default();
+        let flight = registry.begin("alpha", "", &http::Method::POST, "/v1/messages", 100);
+        let mut scenes = vec![("dashboard", dashboard())];
+        type Open = fn(&mut State);
+        let opened: [(&str, Open); 5] = [
+            ("help", |state| state.help = true),
+            ("columns", |state| state.picker = true),
+            ("detail", |state| state.detail = true),
+            ("flights", |state| state.flights_open = true),
+            ("flights-empty", |state| {
+                state.flights.clear();
+                state.flights_open = true;
+            }),
+        ];
+        for (name, open) in opened {
+            let mut state = dashboard();
+            state.flights = vec![flight.view()];
+            open(&mut state);
+            scenes.push((name, state));
+        }
+        scenes.push(("usage", usage_state()));
+        let mut costs = usage_state();
+        costs.usage_rates = true;
+        scenes.push(("costs", costs));
+        scenes
+    }
+
+    /// A theme that paints its own ground paints all of it. A cell left at
+    /// `Reset` is the terminal's own color showing through: a dark hole in a
+    /// light theme, with whatever text it holds drawn for the other one.
+    #[test]
+    fn a_painted_theme_leaves_no_cell_to_the_terminal() {
+        for theme in &THEMES[1..] {
+            for (name, mut state) in scenes() {
+                state.theme = theme;
+                for (width, height) in [(150, 44), (80, 24), (40, 8)] {
+                    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+                    terminal
+                        .draw(|frame| draw(frame, &state, &header()))
+                        .unwrap();
+                    let buffer = terminal.backend().buffer();
+                    for (at, cell) in buffer.content().iter().enumerate() {
+                        assert!(
+                            cell.fg != Color::Reset && cell.bg != Color::Reset,
+                            "{} {name} at {width}x{height}: ({}, {}) is {cell:?}",
+                            theme.id,
+                            at % width as usize,
+                            at / width as usize,
+                        );
+                    }
+                }
+            }
         }
     }
 }
