@@ -694,6 +694,7 @@ mod tests {
                 stamp: "12:00:00".to_string(),
                 upstream: "model-epsilon".to_string(),
                 model: "model-epsilon".to_string(),
+                service_tier: None,
                 method: http::Method::POST,
                 path: "/v1/chat/completions".to_string(),
                 status: 200,

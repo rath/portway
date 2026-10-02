@@ -785,7 +785,7 @@ impl Forwarder {
             .get::<dict::DictionaryScope>()
             .cloned()
             .unwrap_or_else(|| dict::DictionaryScope::from_headers(&parts.headers));
-        let model = crate::router::named_model(&parts.headers, &body);
+        let named = crate::router::named(&parts.headers, &body);
         self.handle_scoped(
             parts.method,
             path_and_query,
@@ -793,7 +793,7 @@ impl Forwarder {
             parts.headers,
             body,
             scope,
-            model,
+            named,
         )
         .await
     }
@@ -807,7 +807,7 @@ impl Forwarder {
         body: Bytes,
     ) -> Response<OutBody> {
         let scope = dict::DictionaryScope::from_headers(&client_headers);
-        let model = crate::router::named_model(&client_headers, &body);
+        let named = crate::router::named(&client_headers, &body);
         self.handle_scoped(
             method,
             path_and_query,
@@ -815,13 +815,13 @@ impl Forwarder {
             client_headers,
             body,
             scope,
-            model,
+            named,
         )
         .await
     }
-    /// `model` is what the request is recorded as asking for — the string
-    /// `model` of its JSON body, as `router::named_model` reads it — and has
-    /// no part in where it goes: that was decided before this call.
+    /// `named` is what the request is recorded as asking for — the `model`
+    /// and `service_tier` of its JSON body, as `router::named` reads them —
+    /// and has no part in where it goes: that was decided before this call.
     #[allow(clippy::too_many_arguments)]
     pub async fn handle_scoped(
         self: &Arc<Self>,
@@ -831,7 +831,7 @@ impl Forwarder {
         client_headers: HeaderMap,
         body: Bytes,
         scope: dict::DictionaryScope,
-        model: Option<String>,
+        named: crate::router::Named,
     ) -> Response<OutBody> {
         if body.len() > self.max_body_bytes {
             return json_response(
@@ -911,7 +911,7 @@ impl Forwarder {
             }
         }
         self.stats.requests.fetch_add(1, Ordering::Relaxed);
-        let model = model.unwrap_or_default();
+        let model = named.model.unwrap_or_default();
         let in_flight = InFlight::new(
             &self.stats,
             &self.telemetry,
@@ -1243,6 +1243,7 @@ impl Forwarder {
         let log = RequestLog::new(
             self.name.clone(),
             model,
+            named.service_tier,
             method,
             path,
             parts.status.as_u16(),

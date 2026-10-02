@@ -45,6 +45,7 @@ fn request(seq: u64, ts: f64, record: &RequestRecord) -> Value {
         "stamp": record.stamp,
         "upstream": record.upstream,
         "model": record.model,
+        "service_tier": record.service_tier,
         "method": record.method.as_str(),
         "path": record.path.split('?').next().unwrap_or(&record.path),
         "route": route,

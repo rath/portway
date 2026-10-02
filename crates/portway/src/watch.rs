@@ -42,27 +42,32 @@ const POLL: Duration = Duration::from_millis(1000);
 const PROBE: Duration = Duration::from_millis(500);
 
 /// The recorded rows, most of them as the recorder wrote them. Token counts
-/// only came at schema v2, so the older layout reads them back as NULL.
+/// only came at schema v2 and the named tier at v5, so the older layouts read
+/// them back as NULL.
 const REQUEST_COLUMNS: &str = "id, ts_unix, model, method, path, status,
     dns_ms, tcp_ms, tls_ms, body_len, wire_len, coding, upload_ms, ttfb_ms,
     received, received_wire, upstream_encoding, download_ms, complete,
     prompt_tokens, cached_tokens, completion_tokens, reasoning_tokens,
-    received_agent, upstream";
-/// v3 has no route of its own: `model` was the route's name, and reads as both.
+    received_agent, upstream, service_tier";
+const REQUEST_COLUMNS_V4: &str = "id, ts_unix, model, method, path, status,
+    dns_ms, tcp_ms, tls_ms, body_len, wire_len, coding, upload_ms, ttfb_ms,
+    received, received_wire, upstream_encoding, download_ms, complete,
+    prompt_tokens, cached_tokens, completion_tokens, reasoning_tokens,
+    received_agent, upstream, NULL";
 const REQUEST_COLUMNS_V3: &str = "id, ts_unix, model, method, path, status,
     dns_ms, tcp_ms, tls_ms, body_len, wire_len, coding, upload_ms, ttfb_ms,
     received, received_wire, upstream_encoding, download_ms, complete,
     prompt_tokens, cached_tokens, completion_tokens, reasoning_tokens,
-    received_agent, model";
-/// v2 carries the token counts but no agent figure: the column arrived at v3.
+    received_agent, model, NULL";
 const REQUEST_COLUMNS_V2: &str = "id, ts_unix, model, method, path, status,
     dns_ms, tcp_ms, tls_ms, body_len, wire_len, coding, upload_ms, ttfb_ms,
     received, received_wire, upstream_encoding, download_ms, complete,
-    prompt_tokens, cached_tokens, completion_tokens, reasoning_tokens, 0, model";
+    prompt_tokens, cached_tokens, completion_tokens, reasoning_tokens, 0, model,
+    NULL";
 const REQUEST_COLUMNS_V1: &str = "id, ts_unix, model, method, path, status,
     dns_ms, tcp_ms, tls_ms, body_len, wire_len, coding, upload_ms, ttfb_ms,
     received, received_wire, upstream_encoding, download_ms, complete,
-    NULL, NULL, NULL, NULL, 0, model";
+    NULL, NULL, NULL, NULL, 0, model, NULL";
 const LOG_COLUMNS: &str = "id, ts_unix, level, message";
 
 /// Bytes on the wire per second, which is the one shape only SQL can give: the
@@ -137,6 +142,7 @@ struct Reader {
     tokens: bool,
     agent: bool,
     upstream: bool,
+    tier: bool,
 }
 
 /// What a row is read by: a window cutoff, or the id the last poll stopped at.
@@ -199,11 +205,13 @@ impl Reader {
         let tokens = store::has_token_columns(&connection)?;
         let agent = store::has_agent_column(&connection)?;
         let upstream = store::has_upstream_column(&connection)?;
+        let tier = store::has_tier_column(&connection)?;
         Ok(Some(Reader {
             connection,
             tokens,
             agent,
             upstream,
+            tier,
         }))
     }
 
@@ -224,10 +232,11 @@ impl Reader {
     }
 
     fn requests(&self, key: Key) -> Result<Vec<Stored>, String> {
-        let columns = match (self.tokens, self.agent, self.upstream) {
-            (true, true, true) => REQUEST_COLUMNS,
-            (true, true, false) => REQUEST_COLUMNS_V3,
-            (true, false, _) => REQUEST_COLUMNS_V2,
+        let columns = match (self.tokens, self.agent, self.upstream, self.tier) {
+            (true, true, true, true) => REQUEST_COLUMNS,
+            (true, true, true, false) => REQUEST_COLUMNS_V4,
+            (true, true, false, _) => REQUEST_COLUMNS_V3,
+            (true, false, _, _) => REQUEST_COLUMNS_V2,
             _ => REQUEST_COLUMNS_V1,
         };
         let sql = read("requests", columns, key);
@@ -248,6 +257,7 @@ impl Reader {
                         stamp: logfmt::clock(ts),
                         upstream: row.get(24)?,
                         model: row.get(2)?,
+                        service_tier: row.get(25)?,
                         method: Method::from_bytes(row.get::<_, String>(3)?.as_bytes())
                             .unwrap_or(Method::POST),
                         path: row.get(4)?,
@@ -561,6 +571,7 @@ mod tests {
             stamp: stamp.to_string(),
             upstream: "model-alpha".to_string(),
             model: "model-alpha".to_string(),
+            service_tier: Some("tier-a".to_string()),
             method: Method::POST,
             path: "/v1/chat/completions".to_string(),
             status: 200,
@@ -611,6 +622,7 @@ mod tests {
         // batch can reach the disk a moment after the answer did.
         written.stamp.clone_from(&record.stamp);
         assert_eq!(record.model, written.model);
+        assert_eq!(record.service_tier, written.service_tier);
         assert_eq!(record.method, written.method);
         assert_eq!(record.path, written.path);
         assert_eq!(record.status, written.status);

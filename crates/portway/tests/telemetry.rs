@@ -257,6 +257,43 @@ async fn a_record_names_its_route_and_the_model_the_body_asked_for() {
     );
 }
 
+/// The `service_tier` a body names rides beside its model, through a mount
+/// and through a `[models]` route alike; a body that names none, as a vendor's
+/// standard class does, records none.
+#[tokio::test]
+async fn a_record_keeps_the_service_tier_the_body_asked_for() {
+    let _serial = sink().await;
+    let up = upstream(Health::JsonBare, Reply::Ok).await;
+    let fwd = common::router(&[("codex", &up.base)], &[("model-alpha", &up.base)], &[]).await;
+    let tiered = |model: &str, tier: &str| {
+        Bytes::from(
+            serde_json::to_vec(&serde_json::json!({
+                "model": model,
+                "service_tier": tier,
+                "input": "에이전트 컨텍스트 ".repeat(5000),
+            }))
+            .unwrap(),
+        )
+    };
+
+    fwd.post("/codex/responses", tiered("gpt-x", "tier-a"))
+        .await;
+    let record = next_request().await;
+    assert_eq!(
+        (record.model.as_str(), record.service_tier.as_deref()),
+        ("gpt-x", Some("tier-a"))
+    );
+    fwd.post("/codex/responses", chat_body("gpt-x")).await;
+    assert_eq!(next_request().await.service_tier, None);
+    fwd.post("/v1/chat/completions", tiered("model-alpha", "tier-b"))
+        .await;
+    let record = next_request().await;
+    assert_eq!(
+        (record.model.as_str(), record.service_tier.as_deref()),
+        ("model-alpha", Some("tier-b"))
+    );
+}
+
 /// An agent that stops reading at the answer's last event — Codex closes on
 /// `response.completed` — leaves the upstream's EOF unread. The relay reads
 /// on for a moment, so the answer is recorded whole, with its usage, and its

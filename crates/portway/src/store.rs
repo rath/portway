@@ -36,7 +36,7 @@ const QUEUE: usize = 4096;
 const POLL: Duration = Duration::from_millis(200);
 const PRUNE_EVERY: Duration = Duration::from_secs(24 * 60 * 60);
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 
 /// `ts_unix` is the epoch second the row reached the store, not the request's
 /// own clock: the writer's clock is the one the window is measured against.
@@ -72,7 +72,8 @@ CREATE TABLE IF NOT EXISTS requests (
   completion_tokens INTEGER,
   reasoning_tokens INTEGER,
   received_agent INTEGER NOT NULL DEFAULT 0,
-  upstream TEXT NOT NULL DEFAULT ''
+  upstream TEXT NOT NULL DEFAULT '',
+  service_tier TEXT
 );
 CREATE INDEX IF NOT EXISTS requests_ts ON requests(ts_unix);
 CREATE TABLE IF NOT EXISTS logs (
@@ -111,12 +112,19 @@ ALTER TABLE requests ADD COLUMN upstream TEXT NOT NULL DEFAULT '';
 UPDATE requests SET upstream = model;
 ";
 
+/// v4 -> v5: the `service_tier` the request named, NULL where it named none.
+/// Every row recorded before the upgrade reads as having named none, so it is
+/// priced at its model's standard rates whatever class it actually ran in.
+const MIGRATE_V4: &str = "
+ALTER TABLE requests ADD COLUMN service_tier TEXT;
+";
+
 const INSERT_REQUEST: &str = "INSERT INTO requests (
   ts_unix, model, method, path, status, dns_ms, tcp_ms, tls_ms, body_len,
   wire_len, coding, upload_ms, ttfb_ms, received, received_wire,
   upstream_encoding, download_ms, complete, prompt_tokens, cached_tokens,
-  completion_tokens, reasoning_tokens, received_agent, upstream
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+  completion_tokens, reasoning_tokens, received_agent, upstream, service_tier
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
 const INSERT_LOG: &str = "INSERT INTO logs (ts_unix, level, message) VALUES (?, ?, ?)";
 
@@ -263,9 +271,10 @@ fn open_create(db: &Path) -> Result<Connection, String> {
             .map_err(|err| format!("{}: {err}", db.display()))?;
         let steps = match version {
             0 => SCHEMA.to_string(),
-            1 => format!("{MIGRATE_V1}{MIGRATE_V2}{MIGRATE_V3}"),
-            2 => format!("{MIGRATE_V2}{MIGRATE_V3}"),
-            _ => MIGRATE_V3.to_string(),
+            1 => format!("{MIGRATE_V1}{MIGRATE_V2}{MIGRATE_V3}{MIGRATE_V4}"),
+            2 => format!("{MIGRATE_V2}{MIGRATE_V3}{MIGRATE_V4}"),
+            3 => format!("{MIGRATE_V3}{MIGRATE_V4}"),
+            _ => MIGRATE_V4.to_string(),
         };
         tx.execute_batch(&steps)
             .map_err(|err| format!("{}: {err}", db.display()))?;
@@ -332,6 +341,13 @@ pub fn has_agent_column(connection: &Connection) -> Result<bool, String> {
 pub fn has_upstream_column(connection: &Connection) -> Result<bool, String> {
     const UPSTREAM_SINCE: i64 = 4;
     Ok(schema_version(connection)? >= UPSTREAM_SINCE)
+}
+
+/// Whether the file keeps the `service_tier` a request named. A reader of an
+/// older file selects `NULL`, which is what the upgrade gives those rows.
+pub fn has_tier_column(connection: &Connection) -> Result<bool, String> {
+    const TIER_SINCE: i64 = 5;
+    Ok(schema_version(connection)? >= TIER_SINCE)
 }
 
 /// The writer thread. Nothing here is allowed to end the process: a disk that
@@ -427,6 +443,7 @@ fn insert(tx: &Transaction<'_>, batch: &[Event]) -> rusqlite::Result<()> {
                         .map(|r| r as i64),
                     record.received_agent as i64,
                     record.upstream,
+                    record.service_tier,
                 ])?;
             }
             Event::Log { level, message, .. } => {
@@ -492,6 +509,7 @@ mod tests {
             stamp: "23:41:02".to_string(),
             upstream: "model-alpha".to_string(),
             model: "model-alpha".to_string(),
+            service_tier: Some("tier-a".to_string()),
             method: Method::POST,
             path: "/v1/chat/completions".to_string(),
             status,
@@ -816,6 +834,18 @@ mod tests {
             )
             .unwrap();
         assert_eq!(upstream, ("model-zeta".into(), "model-alpha".into()));
+
+        // And the v5 column: the old row named no tier, the new one keeps
+        // the one its request named.
+        let tier: (Option<String>, Option<String>) = db
+            .query_row(
+                "SELECT (SELECT service_tier FROM requests WHERE model = 'model-zeta'),
+                        (SELECT service_tier FROM requests WHERE model = 'model-alpha')",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(tier, (None, Some("tier-a".into())));
     }
 
     #[test]

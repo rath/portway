@@ -208,7 +208,7 @@ impl Router {
                 Ok(body) => body,
                 Err(err) => return invalid_request(err.status(), &err.to_string(), None),
             };
-            let model = named_model(&parts.headers, &body);
+            let named = named(&parts.headers, &body);
             return forwarder
                 .handle_scoped(
                     parts.method,
@@ -217,7 +217,7 @@ impl Router {
                     parts.headers,
                     body,
                     scope,
-                    model,
+                    named,
                 )
                 .await;
         }
@@ -226,7 +226,7 @@ impl Router {
                 Ok(body) => body,
                 Err(err) => return invalid_request(err.status(), &err.to_string(), None),
             };
-            let model = named_model(&parts.headers, &body);
+            let named = named(&parts.headers, &body);
             return root
                 .handle_scoped(
                     parts.method,
@@ -235,7 +235,7 @@ impl Router {
                     parts.headers,
                     body,
                     scope,
-                    model,
+                    named,
                 )
                 .await;
         }
@@ -277,16 +277,15 @@ impl Router {
             Err(err) => return invalid_request(err.status(), &err.to_string(), None),
         };
         let mut model = query_model(parts.uri.query());
+        let mut service_tier = None;
         if !body.is_empty() {
-            let Ok(serde_json::Value::Object(payload)) =
+            let Ok(serde_json::Value::Object(mut payload)) =
                 serde_json::from_slice::<serde_json::Value>(&body)
             else {
                 return invalid_request(StatusCode::BAD_REQUEST, "Expected a JSON object.", None);
             };
-            model = payload
-                .get("model")
-                .and_then(|v| v.as_str())
-                .map(str::to_owned);
+            model = string(payload.remove("model"));
+            service_tier = string(payload.remove("service_tier"));
         }
         let Some(forwarder) = model
             .as_deref()
@@ -315,34 +314,60 @@ impl Router {
                 parts.headers,
                 body,
                 scope,
-                model,
+                Named {
+                    model,
+                    service_tier,
+                },
             )
             .await
     }
 }
 
-/// Only the one field is kept; every other value is skipped as it is read.
+/// Only the recorded fields are kept; every other value is skipped as it is
+/// read.
 #[derive(Deserialize)]
-struct ModelField {
+struct NamedFields {
     #[serde(default)]
     model: Option<serde_json::Value>,
+    #[serde(default)]
+    service_tier: Option<serde_json::Value>,
 }
 
-/// The model a request names: the string `model` of its JSON object body.
-/// `None` for a body that is encoded, is not a JSON object, or names none.
-/// This is what the request is recorded under; routing has its own rules.
-pub fn named_model(headers: &HeaderMap, body: &[u8]) -> Option<String> {
+/// What a request names in its JSON body and is recorded under. Neither
+/// field has any part in where it goes; routing has its own rules.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Named {
+    /// The string `model`. Prices are keyed by it.
+    pub model: Option<String>,
+    /// The string `service_tier`: the speed or priority class a vendor bills
+    /// at rates of its own. A vendor's standard class is usually its absence.
+    pub service_tier: Option<String>,
+}
+
+/// What a request names: the string `model` and `service_tier` of its JSON
+/// object body, read in one pass. Empty for a body that is encoded or is not
+/// a JSON object, and each field `None` where the body names no string.
+pub fn named(headers: &HeaderMap, body: &[u8]) -> Named {
     let encoded = headers
         .get(http::header::CONTENT_ENCODING)
         .is_some_and(|v| !v.as_bytes().eq_ignore_ascii_case(b"identity"));
     if encoded || body.is_empty() {
-        return None;
+        return Named::default();
     }
-    serde_json::from_slice::<ModelField>(body)
-        .ok()?
-        .model?
-        .as_str()
-        .map(str::to_owned)
+    let Ok(fields) = serde_json::from_slice::<NamedFields>(body) else {
+        return Named::default();
+    };
+    Named {
+        model: string(fields.model),
+        service_tier: string(fields.service_tier),
+    }
+}
+
+fn string(value: Option<serde_json::Value>) -> Option<String> {
+    match value? {
+        serde_json::Value::String(text) => Some(text),
+        _ => None,
+    }
 }
 
 /// A mount is one path segment, so a client's base URL can end in it and
@@ -490,27 +515,39 @@ mod tests {
     }
 
     #[test]
-    fn the_named_model_is_the_string_model_of_a_plain_json_object() {
+    fn the_named_fields_are_the_strings_of_a_plain_json_object() {
         let plain = HeaderMap::new();
         let mut encoded = HeaderMap::new();
         encoded.insert("content-encoding", "zstd".parse().unwrap());
         let mut identity = HeaderMap::new();
         identity.insert("content-encoding", "identity".parse().unwrap());
-        let body = br#"{"messages":[{"role":"user","content":"hi"}],"model":"m-1","stream":true}"#;
-        assert_eq!(named_model(&plain, body).as_deref(), Some("m-1"));
-        assert_eq!(named_model(&identity, body).as_deref(), Some("m-1"));
-        assert_eq!(named_model(&encoded, body), None);
+        let body = br#"{"messages":[{"role":"user","content":"hi"}],"model":"m-1","service_tier":"tier-a","stream":true}"#;
+        let both = Named {
+            model: Some("m-1".into()),
+            service_tier: Some("tier-a".into()),
+        };
+        assert_eq!(named(&plain, body), both);
+        assert_eq!(named(&identity, body), both);
+        assert_eq!(named(&encoded, body), Named::default());
         for body in [
             &b""[..],
             b"{}",
             b"[]",
             b"null",
             b"{",
-            br#"{"model":5}"#,
-            br#"{"model":null}"#,
+            br#"{"model":5,"service_tier":5}"#,
+            br#"{"model":null,"service_tier":null}"#,
         ] {
-            assert_eq!(named_model(&plain, body), None, "{body:?}");
+            assert_eq!(named(&plain, body), Named::default(), "{body:?}");
         }
+        // Each is read on its own: a standard-class request names no tier.
+        assert_eq!(
+            named(&plain, br#"{"model":"m-1"}"#),
+            Named {
+                model: Some("m-1".into()),
+                service_tier: None,
+            }
+        );
     }
 
     #[test]
