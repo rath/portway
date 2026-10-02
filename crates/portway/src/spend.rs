@@ -15,6 +15,10 @@
 //! billed at the input rate and flagged, and a model the price table does not
 //! name gets no cost at all rather than a free one.
 //!
+//! A request whose prompt passes its rates' long-context line is billed at
+//! that line's rates for all of its tokens, the way a vendor that draws one
+//! bills it; the rest of the row keeps the ordinary rates.
+//!
 //! A model is added up once per tier its requests named, because a
 //! vendor bills a faster class at rates of its own: a tier the price table
 //! does not name gets no cost either, rather than the standard one.
@@ -119,6 +123,18 @@ impl Charge {
     }
 }
 
+impl std::ops::Add for Charge {
+    type Output = Charge;
+
+    fn add(self, other: Charge) -> Charge {
+        Charge {
+            input: self.input + other.input,
+            cache_read: self.cache_read + other.cache_read,
+            output: self.output + other.output,
+        }
+    }
+}
+
 /// One model's day in one tier: what the engines counted, and what it would
 /// cost.
 #[derive(Debug, Clone, Default)]
@@ -138,6 +154,9 @@ pub struct Row {
     pub completion: u64,
     /// The thinking inside `completion`, which is billed as output.
     pub reasoning: u64,
+    /// Answers whose prompt passed their rates' long-context line, and so were
+    /// charged whole at its rates. Zero where the rates draw no line.
+    pub long: u64,
     /// `None` when no price row names this model, or this tier of it.
     pub charge: Option<Charge>,
 }
@@ -210,6 +229,7 @@ impl Table {
         total.unreported += row.unreported;
         total.completion += row.completion;
         total.reasoning += row.reasoning;
+        total.long += row.long;
         match (row.charge, &mut total.charge) {
             (Some(charge), Some(sum)) => {
                 sum.input += charge.input;
@@ -245,6 +265,12 @@ pub fn notes(table: &Table) -> Vec<String> {
         notes.push(format!(
             "{} model(s) or tier(s) have no price here: their tokens are in the totals, their money is not",
             table.unpriced
+        ));
+    }
+    if table.total.long > 0 {
+        notes.push(format!(
+            "{} request(s) passed a long-context line: all their tokens are charged at its rates",
+            table.total.long
         ));
     }
     if table.total.completion > 0 {
@@ -295,6 +321,62 @@ fn aggregate(tier: &str) -> String {
     )
 }
 
+/// The answers of one row whose prompt passed a long-context line: the same
+/// sums, over those answers alone. `tier` is what `aggregate` was given, and
+/// `IS` matches the NULL of the standard class as well as a name.
+fn long_part(tier: &str) -> String {
+    format!(
+        "SELECT
+    COUNT(*),
+    COALESCE(SUM(prompt_tokens), 0),
+    COALESCE(SUM(cached_tokens), 0),
+    COALESCE(SUM(completion_tokens), 0)
+  FROM requests
+  WHERE ts_unix >= ?1 AND ts_unix < ?2 AND prompt_tokens IS NOT NULL
+    AND model = ?3 AND {tier} IS ?4 AND prompt_tokens > ?5"
+    )
+}
+
+/// Token sums over some of a row's answers, in the shape a charge is
+/// computed from.
+#[derive(Clone, Copy, Default)]
+struct Part {
+    requests: u64,
+    prompt: u64,
+    cached: u64,
+    completion: u64,
+}
+
+impl Part {
+    fn of(row: &Row) -> Part {
+        Part {
+            requests: row.requests,
+            prompt: row.prompt,
+            cached: row.cached,
+            completion: row.completion,
+        }
+    }
+
+    /// What is left of this one once `other`, a part of it, is taken out.
+    fn less(self, other: Part) -> Part {
+        Part {
+            requests: self.requests.saturating_sub(other.requests),
+            prompt: self.prompt.saturating_sub(other.prompt),
+            cached: self.cached.saturating_sub(other.cached),
+            completion: self.completion.saturating_sub(other.completion),
+        }
+    }
+
+    fn charge(self, rates: Rates) -> Charge {
+        charge(
+            self.prompt.saturating_sub(self.cached),
+            self.cached,
+            self.completion,
+            rates,
+        )
+    }
+}
+
 /// Requests the sums above had to skip, and how many of them were cut short.
 const BLIND: &str = "SELECT COUNT(*), COALESCE(SUM(complete = 0), 0)
   FROM requests
@@ -340,16 +422,39 @@ pub fn load(db: &Path, since: f64, until: f64, prices: &Prices) -> Result<Table,
                 unreported: row.get::<_, i64>(5)? as u64,
                 completion: row.get::<_, i64>(6)? as u64,
                 reasoning: row.get::<_, i64>(7)? as u64,
+                long: 0,
                 charge: None,
             })
         })
+        .map_err(sqlite)?
+        .collect::<rusqlite::Result<Vec<Row>>>()
         .map_err(sqlite)?;
-    for row in rows {
-        let mut row = row.map_err(sqlite)?;
-        row.charge = prices
+    let mut long = connection.prepare(&long_part(tier)).map_err(sqlite)?;
+    for mut row in rows {
+        let rates = prices
             .get(&row.model)
-            .and_then(|price| price.rates(row.tier.as_deref()))
-            .map(|rates| charge(row.uncached(), row.cached, row.completion, rates));
+            .and_then(|price| price.rates(row.tier.as_deref()));
+        row.charge = match rates {
+            None => None,
+            Some(rates) => Some(match rates.long_context {
+                None => Part::of(&row).charge(rates),
+                Some(line) => {
+                    let above = i64::try_from(line.above).unwrap_or(i64::MAX);
+                    let past = long
+                        .query_row(params![since, until, row.model, row.tier, above], |sums| {
+                            Ok(Part {
+                                requests: sums.get::<_, i64>(0)? as u64,
+                                prompt: sums.get::<_, i64>(1)? as u64,
+                                cached: sums.get::<_, i64>(2)? as u64,
+                                completion: sums.get::<_, i64>(3)? as u64,
+                            })
+                        })
+                        .map_err(sqlite)?;
+                    row.long = past.requests;
+                    Part::of(&row).less(past).charge(rates) + past.charge(line.rates())
+                }
+            }),
+        };
         table.absorb(&row);
         table.rows.push(row);
     }
@@ -385,6 +490,7 @@ mod tests {
     use http::Method;
 
     use super::*;
+    use crate::config::LongContext;
     use std::collections::BTreeMap;
     fn rates(model: &str) -> Option<Rates> {
         fixture_prices().get(model)?.rates(None)
@@ -397,6 +503,7 @@ mod tests {
                     input: 0.09,
                     output: 0.3,
                     cache_read: 0.018,
+                    long_context: None,
                     tiers: BTreeMap::new(),
                 },
             ),
@@ -406,6 +513,7 @@ mod tests {
                     input: 0.16,
                     output: 0.47,
                     cache_read: 0.016,
+                    long_context: None,
                     tiers: BTreeMap::new(),
                 },
             ),
@@ -415,6 +523,7 @@ mod tests {
                     input: 0.2,
                     output: 2.5,
                     cache_read: 0.05,
+                    long_context: None,
                     tiers: BTreeMap::new(),
                 },
             ),
@@ -424,6 +533,7 @@ mod tests {
                     input: 0.15,
                     output: 0.6,
                     cache_read: 0.003,
+                    long_context: None,
                     tiers: BTreeMap::new(),
                 },
             ),
@@ -433,6 +543,7 @@ mod tests {
                     input: 1.7,
                     output: 8.5,
                     cache_read: 0.17,
+                    long_context: None,
                     tiers: BTreeMap::new(),
                 },
             ),
@@ -442,6 +553,7 @@ mod tests {
                     input: 0.91,
                     output: 2.86,
                     cache_read: 0.169,
+                    long_context: None,
                     tiers: BTreeMap::new(),
                 },
             ),
@@ -469,6 +581,7 @@ mod tests {
             unreported: 0,
             completion,
             reasoning: 0,
+            long: 0,
             charge: rates(model).map(|rates| charge(prompt - cached, cached, completion, rates)),
         }
     }
@@ -702,6 +815,7 @@ mod tests {
             input: 0.18,
             output: 0.6,
             cache_read: 0.036,
+            long_context: None,
         };
         prices
             .get_mut("model-alpha")
@@ -754,6 +868,96 @@ mod tests {
         assert_eq!(table.rows.len(), 1, "{:?}", table.rows);
         assert_eq!(table.rows[0].tier, None);
         assert!((table.rows[0].cost().unwrap() - 0.36).abs() < 1e-9);
+    }
+
+    /// A request whose prompt passes its rates' long-context line is charged
+    /// whole at the line's rates, in its own tier; the line itself is still
+    /// short, and the rest of the row keeps the ordinary rates.
+    #[test]
+    fn an_answer_past_the_long_context_line_is_charged_whole_at_its_rates() {
+        let dir = std::env::temp_dir().join("portway-spend-test-long");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = store::spawn(&dir, 0).unwrap();
+        let sender = store.sender();
+        let answers = [
+            (None, 900, 100, 10),
+            (None, 1000, 0, 10),
+            (None, 1500, 500, 20),
+            (Some("tier-a"), 500, 0, 5),
+            (Some("tier-a"), 2000, 0, 30),
+        ];
+        for (tier, prompt, cached, completion) in answers {
+            let mut answer = record(
+                "model-alpha",
+                Some(Usage {
+                    prompt,
+                    cached: Some(cached),
+                    completion,
+                    reasoning: None,
+                }),
+            );
+            answer.tier = tier.map(str::to_string);
+            sender.send(Event::Request(Arc::new(answer))).unwrap();
+        }
+        store.shutdown();
+
+        let line = |input, output, cache_read| {
+            Some(LongContext {
+                above: 1000,
+                input,
+                output,
+                cache_read,
+            })
+        };
+        let mut prices = fixture_prices();
+        let alpha = prices.get_mut("model-alpha").unwrap();
+        (alpha.input, alpha.output, alpha.cache_read) = (1.0, 2.0, 0.1);
+        alpha.long_context = line(2.0, 3.0, 0.2);
+        alpha.tiers.insert(
+            "tier-a".into(),
+            Rates {
+                input: 2.0,
+                output: 4.0,
+                cache_read: 0.2,
+                long_context: line(4.0, 6.0, 0.4),
+            },
+        );
+        let since = crate::logfmt::epoch() - 1.0;
+        let table = super::load(&dir.join(store::DB_FILE), since, since + 3600.0, &prices).unwrap();
+
+        let row = |tier: Option<&str>| {
+            table
+                .rows
+                .iter()
+                .find(|row| row.tier.as_deref() == tier)
+                .unwrap()
+        };
+        // Short: 1800 prefilled at 1.0, 100 cached at 0.1, 20 out at 2.0.
+        // Long: 1000 prefilled at 2.0, 500 cached at 0.2, 20 out at 3.0.
+        assert_eq!(row(None).long, 1, "exactly at the line is still short");
+        assert!((row(None).cost().unwrap() - (1850.0 + 2160.0) / 1e6).abs() < 1e-12);
+        // Short: 500 at 2.0 and 5 out at 4.0; long: 2000 at 4.0 and 30 at 6.0.
+        assert_eq!(row(Some("tier-a")).long, 1);
+        assert!((row(Some("tier-a")).cost().unwrap() - (1020.0 + 8180.0) / 1e6).abs() < 1e-12);
+        assert_eq!(table.total.long, 2);
+        assert!(
+            notes(&table)
+                .iter()
+                .any(|note| note.starts_with("2 request(s) passed a long-context line")),
+            "{:?}",
+            notes(&table)
+        );
+
+        // Without the line, the same answers cost the ordinary rates.
+        prices.get_mut("model-alpha").unwrap().long_context = None;
+        let table = super::load(&dir.join(store::DB_FILE), since, since + 3600.0, &prices).unwrap();
+        let standard = table.rows.iter().find(|row| row.tier.is_none()).unwrap();
+        assert_eq!(standard.long, 0);
+        assert!(
+            (standard.cost().unwrap() - (2800.0 * 1.0 + 600.0 * 0.1 + 40.0 * 2.0) / 1e6).abs()
+                < 1e-12
+        );
     }
 
     #[test]

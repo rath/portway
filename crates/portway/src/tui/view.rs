@@ -2767,6 +2767,7 @@ mod tests {
             unreported: 0,
             completion: 478_284,
             reasoning: 211_829,
+            long: 0,
             charge: Some(spend::Charge {
                 input: 2.3783,
                 cache_read: 18.8950,
@@ -2782,6 +2783,7 @@ mod tests {
             unreported: 389,
             completion: 240_377,
             reasoning: 126_559,
+            long: 0,
             charge: Some(spend::Charge {
                 input: 3.8594,
                 cache_read: 0.0,
@@ -2802,6 +2804,7 @@ mod tests {
                 unreported: 389,
                 completion: 718_661,
                 reasoning: 338_388,
+                long: 0,
                 charge: Some(spend::Charge {
                     input: 6.2377,
                     cache_read: 18.8950,

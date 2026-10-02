@@ -11,6 +11,31 @@ pub struct Rates {
     pub input: f64,
     pub output: f64,
     pub cache_read: f64,
+    /// What a request that outgrows the vendor's long-context line is billed
+    /// at instead, for all of its tokens.
+    #[serde(default)]
+    pub long_context: Option<LongContext>,
+}
+/// The rates a vendor bills a whole request at once its prompt, cache reads
+/// included, passes `above` tokens.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct LongContext {
+    pub above: u64,
+    pub input: f64,
+    pub output: f64,
+    pub cache_read: f64,
+}
+impl LongContext {
+    /// The rates themselves, with no further line of their own.
+    pub fn rates(&self) -> Rates {
+        Rates {
+            input: self.input,
+            output: self.output,
+            cache_read: self.cache_read,
+            long_context: None,
+        }
+    }
 }
 /// A model's rates: the standard ones, for a request that names no
 /// tier, and one set for each tier the vendor bills apart.
@@ -20,6 +45,8 @@ pub struct Price {
     pub input: f64,
     pub output: f64,
     pub cache_read: f64,
+    #[serde(default)]
+    pub long_context: Option<LongContext>,
     /// Keyed by the tier exactly as requests send it: their `speed`, or
     /// else their `service_tier`.
     #[serde(default)]
@@ -36,6 +63,7 @@ impl Price {
                 input: self.input,
                 output: self.output,
                 cache_read: self.cache_read,
+                long_context: self.long_context,
             }),
             Some(tier) => self.tiers.get(tier).copied(),
         }
@@ -153,12 +181,19 @@ impl Config {
             }
             .into());
         }
-        let rates = self.prices.values().flat_map(|price| {
-            price
-                .rates(None)
-                .into_iter()
-                .chain(price.tiers.values().copied())
-        });
+        // Every set of rates the table holds, each tier's and each
+        // long-context set included.
+        let rates = self
+            .prices
+            .values()
+            .flat_map(|price| {
+                price
+                    .rates(None)
+                    .into_iter()
+                    .chain(price.tiers.values().copied())
+            })
+            .flat_map(|rates| [Some(rates), rates.long_context.map(|long| long.rates())])
+            .flatten();
         for rates in rates {
             if [rates.input, rates.output, rates.cache_read]
                 .iter()
@@ -231,11 +266,13 @@ mod tests {
             input: 1.0,
             output: 2.0,
             cache_read: 0.1,
+            long_context: None,
         };
         let faster = Rates {
             input: 2.0,
             output: 4.0,
             cache_read: 0.2,
+            long_context: None,
         };
         assert_eq!(price.rates(None), Some(standard));
         assert_eq!(price.rates(Some("tier-a")), Some(faster));
@@ -256,6 +293,59 @@ mod tests {
             )
             .is_err()
         );
+    }
+    /// A set of rates may carry the vendor's long-context line: a threshold
+    /// and the rates a request past it is billed at, as an inline table that a
+    /// tier's rates can carry too. It is held to the same rules as any rates.
+    #[test]
+    fn long_context_rates_ride_inside_a_set_of_rates() {
+        let config: Config = toml::from_str(
+            "upstream='http://example.test'\n\
+             [prices.'model-a']\ninput=1.0\noutput=2.0\ncache_read=0.1\n\
+             long_context={above=1000,input=2.0,output=3.0,cache_read=0.2}\n\
+             [prices.'model-a'.tiers.'tier-a']\ninput=2.0\noutput=4.0\ncache_read=0.2\n\
+             long_context={above=1000,input=4.0,output=6.0,cache_read=0.4}\n\
+             [prices.'model-b']\ninput=1.0\noutput=2.0\ncache_read=0.1\n",
+        )
+        .unwrap();
+        assert!(config.validate(Mode::Forward).is_ok());
+        let long = |model: &str, tier: Option<&str>| {
+            config.prices[model].rates(tier).unwrap().long_context
+        };
+        assert_eq!(
+            long("model-a", None),
+            Some(LongContext {
+                above: 1000,
+                input: 2.0,
+                output: 3.0,
+                cache_read: 0.2,
+            })
+        );
+        assert_eq!(long("model-a", Some("tier-a")).unwrap().input, 4.0);
+        assert_eq!(long("model-b", None), None, "a vendor without the line");
+
+        let refused = |table: &str| {
+            let file = format!(
+                "upstream='http://example.test'\n[prices.m]\ninput=1.0\noutput=2.0\ncache_read=0.1\n{table}\n"
+            );
+            match toml::from_str::<Config>(&file) {
+                Ok(config) => config.validate(Mode::Forward).is_err(),
+                Err(_) => true,
+            }
+        };
+        assert!(refused(
+            "long_context={above=1000,input=2.0,output=-3.0,cache_read=0.2}"
+        ));
+        assert!(refused("long_context={above=1000,input=2.0,output=3.0}"));
+        assert!(refused(
+            "long_context={above=-1,input=2.0,output=3.0,cache_read=0.2}"
+        ));
+        assert!(refused(
+            "long_context={above=1000,input=2.0,output=3.0,cache_read=0.2,factor=2}"
+        ));
+        assert!(!refused(
+            "long_context={above=1000,input=2.0,output=3.0,cache_read=0.2}"
+        ));
     }
     #[test]
     fn route_modes_and_prices_are_validated_without_inventing_defaults() {
@@ -295,6 +385,7 @@ mod tests {
                 input: f64::NAN,
                 output: 1.0,
                 cache_read: 0.0,
+                long_context: None,
                 tiers: BTreeMap::new(),
             },
         );
@@ -304,6 +395,7 @@ mod tests {
             input: 1.0,
             output: -1.0,
             cache_read: 0.0,
+            long_context: None,
         };
         config.prices.insert(
             "sample".into(),
@@ -311,6 +403,7 @@ mod tests {
                 input: 1.0,
                 output: 1.0,
                 cache_read: 0.0,
+                long_context: None,
                 tiers: BTreeMap::from([("tier-a".into(), negative)]),
             },
         );

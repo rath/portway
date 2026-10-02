@@ -262,6 +262,7 @@ Keys are sent by the client, not registered in the routing table. See
 | `[models]` | empty | Model name → upstream URL, chosen by the JSON `model` field |
 | `[prices.NAME]` | absent | Optional `input`, `output`, `cache_read` rates in USD per million tokens |
 | `[prices.NAME.tiers.TIER]` | absent | The same three rates for requests whose tier is `TIER` (their `speed`, else their `service_tier`) |
+| `long_context = { above, input, output, cache_read }` | absent | In either table: the rates for a request whose prompt passes `above` tokens |
 
 Prices are optional inputs to the TUI's usage and cost estimates. They do not
 change requests, charge a balance, or discover provider rates. Tables for the
@@ -323,6 +324,34 @@ detail names the tier beside the model.
 The tier is taken from the request because a response does not reliably
 report the class that served it. Rows recorded before Portway kept the tier
 read as naming none and are priced at the base rates.
+
+### Long context
+
+A vendor may bill a request whose prompt passes a size at higher rates, for
+all of that request's tokens rather than for the part past the line. Give a
+set of rates its line as `long_context`, with the threshold in prompt tokens
+(cache reads and writes included) and the rates beyond it:
+
+```toml
+# Illustrative numbers only; replace with your own comparison rates.
+[prices."model-b.1"]
+input = 1.0
+output = 2.0
+cache_read = 0.1
+long_context = { above = 100000, input = 2.0, output = 3.0, cache_read = 0.2 }
+
+[prices."model-b.1".tiers.tier-a]
+input = 2.0
+output = 4.0
+cache_read = 0.2
+long_context = { above = 100000, input = 4.0, output = 6.0, cache_read = 0.4 }
+```
+
+Each set of rates carries its own line, so a tier without one is priced at its
+own rates whatever its size; there is no inheritance from the base rates. A
+prompt of exactly `above` tokens is still short. The usage screens keep a
+model's row whole and count the requests that passed the line in a note under
+the table.
 
 Missing prices remain unpriced. Token usage also depends on what the upstream
 reports; a price table cannot fill in missing usage. TUI estimates use the

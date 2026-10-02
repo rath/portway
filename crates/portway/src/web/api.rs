@@ -260,6 +260,7 @@ fn usage_row(row: &spend::Row) -> Value {
         "unreported": row.unreported,
         "completion": row.completion,
         "reasoning": row.reasoning,
+        "long": row.long,
         "uncached": row.uncached(),
         "hit_rate": row.hit_rate(),
         "charge": row.charge.map(|charge| json!({

@@ -326,6 +326,8 @@ struct RowData {
     unreported: u64,
     completion: u64,
     reasoning: u64,
+    #[serde(default)]
+    long: u64,
     #[serde(deserialize_with = "charge")]
     charge: Option<spend::Charge>,
 }

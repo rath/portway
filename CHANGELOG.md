@@ -21,6 +21,10 @@ version may contain breaking changes.
   (`model · tier`), and a tier without rates stays unpriced instead of being
   billed at the standard rates. Embedders: `Forwarder::handle_scoped` takes a
   `router::Named` in place of the model, and `RequestRecord` gains `tier`.
+- Long-context prices. `long_context = { above, input, output, cache_read }`
+  in a model's or a tier's rates bills a request whose prompt passes `above`
+  tokens at those rates for all of its tokens, as OpenAI does past 272K input
+  tokens. The usage screens note how many requests passed the line.
 - `docs/prices.md`: OpenAI's and Anthropic's published list prices as
   `[prices]` tables to copy, with the tier each client sends and what the
   estimates leave out, such as OpenAI's long-context rates.
