@@ -75,6 +75,12 @@ export function ratio(raw, wire) {
   return `-${(saved * 100n) / BigInt(raw)}%`;
 }
 
+/** `92%` of a whole, truncated like `ratio`; null when there is no whole. */
+export function share(part, whole) {
+  if (!whole) return null;
+  return `${(BigInt(Math.min(part, whole)) * 100n) / BigInt(whole)}%`;
+}
+
 /** More decimals the smaller the amount: a cent of cache is not `$0.00`. */
 export function dollars(amount) {
   if (amount === 0) return "$0";

@@ -141,7 +141,7 @@ export function renderModels(ctx) {
       [String(model.in_flight), model.in_flight > 0 ? "good" : "dim"],
       [human(model.body)],
       [human(model.wire)],
-      [human(model.saved), "good"],
+      [`${human(model.saved)} (${ratio(model.body, model.wire)})`, "good"],
       [human(model.down)],
       [human(model.down_saved), "good"],
       [String(model.idle)],

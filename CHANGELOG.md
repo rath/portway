@@ -40,6 +40,9 @@ version may contain breaking changes.
   keeps the exact count. The table needs 114 columns of terminal for its
   download and error cells and 146 for its compression status, six more than
   before.
+  The browser console matches: its upstream table's `saved` cell carries the
+  same ratio, and its event line and `cached` column give the same share,
+  with the exact count in the cell's tooltip.
 
 ## [0.2.2] - 2026-10-01
 

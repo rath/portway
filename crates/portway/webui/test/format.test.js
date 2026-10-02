@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 import {
-  dollars, fixedEven, human, humanCount, humanTime, label, percent, ratio, span, uptime,
+  dollars, fixedEven, human, humanCount, humanTime, label, percent, ratio, share, span, uptime,
 } from "../static/js/format.js";
 
 const fixture = JSON.parse(readFileSync(new URL("./fixtures/format.json", import.meta.url), "utf8"));
@@ -15,6 +15,7 @@ const cases = {
   span: (input) => span(input),
   uptime: (input) => uptime(input),
   ratio: ([raw, wire]) => ratio(raw, wire),
+  share: ([part, whole]) => share(part, whole),
   dollars: (input) => dollars(input),
   label: ([model, tier]) => label(model, tier),
 };

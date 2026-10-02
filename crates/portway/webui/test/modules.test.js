@@ -34,7 +34,7 @@ const every = new Set(ALL_COLUMNS);
 test("a request line reads like the terminal's", () => {
   assert.equal(
     lineText(eventLine(request(), every)),
-    "12:34:56 200 model-alpha POST ../completions 461KB→111KB -76% 12ms ttfb 840ms down 2KB→0.9KB -56% 1.50s tok 91.2K(91.1K cached)→891",
+    "12:34:56 200 model-alpha POST ../completions 461KB→111KB -76% 12ms ttfb 840ms down 2KB→0.9KB -56% 1.50s tok 91.2K(99% cached)→891",
   );
 });
 
@@ -98,7 +98,8 @@ test("the table spells the route out, one cell per field", () => {
   assert.equal(row.wire.text, "111KB");
   assert.equal(row.saved.text, "-76%");
   assert.equal(row.prompt.text, "91.2K");
-  assert.equal(row.cached.text, "91.1K");
+  assert.equal(row.cached.text, "99%");
+  assert.equal(row.cached.title, "91100 cached");
   assert.equal(row.completion.text, "891");
   assert.ok(row.ttfb.numeric && !row.path.numeric);
   const blank = rowCells(request({ body_len: 0, wire_len: 0, coding: null, usage: null }), cells);

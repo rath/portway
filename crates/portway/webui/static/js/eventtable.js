@@ -4,7 +4,7 @@
 // it can be tested without a page.
 
 import { statusTone } from "./eventline.js";
-import { human, humanCount, humanTime, ratio } from "./format.js";
+import { human, humanCount, humanTime, ratio, share } from "./format.js";
 
 const optional = (value) => (value == null ? "not measured" : humanTime(value));
 
@@ -102,8 +102,11 @@ export const CELLS = [
     read: (e) => (e.usage ? { text: humanCount(e.usage.prompt), tone: null, title: String(e.usage.prompt) } : null),
   },
   {
-    key: "cached", column: "tokens", label: "cached", numeric: true, note: "of those, read from the cache",
-    read: (e) => (e.usage?.cached == null ? null : { text: humanCount(e.usage.cached), tone: "dim", title: String(e.usage.cached) }),
+    key: "cached", column: "tokens", label: "cached", numeric: true, note: "the share of those read from the cache",
+    read: (e) => {
+      const cached = e.usage?.cached == null ? null : share(e.usage.cached, e.usage.prompt);
+      return cached == null ? null : { text: cached, tone: "dim", title: `${e.usage.cached} cached` };
+    },
   },
   {
     key: "completion", column: "tokens", label: "tok out", numeric: true, note: "completion tokens, reasoning included",

@@ -2,7 +2,7 @@
 // the same marks glued in the same places, as a list of toned segments the
 // view turns into spans. Pure, so the line can be tested without a page.
 
-import { human, humanCount, humanTime, label, ratio } from "./format.js";
+import { human, humanCount, humanTime, label, ratio, share } from "./format.js";
 
 /**
  * Every field a request line can carry, in draw order (tui::state::COLUMNS).
@@ -17,7 +17,7 @@ export const COLUMNS = [
   { name: "sizes", note: "request body raw and on the wire, saved, ↑ time" },
   { name: "ttfb", note: "first byte of the answer" },
   { name: "down", note: "response bytes decoded and on the upstream hop, saved, what the agent got, ↓ time" },
-  { name: "tokens", note: "in, cached and out, as the engine counted" },
+  { name: "tokens", note: "in, the share of it cached, and out, as the engine counted" },
 ];
 
 export const ALL_COLUMNS = COLUMNS.map((column) => column.name);
@@ -135,7 +135,8 @@ export function requestLine(event, columns) {
         if (!usage) break;
         line.word("tok", "dim");
         line.word(humanCount(usage.prompt), "raw");
-        if (usage.cached != null) line.glue(`(${humanCount(usage.cached)} cached)`, "dim");
+        const cached = usage.cached == null ? null : share(usage.cached, usage.prompt);
+        if (cached != null) line.glue(`(${cached} cached)`, "dim");
         line.glue("→", "dim");
         line.word(humanCount(usage.completion), "wire");
         break;
