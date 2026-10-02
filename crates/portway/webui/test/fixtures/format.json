@@ -457,5 +457,35 @@
    360061,
    "100:01:01"
   ]
+ ],
+ "label": [
+  [
+   [
+    "model-a",
+    null
+   ],
+   "model-a"
+  ],
+  [
+   [
+    "model-a",
+    "tier-a"
+   ],
+   "model-a · tier-a"
+  ],
+  [
+   [
+    "model-b.1",
+    "tier-b"
+   ],
+   "model-b.1 · tier-b"
+  ],
+  [
+   [
+    "-",
+    "tier-a"
+   ],
+   "- · tier-a"
+  ]
  ]
 }

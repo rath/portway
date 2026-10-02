@@ -83,6 +83,12 @@ export function dollars(amount) {
   return `$${fixedEven(amount, 4)}`;
 }
 
+/** A model next to the tier it ran in, the model alone for the standard
+ * class: `model-a · tier-a` (spend::label). */
+export function label(model, tier) {
+  return tier == null ? model : `${model} · ${tier}`;
+}
+
 /** A hit rate as the usage table prints it: `97.3%`. */
 export function percent(rate) {
   return rate == null ? "n/a" : `${fixedEven(rate * 100, 1)}%`;

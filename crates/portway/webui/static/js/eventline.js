@@ -2,7 +2,7 @@
 // the same marks glued in the same places, as a list of toned segments the
 // view turns into spans. Pure, so the line can be tested without a page.
 
-import { human, humanCount, humanTime, ratio } from "./format.js";
+import { human, humanCount, humanTime, label, ratio } from "./format.js";
 
 /**
  * Every field a request line can carry, in draw order (tui::state::COLUMNS).
@@ -173,7 +173,7 @@ export function detailFields(event) {
   return [
     ["when", event.stamp],
     ["upstream", event.upstream],
-    ["model", event.model || "-"],
+    ["model", label(event.model || "-", event.service_tier)],
     ["request", `${event.method} ${event.path} -> ${event.status}`],
     ["connection", event.handshake == null
       ? "reused from the pool"

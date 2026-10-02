@@ -5,7 +5,7 @@ import { $, copy, dialogFrame, fill, h, segments } from "../dom.js";
 import { COLUMNS, detailFields, eventLine, lineText } from "../eventline.js";
 import { cellsOf } from "../eventtable.js";
 import { describe } from "../flights.js";
-import { dollars, human, humanTime, maybeTime } from "../format.js";
+import { dollars, human, humanTime, label, maybeTime } from "../format.js";
 
 function open(dialog) {
   if (!dialog.open) dialog.showModal();
@@ -194,7 +194,7 @@ export function openCosts(table) {
   const dialog = $("#costs");
   const money = (charge, part) => (charge ? dollars(charge[part]) : "-");
   const rows = table.rows.map((row) => h("tr", {},
-    h("td", { class: row.charge ? "t-model" : "t-dim", text: row.model }),
+    h("td", { class: row.charge ? "t-model" : "t-dim", text: label(row.model, row.tier) }),
     ["input", "cache_read", "output", "total"].map((part) => h("td", { class: row.charge ? "t-good" : "t-dim", text: money(row.charge, part) }))));
   if (table.total.charge) {
     rows.push(h("tr", { class: "total" },

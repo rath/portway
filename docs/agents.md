@@ -71,6 +71,13 @@ before the first turn. The mount forwards it like any other request, which is
 why routing by path matters here: there is no model in that request to route
 by.
 
+Codex's speed setting reaches the body as `service_tier`, which is what
+[tier prices](configuration.md#service-tiers) are keyed by. Codex 0.160 sends
+`service_tier = "fast"` as `"priority"`, `"ultrafast"` as `"ultrafast"`, and
+nothing at all for the standard speed. The ChatGPT backend's answer reports
+`"default"` whichever was asked for, so Portway records the tier the request
+named.
+
 For an API key instead of the ChatGPT login, use the settings of Codex's
 built-in `openai` provider with the base URL moved to the mount: mount
 `codex = "https://api.openai.com/v1"` and replace `requires_openai_auth = true`

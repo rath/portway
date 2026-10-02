@@ -4,12 +4,41 @@ use portway_core::{ForwarderConfig, Router, receiver::ReceiverConfig};
 use serde::Deserialize;
 use std::sync::Arc;
 use std::{collections::BTreeMap, path::PathBuf};
-#[derive(Clone, Copy, Debug, Deserialize)]
+/// One set of rates, in USD per million tokens.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Rates {
+    pub input: f64,
+    pub output: f64,
+    pub cache_read: f64,
+}
+/// A model's rates: the standard ones, for a request that names no
+/// `service_tier`, and one set for each tier the vendor bills apart.
+#[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Price {
     pub input: f64,
     pub output: f64,
     pub cache_read: f64,
+    /// Keyed by the `service_tier` value exactly as requests send it.
+    #[serde(default)]
+    pub tiers: BTreeMap<String, Rates>,
+}
+impl Price {
+    /// The rates a request is billed at: the standard ones when it named no
+    /// tier, that tier's own when the table has them, and `None` when it has
+    /// not. A faster class billed at the standard rates would be a cost quietly
+    /// too low, so a tier is never priced as another one.
+    pub fn rates(&self, tier: Option<&str>) -> Option<Rates> {
+        match tier {
+            None => Some(Rates {
+                input: self.input,
+                output: self.output,
+                cache_read: self.cache_read,
+            }),
+            Some(tier) => self.tiers.get(tier).copied(),
+        }
+    }
 }
 pub type Prices = BTreeMap<String, Price>;
 #[derive(Clone, Debug, Deserialize)]
@@ -123,8 +152,14 @@ impl Config {
             }
             .into());
         }
-        for price in self.prices.values() {
-            if [price.input, price.output, price.cache_read]
+        let rates = self.prices.values().flat_map(|price| {
+            price
+                .rates(None)
+                .into_iter()
+                .chain(price.tiers.values().copied())
+        });
+        for rates in rates {
+            if [rates.input, rates.output, rates.cache_read]
                 .iter()
                 .any(|v| !v.is_finite() || *v < 0.0)
             {
@@ -182,6 +217,46 @@ mod tests {
         std::fs::remove_file(path).unwrap();
     }
     #[test]
+    fn a_tier_is_priced_by_its_own_rates_and_never_by_another() {
+        let config: Config = toml::from_str(
+            "upstream='http://example.test'\n\
+             [prices.'model-a']\ninput=1.0\noutput=2.0\ncache_read=0.1\n\
+             [prices.'model-a'.tiers.'tier-a']\ninput=2.0\noutput=4.0\ncache_read=0.2\n",
+        )
+        .unwrap();
+        assert!(config.validate(Mode::Forward).is_ok());
+        let price = &config.prices["model-a"];
+        let standard = Rates {
+            input: 1.0,
+            output: 2.0,
+            cache_read: 0.1,
+        };
+        let faster = Rates {
+            input: 2.0,
+            output: 4.0,
+            cache_read: 0.2,
+        };
+        assert_eq!(price.rates(None), Some(standard));
+        assert_eq!(price.rates(Some("tier-a")), Some(faster));
+        assert_eq!(price.rates(Some("tier-b")), None, "no fallback to standard");
+        // A tier is a full set of rates: a partial one is refused, not
+        // completed from the standard rates.
+        assert!(
+            toml::from_str::<Config>(
+                "[prices.m]\ninput=1.0\noutput=2.0\ncache_read=0.1\n\
+                 [prices.m.tiers.t]\ninput=2.0\n"
+            )
+            .is_err()
+        );
+        assert!(
+            toml::from_str::<Config>(
+                "[prices.m]\ninput=1.0\noutput=2.0\ncache_read=0.1\n\
+                 [prices.m.tiers.t]\ninput=2.0\noutput=4.0\ncache_read=0.2\nmultiplier=2\n"
+            )
+            .is_err()
+        );
+    }
+    #[test]
     fn route_modes_and_prices_are_validated_without_inventing_defaults() {
         assert!(Config::default().validate(Mode::Forward).is_err());
         let mut config = Config {
@@ -219,6 +294,23 @@ mod tests {
                 input: f64::NAN,
                 output: 1.0,
                 cache_read: 0.0,
+                tiers: BTreeMap::new(),
+            },
+        );
+        assert!(config.validate(Mode::Forward).is_err());
+        // A tier's rates are held to the same rule as the standard ones.
+        let negative = Rates {
+            input: 1.0,
+            output: -1.0,
+            cache_read: 0.0,
+        };
+        config.prices.insert(
+            "sample".into(),
+            Price {
+                input: 1.0,
+                output: 1.0,
+                cache_read: 0.0,
+                tiers: BTreeMap::from([("tier-a".into(), negative)]),
             },
         );
         assert!(config.validate(Mode::Forward).is_err());

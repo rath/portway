@@ -988,7 +988,7 @@ fn usage_screen(frame: &mut Frame, state: &State, area: Rect) {
             rows[1],
         );
     } else {
-        frame.render_widget(usage_table(table, area.width), rows[1]);
+        frame.render_widget(usage_table(table, area.width, rows[1].width), rows[1]);
     }
     frame.render_widget(Paragraph::new(notes), rows[3]);
 
@@ -1012,7 +1012,26 @@ fn dollars(amount: f64) -> String {
     }
 }
 
-fn usage_table(table: &spend::Table, width: u16) -> Table<'static> {
+/// The usage label column's width when every label fits in it, as it did
+/// before a label could carry a tier.
+const USAGE_LABEL: u16 = 20;
+
+/// The label column of the usage tables: as wide as the longest label shown
+/// — a model and its tier can outgrow `USAGE_LABEL` — but never narrower than
+/// `USAGE_LABEL`, and never wider than `most` unless that is narrower still.
+fn label_width(table: &spend::Table, most: u16) -> u16 {
+    let longest = table
+        .rows
+        .iter()
+        .map(|row| Span::raw(row.label()).width())
+        .max()
+        .unwrap_or(0);
+    (longest as u16).clamp(USAGE_LABEL, most.max(USAGE_LABEL))
+}
+
+/// `room` is the width the table is drawn in; the numbers keep their columns
+/// and the label takes what they leave, up to what it needs.
+fn usage_table(table: &spend::Table, width: u16, room: u16) -> Table<'static> {
     let roomy = width >= USAGE_ROOMY;
     let mut names = vec!["model", "reqs", "prompt", "cached", "hit", "output"];
     if roomy {
@@ -1032,22 +1051,18 @@ fn usage_table(table: &spend::Table, width: u16) -> Table<'static> {
         .collect();
     rows.push(usage_row(&table.total, roomy, true));
 
-    let mut widths = vec![
-        Constraint::Length(20),
-        Constraint::Length(5),
-        Constraint::Length(9),
-        Constraint::Length(9),
-        Constraint::Length(6),
-        Constraint::Length(9),
-    ];
+    let mut numbers: Vec<u16> = vec![5, 9, 9, 6, 9];
     if roomy {
-        widths.extend([
-            Constraint::Length(9),
-            Constraint::Length(9),
-            Constraint::Length(9),
-        ]);
+        numbers.extend([9, 9, 9]);
     }
-    widths.push(Constraint::Length(9));
+    numbers.push(9);
+    // One space between every pair of columns, the label's included.
+    let taken: u16 = numbers.iter().sum::<u16>() + numbers.len() as u16;
+    let label = label_width(table, room.saturating_sub(taken));
+    let widths = std::iter::once(label)
+        .chain(numbers)
+        .map(Constraint::Length)
+        .collect::<Vec<_>>();
     Table::new(rows, widths)
         .header(Row::new(header).style(Style::default().fg(DIM)))
         .column_spacing(1)
@@ -1087,13 +1102,18 @@ fn usage_ranges(state: &State) -> Line<'static> {
 ///
 /// A model the price table does not name is shown as dashes; its tokens are
 /// already counted in the main table's totals, but its money cannot be summed.
+/// What the costs popup leaves its label column: the popup's widest inner
+/// line, less the margin and the four money columns.
+const COST_LABEL_MAX: u16 = 70 - 1 - 41;
+
 fn cost_lines(table: &spend::Table) -> Vec<Line<'static>> {
+    let width = label_width(table, COST_LABEL_MAX) as usize;
     let mut lines = vec![Line::from(Span::styled(
         " cost by source",
         Style::default().fg(WIRE),
     ))];
     lines.push(Line::from(vec![
-        Span::styled(format!(" {:<20}", "model"), Style::default().fg(DIM)),
+        Span::styled(format!(" {:<width$}", "model"), Style::default().fg(DIM)),
         Span::styled(
             format!(
                 "{:>10}{:>10}{:>10}{:>11}",
@@ -1103,7 +1123,7 @@ fn cost_lines(table: &spend::Table) -> Vec<Line<'static>> {
         ),
     ]));
     for row in &table.rows {
-        let model = &row.model;
+        let label = row.label();
         let (prompt, cached, output, total) = match row.charge {
             Some(c) => (
                 dollars(c.input),
@@ -1116,7 +1136,7 @@ fn cost_lines(table: &spend::Table) -> Vec<Line<'static>> {
         let priced = total.is_some();
         lines.push(Line::from(vec![
             Span::styled(
-                format!(" {model:<20}"),
+                format!(" {label:<width$.width$}"),
                 Style::default().fg(if priced { MODEL } else { DIM }),
             ),
             Span::styled(
@@ -1132,7 +1152,7 @@ fn cost_lines(table: &spend::Table) -> Vec<Line<'static>> {
     if let Some(sum) = table.total.charge {
         lines.push(Line::from(vec![
             Span::styled(
-                format!(" {:<20}", "total"),
+                format!(" {:<width$}", "total"),
                 Style::default().fg(GOOD).add_modifier(Modifier::BOLD),
             ),
             Span::styled(
@@ -1163,7 +1183,7 @@ fn usage_row(model: &spend::Row, roomy: bool, total: bool) -> Row<'static> {
     let charge = model.charge;
     let mut cells = vec![
         Cell::from(Span::styled(
-            model.model.clone(),
+            model.label(),
             Style::default().fg(if total { GOOD } else { MODEL }),
         )),
         number(model.requests.to_string()),
@@ -1743,7 +1763,10 @@ fn detail_lines(record: &RequestRecord) -> Vec<Line<'static>> {
     vec![
         field("when", record.stamp.clone()),
         field("upstream", record.upstream.clone()),
-        field("model", shown_model(&record.model).to_string()),
+        field(
+            "model",
+            spend::label(shown_model(&record.model), record.service_tier.as_deref()),
+        ),
         field(
             "request",
             format!("{} {} -> {}", record.method, record.path, record.status),
@@ -2737,6 +2760,7 @@ mod tests {
     fn usage_state() -> State {
         let priced_model = spend::Row {
             model: "model-epsilon".to_string(),
+            tier: None,
             requests: 869,
             prompt: 112_546_008,
             cached: 111_147_008,
@@ -2751,6 +2775,7 @@ mod tests {
         };
         let flash = spend::Row {
             model: "model-alpha".to_string(),
+            tier: None,
             requests: 389,
             prompt: 42_881_773,
             cached: 0,
@@ -2770,6 +2795,7 @@ mod tests {
             until: 1_790_008_865.0,
             total: spend::Row {
                 model: "total".to_string(),
+                tier: None,
                 requests: 1_258,
                 prompt: 155_427_781,
                 cached: 111_147_008,
@@ -2857,6 +2883,32 @@ mod tests {
         // Below that there is no room for the columns, so it says so rather
         // than drawing half a table.
         assert!(screen(60, 20, &state).contains("too small"));
+    }
+
+    /// A model and its tier outgrow the 20 columns a label always had: the
+    /// column widens to keep the whole name, in the table and in the costs
+    /// popup, and the numbers stay in their columns beside it.
+    #[test]
+    fn a_tier_widens_the_label_column_rather_than_losing_its_name() {
+        let mut state = usage_state();
+        state.usage.as_mut().unwrap().rows[1].tier = Some("tier-ultrafast".into());
+        let label = "model-alpha · tier-ultrafast";
+
+        let out = screen(120, 20, &state);
+        assert!(out.contains(label), "{out}");
+        state.usage_rates = true;
+        let out = screen(120, 20, &state);
+        assert!(out.contains(label), "{out}");
+
+        let lines: Vec<String> = cost_lines(state.usage.as_ref().unwrap())
+            .iter()
+            .map(text)
+            .collect();
+        let column = |needle: &str| {
+            let line = lines.iter().find(|line| line.contains(needle)).unwrap();
+            line.chars().count()
+        };
+        assert_eq!(column(label), column("model-epsilon"), "{lines:#?}");
     }
 
     #[test]
@@ -3091,6 +3143,10 @@ mod tests {
         }
         for case in cases("dollars") {
             assert_eq!(dollars(case[0].as_f64().unwrap()), text(&case));
+        }
+        for case in cases("label") {
+            let (model, tier) = (case[0][0].as_str().unwrap(), case[0][1].as_str());
+            assert_eq!(spend::label(model, tier), text(&case));
         }
     }
 }

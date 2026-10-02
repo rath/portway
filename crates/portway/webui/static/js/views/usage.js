@@ -2,7 +2,7 @@
 // from the recorder's database and re-read every 5s while it is up.
 
 import { $, fill, h } from "../dom.js";
-import { dollars, humanCount, percent } from "../format.js";
+import { dollars, humanCount, label, percent } from "../format.js";
 import { openCosts } from "./dialogs.js";
 
 export const REFRESH_MS = 5000;
@@ -106,7 +106,7 @@ function usageRow(row, total) {
   const hit = row.hit_rate;
   const part = (name) => (row.charge ? dollars(row.charge[name]) : "-");
   const cells = [
-    [row.model, total ? "good" : "model"],
+    [label(row.model, row.tier), total ? "good" : "model"],
     [String(row.requests)],
     [humanCount(row.prompt)],
     [unreported ? "-" : humanCount(row.cached), unreported ? "dim" : null],

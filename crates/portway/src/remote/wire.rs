@@ -318,6 +318,8 @@ struct TableData {
 #[serde(remote = "spend::Row")]
 struct RowData {
     model: String,
+    #[serde(default)]
+    tier: Option<String>,
     requests: u64,
     prompt: u64,
     cached: u64,

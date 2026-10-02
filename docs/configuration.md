@@ -261,6 +261,7 @@ Keys are sent by the client, not registered in the routing table. See
 | `[upstreams]` | empty | Name → upstream URL, mounted at `/<name>/` |
 | `[models]` | empty | Model name → upstream URL, chosen by the JSON `model` field |
 | `[prices.NAME]` | absent | Optional `input`, `output`, `cache_read` rates in USD per million tokens |
+| `[prices.NAME.tiers.TIER]` | absent | The same three rates for requests that name `service_tier = TIER` |
 
 Prices are optional inputs to the TUI's usage and cost estimates. They do not
 change requests, charge a balance, or discover provider rates. For example:
@@ -286,6 +287,38 @@ through (`upstream`, a mount's name, or a model's name), which is what the
 dashboards' upstream tables and filters use; the two coincide only under a
 `[models]` table. Rows recorded before this distinction carry their route name
 as the model.
+
+### Service tiers
+
+Some vendors bill a faster or prioritized class of the same model at rates of
+its own, chosen by a `service_tier` field in the request body. Give each such
+tier its own rates under the model's price:
+
+```toml
+# Illustrative numbers only; replace with your own comparison rates.
+[prices."model-b.1"]            # requests that name no service_tier
+input = 1.0
+output = 2.0
+cache_read = 0.1
+
+[prices."model-b.1".tiers.tier-a]
+input = 2.0
+output = 4.0
+cache_read = 0.2
+```
+
+The tier name is the string `service_tier` of the request body, matched
+exactly, which is not always the name the client's settings use. The base
+rates apply only to a request that names no tier; a request that names one
+the table lacks, even `default` or `auto`, stays unpriced rather than being
+billed at the base rates, and the usage screen counts it among the unpriced
+rows. Each tier needs all three rates. The usage screens add up a model once
+per tier its requests named, shown as `model-b.1 · tier-a`, and the request
+detail names the tier beside the model.
+
+The tier is taken from the request because a response does not reliably
+report the class that served it. Rows recorded before Portway kept the tier
+read as naming none and are priced at the base rates.
 
 Missing prices remain unpriced. Token usage also depends on what the upstream
 reports; a price table cannot fill in missing usage. TUI estimates use the

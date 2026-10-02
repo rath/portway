@@ -14,6 +14,10 @@
 //! left out of the sums, an answer whose engine reported no cache detail is
 //! billed at the input rate and flagged, and a model the price table does not
 //! name gets no cost at all rather than a free one.
+//!
+//! A model is added up once per `service_tier` its requests named, because a
+//! vendor bills a faster class at rates of its own: a tier the price table
+//! does not name gets no cost either, rather than the standard one.
 
 use std::path::Path;
 
@@ -94,8 +98,8 @@ impl Range {
     }
 }
 
-pub use crate::config::Price;
 use crate::config::Prices;
+pub use crate::config::{Price, Rates};
 
 /// Where the money went: the three parts of one model's bill, kept apart so
 /// the screen can show which of them the day is actually made of.
@@ -115,10 +119,13 @@ impl Charge {
     }
 }
 
-/// One model's day: what the engines counted, and what it would cost.
+/// One model's day in one tier: what the engines counted, and what it would
+/// cost.
 #[derive(Debug, Clone, Default)]
 pub struct Row {
     pub model: String,
+    /// The `service_tier` the requests named; `None` for the standard class.
+    pub tier: Option<String>,
     pub requests: u64,
     /// The context every answer read, the cached part included.
     pub prompt: u64,
@@ -131,11 +138,25 @@ pub struct Row {
     pub completion: u64,
     /// The thinking inside `completion`, which is billed as output.
     pub reasoning: u64,
-    /// `None` when no price row names this model.
+    /// `None` when no price row names this model, or this tier of it.
     pub charge: Option<Charge>,
 }
 
+/// How a model is named next to the tier it ran in: `model-a · tier-a`, and
+/// the model alone for the standard class. One spelling for every screen.
+pub fn label(model: &str, tier: Option<&str>) -> String {
+    match tier {
+        Some(tier) => format!("{model} · {tier}"),
+        None => model.to_string(),
+    }
+}
+
 impl Row {
+    /// What the screens call the row.
+    pub fn label(&self) -> String {
+        label(&self.model, self.tier.as_deref())
+    }
+
     /// What was prefilled rather than read from the cache.
     pub fn uncached(&self) -> u64 {
         self.prompt.saturating_sub(self.cached)
@@ -162,8 +183,8 @@ pub struct Table {
     /// The same columns as a model, pooled: what the day costs is one row of
     /// the same arithmetic, and the screen draws it with the same code.
     pub total: Row,
-    /// Models the price table does not name: their tokens are in `total`, their
-    /// money is not.
+    /// Rows the price table does not price — a model it does not name, or a
+    /// tier of one it does: their tokens are in `total`, their money is not.
     pub unpriced: usize,
     pub blind: u64,
     pub cut: u64,
@@ -216,13 +237,13 @@ pub fn notes(table: &Table) -> Vec<String> {
         if row.requests > 0 && row.unreported == row.requests {
             notes.push(format!(
                 "{}: no cache detail reported, so its prompt is charged at the input rate — an upper bound",
-                row.model
+                row.label()
             ));
         }
     }
     if table.unpriced > 0 {
         notes.push(format!(
-            "{} model(s) have no price here: their tokens are in the totals, their money is not",
+            "{} model(s) or tier(s) have no price here: their tokens are in the totals, their money is not",
             table.unpriced
         ));
     }
@@ -242,21 +263,26 @@ pub fn notes(table: &Table) -> Vec<String> {
 /// `(prompt - cached) × input + cached × cache_read + completion × output`,
 /// per million tokens. Reasoning tokens are inside `completion` and never
 /// added twice.
-fn charge(uncached: u64, cached: u64, completion: u64, price: Price) -> Charge {
+fn charge(uncached: u64, cached: u64, completion: u64, rates: Rates) -> Charge {
     Charge {
-        input: uncached as f64 * price.input / 1e6,
-        cache_read: cached as f64 * price.cache_read / 1e6,
-        output: completion as f64 * price.output / 1e6,
+        input: uncached as f64 * rates.input / 1e6,
+        cache_read: cached as f64 * rates.cache_read / 1e6,
+        output: completion as f64 * rates.output / 1e6,
     }
 }
 
-/// The per-model tokens, and the requests that carried none.
+/// The tokens per model and tier, and the requests that carried none.
+/// `tier` is the column, or `NULL` for a file older than it — a reader may not
+/// migrate a database another build is still writing to.
 ///
 /// A model whose answers all reported no cache detail sums `cached` to zero,
 /// which is exactly how it gets billed at the input rate — an upper bound
 /// until the engine says otherwise.
-const AGGREGATE: &str = "SELECT
+fn aggregate(tier: &str) -> String {
+    format!(
+        "SELECT
     model,
+    {tier},
     COUNT(*),
     COALESCE(SUM(prompt_tokens), 0),
     COALESCE(SUM(cached_tokens), 0),
@@ -265,7 +291,9 @@ const AGGREGATE: &str = "SELECT
     COALESCE(SUM(reasoning_tokens), 0)
   FROM requests
   WHERE ts_unix >= ?1 AND ts_unix < ?2 AND prompt_tokens IS NOT NULL
-  GROUP BY model";
+  GROUP BY model, {tier}"
+    )
+}
 
 /// Requests the sums above had to skip, and how many of them were cut short.
 const BLIND: &str = "SELECT COUNT(*), COALESCE(SUM(complete = 0), 0)
@@ -295,17 +323,23 @@ pub fn load(db: &Path, since: f64, until: f64, prices: &Prices) -> Result<Table,
         ..Table::default()
     };
 
-    let mut statement = connection.prepare(AGGREGATE).map_err(sqlite)?;
+    let tier = if store::has_tier_column(&connection)? {
+        "service_tier"
+    } else {
+        "NULL"
+    };
+    let mut statement = connection.prepare(&aggregate(tier)).map_err(sqlite)?;
     let rows = statement
         .query_map(params![since, until], |row| {
             Ok(Row {
                 model: row.get(0)?,
-                requests: row.get::<_, i64>(1)? as u64,
-                prompt: row.get::<_, i64>(2)? as u64,
-                cached: row.get::<_, i64>(3)? as u64,
-                unreported: row.get::<_, i64>(4)? as u64,
-                completion: row.get::<_, i64>(5)? as u64,
-                reasoning: row.get::<_, i64>(6)? as u64,
+                tier: row.get(1)?,
+                requests: row.get::<_, i64>(2)? as u64,
+                prompt: row.get::<_, i64>(3)? as u64,
+                cached: row.get::<_, i64>(4)? as u64,
+                unreported: row.get::<_, i64>(5)? as u64,
+                completion: row.get::<_, i64>(6)? as u64,
+                reasoning: row.get::<_, i64>(7)? as u64,
                 charge: None,
             })
         })
@@ -314,8 +348,8 @@ pub fn load(db: &Path, since: f64, until: f64, prices: &Prices) -> Result<Table,
         let mut row = row.map_err(sqlite)?;
         row.charge = prices
             .get(&row.model)
-            .copied()
-            .map(|price| charge(row.uncached(), row.cached, row.completion, price));
+            .and_then(|price| price.rates(row.tier.as_deref()))
+            .map(|rates| charge(row.uncached(), row.cached, row.completion, rates));
         table.absorb(&row);
         table.rows.push(row);
     }
@@ -351,8 +385,9 @@ mod tests {
     use http::Method;
 
     use super::*;
-    fn price(model: &str) -> Option<Price> {
-        fixture_prices().get(model).copied()
+    use std::collections::BTreeMap;
+    fn rates(model: &str) -> Option<Rates> {
+        fixture_prices().get(model)?.rates(None)
     }
     fn fixture_prices() -> Prices {
         [
@@ -362,6 +397,7 @@ mod tests {
                     input: 0.09,
                     output: 0.3,
                     cache_read: 0.018,
+                    tiers: BTreeMap::new(),
                 },
             ),
             (
@@ -370,6 +406,7 @@ mod tests {
                     input: 0.16,
                     output: 0.47,
                     cache_read: 0.016,
+                    tiers: BTreeMap::new(),
                 },
             ),
             (
@@ -378,6 +415,7 @@ mod tests {
                     input: 0.2,
                     output: 2.5,
                     cache_read: 0.05,
+                    tiers: BTreeMap::new(),
                 },
             ),
             (
@@ -386,6 +424,7 @@ mod tests {
                     input: 0.15,
                     output: 0.6,
                     cache_read: 0.003,
+                    tiers: BTreeMap::new(),
                 },
             ),
             (
@@ -394,6 +433,7 @@ mod tests {
                     input: 1.7,
                     output: 8.5,
                     cache_read: 0.17,
+                    tiers: BTreeMap::new(),
                 },
             ),
             (
@@ -402,6 +442,7 @@ mod tests {
                     input: 0.91,
                     output: 2.86,
                     cache_read: 0.169,
+                    tiers: BTreeMap::new(),
                 },
             ),
         ]
@@ -421,13 +462,14 @@ mod tests {
     fn row(model: &str, prompt: u64, cached: u64, completion: u64) -> Row {
         Row {
             model: model.to_string(),
+            tier: None,
             requests: 1,
             prompt,
             cached,
             unreported: 0,
             completion,
             reasoning: 0,
-            charge: price(model).map(|price| charge(prompt - cached, cached, completion, price)),
+            charge: rates(model).map(|rates| charge(prompt - cached, cached, completion, rates)),
         }
     }
 
@@ -486,7 +528,7 @@ mod tests {
     fn every_registered_upstream_has_a_price() {
         for (model, _) in MODEL_UPSTREAMS {
             assert!(
-                price(model).is_some(),
+                rates(model).is_some(),
                 "{model} is registered but unpriced: add it to PRICES"
             );
         }
@@ -511,7 +553,7 @@ mod tests {
         // whole context is charged at the input rate and the row is marked.
         let mut priced = row("model-alpha", 1_000_000, 0, 0);
         priced.unreported = 1;
-        priced.charge = price("model-alpha").map(|price| charge(1_000_000, 0, 0, price));
+        priced.charge = rates("model-alpha").map(|rates| charge(1_000_000, 0, 0, rates));
         assert_eq!(priced.hit_rate(), None, "no rate is not a rate of zero");
         assert!((priced.cost().unwrap() - 0.09).abs() < 1e-9);
     }
@@ -630,6 +672,88 @@ mod tests {
             "{:?}",
             table.total.charge
         );
+    }
+
+    /// A tier is a row of its own, priced at its own rates: the standard
+    /// class at the model's, a tier the table names at that tier's, and one it
+    /// does not name at none — never at the standard rates.
+    #[test]
+    fn each_tier_is_added_up_apart_and_priced_at_its_own_rates() {
+        let dir = std::env::temp_dir().join("portway-spend-test-tiers");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = store::spawn(&dir, 0).unwrap();
+        let sender = store.sender();
+        let usage = Usage {
+            prompt: 1_000_000,
+            cached: Some(0),
+            completion: 0,
+            reasoning: None,
+        };
+        for tier in [None, Some("tier-a"), Some("tier-a"), Some("tier-b")] {
+            let mut answer = record("model-alpha", Some(usage));
+            answer.service_tier = tier.map(str::to_string);
+            sender.send(Event::Request(Arc::new(answer))).unwrap();
+        }
+        store.shutdown();
+
+        let mut prices = fixture_prices();
+        let faster = Rates {
+            input: 0.18,
+            output: 0.6,
+            cache_read: 0.036,
+        };
+        prices
+            .get_mut("model-alpha")
+            .unwrap()
+            .tiers
+            .insert("tier-a".into(), faster);
+        let db = dir.join(store::DB_FILE);
+        let since = crate::logfmt::epoch() - 1.0;
+        let table = super::load(&db, since, since + 3600.0, &prices).unwrap();
+
+        let labels: Vec<String> = table.rows.iter().map(Row::label).collect();
+        assert_eq!(
+            labels,
+            [
+                "model-alpha · tier-a",
+                "model-alpha",
+                "model-alpha · tier-b"
+            ],
+            "most expensive first, the unpriced tier last"
+        );
+        assert_eq!(table.rows[0].requests, 2);
+        assert!((table.rows[0].cost().unwrap() - 0.36).abs() < 1e-9);
+        assert!((table.rows[1].cost().unwrap() - 0.09).abs() < 1e-9);
+        assert_eq!(
+            table.rows[2].cost(),
+            None,
+            "no fallback to the standard rates"
+        );
+        assert_eq!(table.unpriced, 1);
+        assert_eq!(
+            table.total.requests, 4,
+            "its tokens are still in the totals"
+        );
+        assert!(
+            notes(&table)
+                .iter()
+                .any(|note| note.starts_with("1 model(s) or tier(s) have no price here")),
+            "{:?}",
+            notes(&table)
+        );
+
+        // A file from before the column reads as having named no tier: one
+        // row, at the standard rates. The column is still there underneath,
+        // which is what proves the reader did not select it.
+        rusqlite::Connection::open(&db)
+            .unwrap()
+            .pragma_update(None, "user_version", 4)
+            .unwrap();
+        let table = super::load(&db, since, since + 3600.0, &prices).unwrap();
+        assert_eq!(table.rows.len(), 1, "{:?}", table.rows);
+        assert_eq!(table.rows[0].tier, None);
+        assert!((table.rows[0].cost().unwrap() - 0.36).abs() < 1e-9);
     }
 
     #[test]

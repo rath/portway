@@ -253,6 +253,7 @@ pub fn usage(range: spend::Range, table: &spend::Table) -> Value {
 fn usage_row(row: &spend::Row) -> Value {
     json!({
         "model": row.model,
+        "tier": row.tier,
         "requests": row.requests,
         "prompt": row.prompt,
         "cached": row.cached,
