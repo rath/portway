@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 
 import { ALL_COLUMNS, detailFields, eventLine, lineText, parseColumns } from "../static/js/eventline.js";
 import { CELLS, HAND_MAX, PATH_FLOOR, Widths, cellsOf, handWidth, parseHand, rowCells, shown, template } from "../static/js/eventtable.js";
-import { compile, modeAccepts, nextMode, tokenize } from "../static/js/filter.js";
+import { compile, inUse, modeAccepts, nextMode, tokenize } from "../static/js/filter.js";
 import { EventStore } from "../static/js/ring.js";
 import { Bars, Traffic, rate } from "../static/js/series.js";
 import { Flights, describe } from "../static/js/flights.js";
@@ -189,6 +189,16 @@ test("search terms, phrases and negation", () => {
   assert.deepEqual(compile("status:abc").errors.length, 1);
   assert.deepEqual(run('route:"POST /v1/chat"'), [1, 3]);
   assert.deepEqual(tokenize('route:"a b" http://x').map((t) => t.text), ["route:a b", "http://x"]);
+});
+
+test("an upstream nothing has used yet is left out", () => {
+  const models = [
+    { name: "anthropic", requests: 26, in_flight: 0 },
+    { name: "spare", requests: 0, in_flight: 0 },
+    { name: "codex", requests: 0, in_flight: 1 },
+  ];
+  assert.deepEqual(inUse(models).map((model) => model.name), ["anthropic", "codex"]);
+  assert.deepEqual(inUse([]), []);
 });
 
 test("the cycle filter walks all, trouble, then each upstream", () => {

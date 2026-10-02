@@ -7,6 +7,12 @@ version may contain breaking changes.
 
 ## [Unreleased]
 
+### Changed
+
+- The browser console's upstream table, its filters and the `m` key leave out
+  routes nothing has used yet, as the terminal dashboard's table does, and the
+  table says how many it left out. A route joins them with its first request.
+
 ## [0.2.3] - 2026-10-02
 
 ### Added

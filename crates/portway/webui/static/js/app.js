@@ -7,7 +7,7 @@ import { Connection } from "./connection.js";
 import { $, download, fill, h } from "./dom.js";
 import { ALL_COLUMNS, COLUMNS, eventLine, lineText } from "./eventline.js";
 import { toCsv, toJson } from "./export.js";
-import { compile, modeAccepts, nextMode } from "./filter.js";
+import { compile, inUse, modeAccepts, nextMode } from "./filter.js";
 import { Flights } from "./flights.js";
 import * as prefs from "./prefs.js";
 import { EventStore } from "./ring.js";
@@ -232,7 +232,7 @@ function applyFilter() {
 }
 
 function renderModes() {
-  const modes = ["all", "trouble", ...state.models.map((model) => model.name)];
+  const modes = ["all", "trouble", ...inUse(state.models).map((model) => model.name)];
   if (!modes.includes(state.filterMode)) modes.push(state.filterMode);
   fill($("#modes"), modes.map((mode) => h("button", {
     type: "button",
@@ -248,9 +248,11 @@ function applyTotals(frame) {
   state.totals = frame.totals;
   state.counts = frame.counts;
   state.latency = frame.latency;
-  const names = state.models.map((model) => model.name).join();
+  // A route's first request adds its filter, so the names in use are compared.
+  const used = () => inUse(state.models).map((model) => model.name).join();
+  const names = used();
   state.models = frame.models;
-  if (names !== state.models.map((model) => model.name).join()) renderModes();
+  if (names !== used()) renderModes();
   state.uptime = { value: frame.uptime_s ?? frame.header?.uptime_s ?? 0, at: performance.now() };
   const saved = frame.totals.body_bytes > 0
     ? ((frame.totals.body_bytes - frame.totals.wire_bytes) * 100) / frame.totals.body_bytes
@@ -514,7 +516,7 @@ function paletteCommands() {
     ...VIEWS.map((view) => ({ name: `Go to ${view}`, hint: "view", run: () => go(view) })),
     { name: "Filter: all", hint: "e / m", run: () => ctx.setMode("all") },
     { name: "Filter: trouble", hint: "e", run: () => ctx.setMode("trouble") },
-    ...state.models.map((model) => ({ name: `Filter: ${model.name}`, hint: "upstream", run: () => ctx.setMode(model.name) })),
+    ...inUse(state.models).map((model) => ({ name: `Filter: ${model.name}`, hint: "upstream", run: () => ctx.setMode(model.name) })),
     { name: "Search events", hint: "/", run: () => focusSearch() },
     { name: "Clear the search", hint: "search", run: () => ctx.setQuery("") },
     ...COLUMNS.map((column) => ({
@@ -626,7 +628,7 @@ document.addEventListener("keydown", (event) => {
       if (event?.kind === "request") ctx.openDetail({ type: "event", seq });
     },
     e: () => ctx.setMode(state.filterMode === "trouble" ? "all" : "trouble"),
-    m: () => ctx.setMode(nextMode(state.filterMode, state.models.map((model) => model.name))),
+    m: () => ctx.setMode(nextMode(state.filterMode, inUse(state.models).map((model) => model.name))),
     t: () => ctx.setScale(SCALES[(SCALES.indexOf(state.scale) + 1) % SCALES.length]),
     c: () => openColumns(ctx),
   } : {};

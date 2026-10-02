@@ -190,6 +190,16 @@ export function modeAccepts(mode, event) {
   return event.kind === "request" && event.upstream === mode;
 }
 
+/**
+ * The upstreams worth a row and a filter: those that have carried a request or
+ * have one in flight. A route nothing has used yet only lengthens the table;
+ * the terminal's upstream table leaves it out for the same reason
+ * (tui::State::recent_models).
+ */
+export function inUse(models) {
+  return models.filter((model) => model.requests > 0 || model.in_flight > 0);
+}
+
 /** `all -> trouble` and then once through the upstreams (tui::State::cycle_filter). */
 export function nextMode(mode, models) {
   if (mode === "all") return "trouble";

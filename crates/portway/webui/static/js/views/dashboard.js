@@ -5,6 +5,7 @@
 import { $, fill, h } from "../dom.js";
 import { drawBars, drawTraffic } from "../charts.js";
 import { Widths, handWidth, parseHand, rowCells, shown, template } from "../eventtable.js";
+import { inUse } from "../filter.js";
 import { describe } from "../flights.js";
 import { human, humanTime, maybeTime, ratio, span, uptime } from "../format.js";
 import * as prefs from "../prefs.js";
@@ -131,9 +132,12 @@ export function renderModels(ctx) {
   const table = $("#models");
   table.className = "data";
   const panel = table.closest(".models");
-  panel.hidden = state.models.length === 0;
+  const used = inUse(state.models);
+  panel.hidden = used.length === 0;
+  const unused = state.models.length - used.length;
+  $("#models-unused").textContent = unused > 0 ? `${unused} without traffic not shown` : "";
   const head = h("thead", {}, h("tr", {}, MODEL_COLUMNS.map((column) => h("th", { class: columnClass(column), scope: "col", text: column.name }))));
-  const rows = state.models.map((model) => {
+  const rows = used.map((model) => {
     const cells = [
       [model.name, "model"],
       [model.coding_label, model.coding ? "good" : "dim"],
