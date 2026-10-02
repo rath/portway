@@ -2,10 +2,10 @@
 //! never for a color, so a theme is a palette and nothing else.
 //!
 //! Besides the terminal's own colors, the themes are the web console's, under
-//! the same ids and with the same values (`webui/static/js/themes.js`; a test
-//! holds the two together). Its palettes are tuned from the published ones
-//! where those fall short of its contrast tests, which therefore hold here
-//! too.
+//! the same ids. Catppuccin's two flavors are its published palette as is;
+//! the others have the console's values (`webui/static/js/themes.js`; a test
+//! holds the two together), which are tuned from the published ones where
+//! those fall short of its contrast tests.
 
 use ratatui::style::{Color, Modifier, Style};
 
@@ -80,21 +80,41 @@ pub static PORTWAY_DARK: Theme = console(
         0x8ab8ff, 0x6b98f0, 0x27bfa0, 0x4fc46e, 0xe2b342, 0xff6b6b, 0xd08cf5,
     ],
 );
-pub static CATPPUCCIN_MOCHA: Theme = console(
+pub static CATPPUCCIN_MOCHA: Theme = catppuccin(
     "catppuccin-mocha",
     "Catppuccin Mocha",
-    [
-        0x181825, 0x1e1e2e, 0x313244, 0x45475a, 0x313244, 0xcdd6f4, 0xa6adc8, 0x89b4fa, 0x11111b,
-        0xb4befe, 0x7f9af5, 0x4fd0b4, 0xa6e3a1, 0xf9e2af, 0xf38ba8, 0xcba6f7,
-    ],
+    Flavor {
+        base: 0x1e1e2e,
+        surface0: 0x313244,
+        overlay0: 0x6c7086,
+        overlay2: 0x9399b2,
+        subtext0: 0xa6adc8,
+        text: 0xcdd6f4,
+        mauve: 0xcba6f7,
+        blue: 0x89b4fa,
+        teal: 0x94e2d5,
+        green: 0xa6e3a1,
+        yellow: 0xf9e2af,
+        red: 0xf38ba8,
+    },
 );
-pub static CATPPUCCIN_LATTE: Theme = console(
+pub static CATPPUCCIN_LATTE: Theme = catppuccin(
     "catppuccin-latte",
     "Catppuccin Latte",
-    [
-        0xe6e9ef, 0xeff1f5, 0xe6e9ef, 0xccd0da, 0xdce0e8, 0x4c4f69, 0x50536b, 0x1a55cc, 0xffffff,
-        0x5b6ee0, 0x2f5fc4, 0x006b5c, 0x276b1a, 0x7f4800, 0xb80d33, 0x7a2fd6,
-    ],
+    Flavor {
+        base: 0xeff1f5,
+        surface0: 0xccd0da,
+        overlay0: 0x9ca0b0,
+        overlay2: 0x7c7f93,
+        subtext0: 0x6c6f85,
+        text: 0x4c4f69,
+        mauve: 0x8839ef,
+        blue: 0x1e66f5,
+        teal: 0x179299,
+        green: 0x40a02b,
+        yellow: 0xdf8e1d,
+        red: 0xd20f39,
+    },
 );
 pub static TOKYO_NIGHT: Theme = console(
     "tokyo-night",
@@ -153,8 +173,51 @@ const fn console(id: &'static str, name: &'static str, tokens: [u32; 16]) -> The
         time: rgb(tokens[13]),
         bad: rgb(tokens[14]),
         model: rgb(tokens[15]),
-        select: Some(select(tokens[7], tokens[1])),
-        select_raised: Some(select(tokens[7], tokens[2])),
+        select: Some(tint(tokens[7], tokens[1])),
+        select_raised: Some(tint(tokens[7], tokens[2])),
+    }
+}
+
+/// The colors of a Catppuccin flavor a theme is cast from, under the
+/// palette's own names and with its published values.
+struct Flavor {
+    base: u32,
+    surface0: u32,
+    overlay0: u32,
+    overlay2: u32,
+    subtext0: u32,
+    text: u32,
+    mauve: u32,
+    blue: u32,
+    teal: u32,
+    green: u32,
+    yellow: u32,
+    red: u32,
+}
+
+/// A Catppuccin flavor cast the way its style guide casts it: text on base,
+/// labels in subtext 0, borders in overlay 0, surface 0 for what sits raised,
+/// mauve for the accent, and the terminal's hues for the data. A highlighted
+/// line is the guide's selection, overlay 2 at a quarter.
+const fn catppuccin(id: &'static str, name: &'static str, flavor: Flavor) -> Theme {
+    Theme {
+        id,
+        name,
+        surface: rgb(flavor.base),
+        raised: rgb(flavor.surface0),
+        border: rgb(flavor.overlay0),
+        text: rgb(flavor.text),
+        dim: rgb(flavor.subtext0),
+        accent: rgb(flavor.mauve),
+        on_accent: rgb(flavor.base),
+        raw: rgb(flavor.blue),
+        wire: rgb(flavor.teal),
+        good: rgb(flavor.green),
+        time: rgb(flavor.yellow),
+        bad: rgb(flavor.red),
+        model: rgb(flavor.mauve),
+        select: Some(tint(flavor.overlay2, flavor.base)),
+        select_raised: Some(tint(flavor.overlay2, flavor.surface0)),
     }
 }
 
@@ -162,20 +225,20 @@ const fn rgb(hex: u32) -> Color {
     Color::Rgb((hex >> 16) as u8, (hex >> 8) as u8, hex as u8)
 }
 
-/// A quarter of the accent mixed into the ground a highlighted line sits on,
+/// A quarter of `color` mixed into the ground a highlighted line sits on,
 /// channel by channel as `color-mix(in srgb, …)` mixes. The console's own
-/// selection takes an eighth, beside a pointer and a focus ring; here the
-/// tint is the only mark of where the cursor is.
-const fn select(accent: u32, ground: u32) -> Color {
+/// selection takes an eighth of its accent, beside a pointer and a focus ring;
+/// here the tint is the only mark of where the cursor is.
+const fn tint(color: u32, ground: u32) -> Color {
     Color::Rgb(
-        blend(accent >> 16, ground >> 16),
-        blend(accent >> 8, ground >> 8),
-        blend(accent, ground),
+        blend(color >> 16, ground >> 16),
+        blend(color >> 8, ground >> 8),
+        blend(color, ground),
     )
 }
 
-const fn blend(accent: u32, ground: u32) -> u8 {
-    (((accent & 0xff) + (ground & 0xff) * 3 + 2) / 4) as u8
+const fn blend(color: u32, ground: u32) -> u8 {
+    (((color & 0xff) + (ground & 0xff) * 3 + 2) / 4) as u8
 }
 
 /// The theme called `id`, if there is one.
@@ -252,6 +315,8 @@ mod tests {
             .collect()
     }
 
+    /// Catppuccin is drawn from its own palette, but under the console's ids
+    /// and names; every other painted theme is the console's to the token.
     #[test]
     fn the_painted_themes_are_the_consoles() {
         let source = std::fs::read_to_string(concat!(
@@ -272,7 +337,9 @@ mod tests {
                 .find(|(id, _, _)| id == theme.id)
                 .unwrap_or_else(|| panic!("{} is not a console theme", theme.id));
             assert_eq!(theme.name, name);
-            assert_eq!(**theme, console(theme.id, theme.name, *tokens));
+            if !theme.id.starts_with("catppuccin-") {
+                assert_eq!(**theme, console(theme.id, theme.name, *tokens));
+            }
         }
     }
 
@@ -307,14 +374,23 @@ mod tests {
     }
 
     #[test]
-    fn a_highlighted_line_mixes_the_accent_into_its_ground() {
-        // (0x89 + 3 * 0x1e) / 4 = 56.75 on the surface, and so on per channel;
-        // (0x89 + 3 * 0x31) / 4 = 71 on a popup's surface-2.
-        assert_eq!(CATPPUCCIN_MOCHA.select, Some(Color::Rgb(57, 68, 97)));
-        assert_eq!(
-            CATPPUCCIN_MOCHA.select_raised,
-            Some(Color::Rgb(71, 83, 114))
-        );
+    fn a_highlighted_line_mixes_a_quarter_of_a_color_into_its_ground() {
+        // Portway Dark's accent 0x78a9ff into its surface 0x15181e:
+        // (0x78 + 3 * 0x15) / 4 = 46.25, and so on per channel.
+        assert_eq!(PORTWAY_DARK.select, Some(Color::Rgb(46, 60, 86)));
+        // Mocha's overlay 2, 0x9399b2, into base 0x1e1e2e and surface 0 0x313244.
+        assert_eq!(CATPPUCCIN_MOCHA.select, Some(Color::Rgb(59, 61, 79)));
+        assert_eq!(CATPPUCCIN_MOCHA.select_raised, Some(Color::Rgb(74, 76, 96)));
         assert_eq!(TERMINAL.cursor(), TERMINAL.raised_cursor());
+    }
+
+    /// Mocha is the published palette, not the console's tuned copy of it.
+    #[test]
+    fn catppuccin_keeps_its_own_colors() {
+        assert_eq!(CATPPUCCIN_MOCHA.surface, Color::Rgb(0x1e, 0x1e, 0x2e));
+        assert_eq!(CATPPUCCIN_MOCHA.raw, Color::Rgb(0x89, 0xb4, 0xfa));
+        assert_eq!(CATPPUCCIN_MOCHA.wire, Color::Rgb(0x94, 0xe2, 0xd5));
+        assert_eq!(CATPPUCCIN_LATTE.surface, Color::Rgb(0xef, 0xf1, 0xf5));
+        assert_eq!(CATPPUCCIN_LATTE.accent, Color::Rgb(0x88, 0x39, 0xef));
     }
 }
