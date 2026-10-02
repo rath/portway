@@ -26,8 +26,9 @@ version may contain breaking changes.
   tokens at those rates for all of its tokens, as OpenAI does past 272K input
   tokens. The usage screens note how many requests passed the line.
 - `docs/prices.md`: OpenAI's and Anthropic's published list prices as
-  `[prices]` tables to copy, with the tier each client sends and what the
-  estimates leave out, such as OpenAI's long-context rates.
+  `[prices]` tables to copy, OpenAI's long-context rates included, with the
+  tier each client sends and what the estimates leave out, such as cache
+  writes.
 
 ## [0.2.2] - 2026-10-01
 

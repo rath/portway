@@ -29,11 +29,6 @@ sends it stays unpriced.
 
 ## What these tables leave out
 
-- **Long context (OpenAI).** A request over 272K input tokens is billed at
-  twice the input and cached-input rates and 1.5 times the output rate, for the
-  whole request, in every tier. Portway prices every request at the rates
-  below, so those turns are underestimated. Codex sessions with a large
-  context window cross that line often.
 - **Cache writes.** Portway bills a cache write at the input rate. OpenAI lists
   cache writes at 1.25 times input; Anthropic at 1.25 times (5-minute cache) or
   twice (1-hour cache).
@@ -44,6 +39,10 @@ sends it stays unpriced.
 - **Batch.** Batch API discounts are a separate API, not a request tier.
 
 ## OpenAI
+
+Past 272K input tokens OpenAI bills the whole request at its long-context
+rates, in every class: the `long_context` line on each table below, taken from
+the long-context column of the same page. `gpt-5.3-codex` lists none.
 
 `priority` and `fast` are one class under two names: Codex sends `priority`,
 and the API accepts either since OpenAI renamed Priority processing to Fast
@@ -56,131 +55,157 @@ promotional "at least through November 21, 2026".
 input = 10.0
 output = 50.0
 cache_read = 1.0
+long_context = { above = 272000, input = 20.0, output = 75.0, cache_read = 2.0 }
 
 [prices."gpt-6-astra".tiers.default]
 input = 10.0
 output = 50.0
 cache_read = 1.0
+long_context = { above = 272000, input = 20.0, output = 75.0, cache_read = 2.0 }
 
 [prices."gpt-6-astra".tiers.priority]
 input = 20.0
 output = 100.0
 cache_read = 2.0
+long_context = { above = 272000, input = 40.0, output = 150.0, cache_read = 4.0 }
 
 [prices."gpt-6-astra".tiers.fast]
 input = 20.0
 output = 100.0
 cache_read = 2.0
+long_context = { above = 272000, input = 40.0, output = 150.0, cache_read = 4.0 }
 
 [prices."gpt-6-astra".tiers.ultrafast]
 input = 60.0
 output = 300.0
 cache_read = 6.0
+long_context = { above = 272000, input = 120.0, output = 450.0, cache_read = 12.0 }
 
 [prices."gpt-6-astra".tiers.flex]
 input = 5.0
 output = 25.0
 cache_read = 0.5
+long_context = { above = 272000, input = 10.0, output = 37.5, cache_read = 1.0 }
 
 [prices."gpt-6.1-sol"]
 input = 2.0
 output = 10.0
 cache_read = 0.1
+long_context = { above = 272000, input = 4.0, output = 15.0, cache_read = 0.2 }
 
 [prices."gpt-6.1-sol".tiers.default]
 input = 2.0
 output = 10.0
 cache_read = 0.1
+long_context = { above = 272000, input = 4.0, output = 15.0, cache_read = 0.2 }
 
 [prices."gpt-6.1-sol".tiers.priority]
 input = 4.0
 output = 20.0
 cache_read = 0.2
+long_context = { above = 272000, input = 8.0, output = 30.0, cache_read = 0.4 }
 
 [prices."gpt-6.1-sol".tiers.fast]
 input = 4.0
 output = 20.0
 cache_read = 0.2
+long_context = { above = 272000, input = 8.0, output = 30.0, cache_read = 0.4 }
 
 [prices."gpt-6.1-sol".tiers.flex]
 input = 1.0
 output = 5.0
 cache_read = 0.05
+long_context = { above = 272000, input = 2.0, output = 7.5, cache_read = 0.1 }
 
 [prices."gpt-6-sol"]
 input = 2.0
 output = 10.0
 cache_read = 0.2
+long_context = { above = 272000, input = 4.0, output = 15.0, cache_read = 0.4 }
 
 [prices."gpt-6-sol".tiers.default]
 input = 2.0
 output = 10.0
 cache_read = 0.2
+long_context = { above = 272000, input = 4.0, output = 15.0, cache_read = 0.4 }
 
 [prices."gpt-6-sol".tiers.priority]
 input = 4.0
 output = 20.0
 cache_read = 0.4
+long_context = { above = 272000, input = 8.0, output = 30.0, cache_read = 0.8 }
 
 [prices."gpt-6-sol".tiers.fast]
 input = 4.0
 output = 20.0
 cache_read = 0.4
+long_context = { above = 272000, input = 8.0, output = 30.0, cache_read = 0.8 }
 
 [prices."gpt-6-sol".tiers.flex]
 input = 1.0
 output = 5.0
 cache_read = 0.1
+long_context = { above = 272000, input = 2.0, output = 7.5, cache_read = 0.2 }
 
 [prices."gpt-6-luna"]
 input = 0.1
 output = 0.5
 cache_read = 0.01
+long_context = { above = 272000, input = 0.2, output = 0.75, cache_read = 0.02 }
 
 [prices."gpt-6-luna".tiers.default]
 input = 0.1
 output = 0.5
 cache_read = 0.01
+long_context = { above = 272000, input = 0.2, output = 0.75, cache_read = 0.02 }
 
 [prices."gpt-6-luna".tiers.priority]
 input = 0.2
 output = 1.0
 cache_read = 0.02
+long_context = { above = 272000, input = 0.4, output = 1.5, cache_read = 0.04 }
 
 [prices."gpt-6-luna".tiers.fast]
 input = 0.2
 output = 1.0
 cache_read = 0.02
+long_context = { above = 272000, input = 0.4, output = 1.5, cache_read = 0.04 }
 
 [prices."gpt-6-luna".tiers.flex]
 input = 0.05
 output = 0.25
 cache_read = 0.005
+long_context = { above = 272000, input = 0.1, output = 0.375, cache_read = 0.01 }
 
 [prices."gpt-5.6-sol"]
 input = 4.0
 output = 20.0
 cache_read = 0.4
+long_context = { above = 272000, input = 8.0, output = 30.0, cache_read = 0.8 }
 
 [prices."gpt-5.6-sol".tiers.default]
 input = 4.0
 output = 20.0
 cache_read = 0.4
+long_context = { above = 272000, input = 8.0, output = 30.0, cache_read = 0.8 }
 
 [prices."gpt-5.6-sol".tiers.priority]
 input = 8.0
 output = 40.0
 cache_read = 0.8
+long_context = { above = 272000, input = 16.0, output = 60.0, cache_read = 1.6 }
 
 [prices."gpt-5.6-sol".tiers.fast]
 input = 8.0
 output = 40.0
 cache_read = 0.8
+long_context = { above = 272000, input = 16.0, output = 60.0, cache_read = 1.6 }
 
 [prices."gpt-5.6-sol".tiers.flex]
 input = 2.0
 output = 10.0
 cache_read = 0.2
+long_context = { above = 272000, input = 4.0, output = 15.0, cache_read = 0.4 }
 
 [prices."gpt-5.3-codex"]
 input = 1.75
@@ -204,7 +229,10 @@ cache_read = 0.35```
 
 ## Anthropic
 
-Fast mode is a research preview for Opus models. Its cache reads use the
+Anthropic draws no long-context line for these models: "Claude 4.6 and later
+models … include the full 1M token context window at standard pricing", and
+fast mode's rates apply across the whole window too. Fast mode is a research
+preview for Opus models. Its cache reads use the
 model's cache multiplier on the fast input rate (0.05 times on Opus 5.5, 0.1
 times on Opus 5). The other models on Anthropic's page take the same shape.
 
