@@ -17,7 +17,7 @@ use crate::spend;
 use crate::telemetry::RequestRecord;
 use crate::tui::chart::TwoToneBars;
 use crate::tui::state::{COLUMNS, Column, Columns, Entry, State, USAGE_REFRESH, mean, percentile};
-use crate::tui::theme::Theme;
+use crate::tui::theme::{THEMES, Theme};
 
 const HUD_HEIGHT: u16 = 5;
 const FOOTER_HEIGHT: u16 = 1;
@@ -187,6 +187,8 @@ pub fn draw(frame: &mut Frame, state: &State, header: &Header) {
         popup(t, frame, area, "keys", help_lines(t));
     } else if state.picker {
         popup(t, frame, area, "columns", column_lines(state));
+    } else if state.themes {
+        popup(t, frame, area, "theme", theme_lines(state));
     } else if state.detail
         && let Some(record) = state.selected()
     {
@@ -1744,6 +1746,7 @@ fn footer(state: &State) -> Paragraph<'static> {
         ("u", "usage"),
         ("t", "buckets"),
         ("c", "columns"),
+        ("T", "theme"),
         ("?", "keys"),
     ];
     let mut spans = vec![Span::raw(" ")];
@@ -1790,6 +1793,46 @@ fn column_lines(state: &State) -> Vec<Line<'static>> {
         .collect();
     lines.push(Line::from(Span::styled(
         " space/↵ toggle · esc close (kept for the next run)",
+        Style::default().fg(t.dim),
+    )));
+    lines
+}
+
+/// The theme picker: every theme by name, with a chip of each color it
+/// draws data in. The dashboard around it already wears the theme under the
+/// cursor, so the list only has to say what the others would be.
+fn theme_lines(state: &State) -> Vec<Line<'static>> {
+    let t = state.theme;
+    let mut lines: Vec<Line<'static>> = THEMES
+        .iter()
+        .enumerate()
+        .map(|(at, theme)| {
+            let mut spans = vec![Span::raw(format!(" {:<18}", theme.name))];
+            // Spaces on a background rather than a glyph in the color: a
+            // square is East Asian ambiguous width, and two cells of nothing
+            // are two cells everywhere. The color goes on both sides of the
+            // cell, so a reversed cursor line swaps it for itself.
+            for color in [
+                theme.raw,
+                theme.wire,
+                theme.good,
+                theme.time,
+                theme.bad,
+                theme.model,
+            ] {
+                spans.push(Span::styled("  ", Style::default().fg(color).bg(color)));
+                spans.push(Span::raw(" "));
+            }
+            let line = Line::from(spans);
+            if at == state.themes_at {
+                line.style(t.raised_cursor())
+            } else {
+                line
+            }
+        })
+        .collect();
+    lines.push(Line::from(Span::styled(
+        " ↑↓ try · ↵ keep (for the next run too) · esc put back",
         Style::default().fg(t.dim),
     )));
     lines
@@ -1937,6 +1980,7 @@ fn help_lines(t: &Theme) -> Vec<Line<'static>> {
         ("u", "tokens and cost per model, by window"),
         ("t", "1s / 10s / 60s traffic buckets"),
         ("c", "choose what a request line shows"),
+        ("T", "pick a color theme, kept for the next run"),
         ("?", "close this"),
     ]
     .into_iter()
@@ -3307,9 +3351,10 @@ mod tests {
         let flight = registry.begin("alpha", "", &http::Method::POST, "/v1/messages", 100);
         let mut scenes = vec![("dashboard", dashboard())];
         type Open = fn(&mut State);
-        let opened: [(&str, Open); 5] = [
+        let opened: [(&str, Open); 6] = [
             ("help", |state| state.help = true),
             ("columns", |state| state.picker = true),
+            ("themes", |state| state.themes = true),
             ("detail", |state| state.detail = true),
             ("flights", |state| state.flights_open = true),
             ("flights-empty", |state| {
@@ -3328,6 +3373,47 @@ mod tests {
         costs.usage_rates = true;
         scenes.push(("costs", costs));
         scenes
+    }
+
+    /// `T` lists every theme with chips of its data colors, on the cursor's
+    /// ground where the cursor is, with the keys under the list.
+    #[test]
+    fn the_theme_picker_names_every_theme_and_marks_the_cursor() {
+        let mut state = populated();
+        state.theme = &crate::tui::theme::CATPPUCCIN_LATTE;
+        state.themes = true;
+        state.themes_at = 3;
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        terminal
+            .draw(|frame| draw(frame, &state, &header()))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let rows: Vec<String> = buffer
+            .content()
+            .chunks(100)
+            .map(|row| row.iter().map(|cell| cell.symbol()).collect())
+            .collect();
+        for theme in THEMES {
+            assert!(
+                rows.iter().any(|row| row.contains(theme.name)),
+                "{}",
+                theme.name
+            );
+        }
+        assert!(rows.iter().any(|row| row.contains("↵ keep")), "{rows:#?}");
+        let at = rows
+            .iter()
+            .position(|row| row.contains("Catppuccin Latte"))
+            .unwrap();
+        let column = rows[at].find("Catppuccin Latte").unwrap();
+        let cell = &buffer.content()[at * 100 + rows[at][..column].chars().count()];
+        assert_eq!(Some(cell.bg), state.theme.select_raised);
+        let chip = |theme: &Theme| {
+            buffer.content()[at * 100..(at + 1) * 100]
+                .iter()
+                .any(|cell| cell.bg == theme.model)
+        };
+        assert!(chip(state.theme), "the row's own colors");
     }
 
     /// A theme that paints its own ground paints all of it. A cell left at

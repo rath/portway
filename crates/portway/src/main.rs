@@ -80,7 +80,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // not a forwarder that has settings.
     #[cfg(feature = "tui")]
     let mut settings = if args.tui {
-        tui::Settings::load(&dir, args.event_columns.as_deref())
+        tui::Settings::load(&dir, args.event_columns.as_deref(), args.theme)
     } else {
         tui::Settings::default()
     };

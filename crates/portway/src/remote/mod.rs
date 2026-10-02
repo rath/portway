@@ -56,7 +56,7 @@ async fn attach(
         coding: String::new(),
         watching: None,
     };
-    let settings = tui::Settings::load(&dir, args.event_columns.as_deref());
+    let settings = tui::Settings::load(&dir, args.event_columns.as_deref(), args.theme);
     let (dashboard, quit) = tui::start(
         tui::Feed::Remote {
             updates: Mutex::new(receiver),

@@ -29,6 +29,16 @@ version may contain breaking changes.
   `[prices]` tables to copy, OpenAI's long-context rates included, with the
   tier each client sends and what the estimates leave out, such as cache
   writes.
+- Color themes for the terminal dashboard. `T` lists the web console's
+  palettes under the same names and with the same colors (Portway Dark,
+  Catppuccin Mocha and Latte, Tokyo Night, Nord, Dracula and Gruvbox) beside
+  `terminal`, the sixteen colors the dashboard always used. Moving the cursor
+  previews a theme on the whole dashboard, `Enter` keeps it in `portway.tui`
+  for the next run, and `Esc` puts the previous one back; `--theme ID` sets
+  one for a single run. A palette paints its own background, and a highlighted
+  line is tinted with its accent rather than reversed. With no theme saved,
+  the dashboard starts in Catppuccin Mocha when `COLORTERM` says the terminal
+  draws 24-bit color, and in `terminal` otherwise.
 
 ### Changed
 

@@ -238,6 +238,12 @@ pub struct State {
     pub columns: Columns,
     /// What everything is drawn in.
     pub theme: &'static Theme,
+    /// The theme picker: which theme is under the cursor while it is open,
+    /// and the one it was opened over, which closing without keeping puts
+    /// back. The dashboard wears the theme under the cursor meanwhile.
+    pub themes: bool,
+    pub themes_at: usize,
+    pub themes_kept: &'static Theme,
     /// Set by the first quit keystroke while requests are still in flight.
     pub confirm_quit: bool,
     pub scale: usize,
@@ -285,6 +291,9 @@ impl State {
             picker_at: 0,
             columns: Columns::ALL,
             theme: &TERMINAL,
+            themes: false,
+            themes_at: 0,
+            themes_kept: &TERMINAL,
             confirm_quit: false,
             scale: SCALES[0],
             board: Board::new(),

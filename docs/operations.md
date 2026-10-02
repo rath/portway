@@ -216,7 +216,7 @@ same requests twice. `q` and Ctrl-C only close the viewer; they never stop the
 remote daemon or interrupt its requests.
 
 `--data-dir` chooses where the viewer stores its session and display settings,
-and `--event-columns` still works. Remote attach does not load the local
+and `--event-columns` and `--theme` still work. Remote attach does not load the local
 `portway.toml`, read or create a local database, probe a local daemon, or bind a
 forwarding port. Server options such as `--config`, `--host`, `--port`, and
 `--upstream` cannot be combined with `--attach`. A shell alias or wrapper that
@@ -237,6 +237,7 @@ adds `--config` automatically must omit it for remote attach.
 | `←` / `→` in usage | Change the date window |
 | `p` in usage | Cost breakdown |
 | `c` | Event column picker |
+| `T` | Color theme picker |
 | `?` / `Esc` | Help / close popup |
 
 `--event-columns time,route,tokens` sets columns for one invocation. The picker
@@ -244,8 +245,20 @@ persists interactive choices in `portway.tui`. Narrow terminals reduce detail
 rather than truncating every field. Ctrl-C, SIGTERM and terminal closure restore
 the terminal. Quitting a viewer leaves the serving process alive.
 
-`--tui`, `--attach`, and `--event-columns` are absent in builds without the
-`tui` feature.
+`T` chooses the dashboard's colors: `terminal`, the sixteen colors of whatever
+theme the terminal already has, or one of the web console's palettes under the
+same names (`portway-dark`, `catppuccin-mocha`, `catppuccin-latte`,
+`tokyo-night`, `nord`, `dracula`, `gruvbox`), which paint their own background.
+Moving the cursor previews each one on the whole dashboard; `Enter` keeps it in
+`portway.tui` and `Esc` puts the previous one back. `--theme catppuccin-latte`
+sets one for a single invocation. With no theme saved, the dashboard starts in
+Catppuccin Mocha when `COLORTERM` is `truecolor` or `24bit`, and in `terminal`
+otherwise. The palettes need 24-bit color: on a terminal without it, or over an
+SSH session that does not pass `COLORTERM` along, choose `terminal` or set
+`COLORTERM`.
+
+`--tui`, `--attach`, `--event-columns` and `--theme` are absent in builds
+without the `tui` feature.
 
 ## Optional web console
 

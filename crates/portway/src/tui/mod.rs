@@ -44,6 +44,7 @@ use ratatui::layout::Rect;
 use crate::router::Router;
 use crate::telemetry::Event;
 use crate::tui::state::{COLUMNS, Column, Columns, Filter, State};
+use crate::tui::theme::{THEMES, Theme};
 use crate::tui::view::Header;
 use crate::watch;
 
@@ -87,11 +88,13 @@ pub enum Feed {
 pub const SETTINGS_FILE: &str = "portway.tui";
 
 /// What the dashboard starts with, and where a change is written back so the
-/// next one starts the same way. `--event-columns` overrides the file for one
-/// run without rewriting it: a flag is an argument, not a decision.
+/// next one starts the same way. `--event-columns` and `--theme` override the
+/// file for one run without rewriting it: a flag is an argument, not a
+/// decision.
 pub struct Settings {
     pub prices: crate::config::Prices,
     pub columns: Columns,
+    pub theme: &'static Theme,
     file: Option<PathBuf>,
 }
 
@@ -100,58 +103,73 @@ impl Default for Settings {
         Settings {
             prices: Default::default(),
             columns: Columns::ALL,
+            theme: &theme::TERMINAL,
             file: None,
         }
     }
 }
 
 impl Settings {
-    /// The flag if it was given, else what the last session left, else every
-    /// column. A settings file that cannot be read is not worth stopping a
-    /// dashboard for — the default is what it would have said anyway.
-    pub fn load(dir: &Path, asked: Option<&[Column]>) -> Settings {
+    /// Each flag if it was given, else what the last session left, else every
+    /// column and the theme `COLORTERM` says the terminal can draw. A settings
+    /// file that cannot be read is not worth stopping a dashboard for — the
+    /// default is what it would have said anyway.
+    pub fn load(
+        dir: &Path,
+        asked_columns: Option<&[Column]>,
+        asked_theme: Option<&'static Theme>,
+    ) -> Settings {
         let file = dir.join(SETTINGS_FILE);
-        if let Some(asked) = asked {
-            let mut columns = Columns::parse("").expect("an empty list parses");
-            for column in asked {
-                columns.toggle(*column);
+        let stored = fs::read_to_string(&file).unwrap_or_default();
+        let columns = match asked_columns {
+            Some(asked) => {
+                let mut columns = Columns::parse("").expect("an empty list parses");
+                for column in asked {
+                    columns.toggle(*column);
+                }
+                columns
             }
-            return Settings {
-                prices: Default::default(),
-                columns,
-                file: Some(file),
-            };
-        }
-        let columns = fs::read_to_string(&file)
-            .ok()
-            .and_then(|text| stored_columns(&text))
-            .unwrap_or(Columns::ALL);
+            None => stored_value(&stored, "columns")
+                .and_then(|value| Columns::parse(value).ok())
+                .unwrap_or(Columns::ALL),
+        };
+        let theme = asked_theme
+            .or_else(|| stored_value(&stored, "theme").and_then(theme::find))
+            .unwrap_or_else(|| theme::fallback(std::env::var("COLORTERM").ok().as_deref()));
         Settings {
             prices: Default::default(),
             columns,
+            theme,
             file: Some(file),
         }
     }
 
-    /// Remember `columns` for the next session. Best effort: a dashboard that
-    /// cannot write its settings still draws.
-    fn remember(&self, columns: Columns) {
+    /// Remember `key=value` for the next session, keeping every other line
+    /// of the file: one setting changing is no reason to forget the rest, or
+    /// to write down one a flag only lent this run. Best effort: a dashboard
+    /// that cannot write its settings still draws.
+    fn remember(&self, key: &str, value: &str) {
         let Some(file) = &self.file else {
             return;
         };
-        if let Err(err) = fs::write(file, format!("columns={}\n", columns.names())) {
+        let stored = fs::read_to_string(file).unwrap_or_default();
+        let line = format!("{key}={value}");
+        let mut lines: Vec<&str> = stored
+            .lines()
+            .filter(|kept| stored_value(kept, key).is_none())
+            .collect();
+        lines.push(&line);
+        if let Err(err) = fs::write(file, lines.join("\n") + "\n") {
             crate::logfmt::warn(&format!("{}: {err}", file.display()));
         }
     }
 }
 
-/// The `columns=` line of a settings file, if it has one.
-fn stored_columns(text: &str) -> Option<Columns> {
-    let value = text
-        .lines()
+/// The value of a settings file's `key=` line, if it has one.
+fn stored_value<'a>(text: &'a str, key: &str) -> Option<&'a str> {
+    text.lines()
         .map(str::trim)
-        .find_map(|line| line.strip_prefix("columns="))?;
-    Columns::parse(value).ok()
+        .find_map(|line| line.strip_prefix(key)?.strip_prefix('='))
 }
 
 pub struct Handle {
@@ -300,6 +318,7 @@ fn run(
     let mut state = State::new();
     state.prices = settings.prices.clone();
     state.columns = settings.columns;
+    state.theme = settings.theme;
     state.db = db.map(Path::to_path_buf);
     state.recorded = !matches!(feed, Feed::Live(_));
     if matches!(feed, Feed::Remote { .. }) {
@@ -432,11 +451,38 @@ fn key_press(key: KeyEvent, state: &mut State, settings: &Settings) -> bool {
             }
             KeyCode::Char(' ') | KeyCode::Char('x') | KeyCode::Enter => {
                 state.columns.toggle(COLUMNS[state.picker_at]);
-                settings.remember(state.columns);
+                settings.remember("columns", &state.columns.names());
             }
             KeyCode::Esc | KeyCode::Char('c') | KeyCode::Char('q') => state.picker = false,
             _ => {}
         }
+        return false;
+    }
+
+    // So does the theme picker. Moving the cursor puts the theme under it on
+    // the whole dashboard, which is the preview; only a keep writes it down,
+    // and closing without one puts back the theme it was opened over.
+    if state.themes {
+        let step = match key.code {
+            KeyCode::Char('j') | KeyCode::Down => 1,
+            KeyCode::Char('k') | KeyCode::Up => -1,
+            KeyCode::Char(' ') | KeyCode::Enter => {
+                state.themes = false;
+                settings.remember("theme", state.theme.id);
+                return false;
+            }
+            KeyCode::Esc | KeyCode::Char('T') | KeyCode::Char('q') => {
+                state.themes = false;
+                state.theme = state.themes_kept;
+                return false;
+            }
+            _ => 0,
+        };
+        state.themes_at = state
+            .themes_at
+            .saturating_add_signed(step)
+            .min(THEMES.len() - 1);
+        state.theme = THEMES[state.themes_at];
         return false;
     }
 
@@ -523,6 +569,16 @@ fn key_press(key: KeyEvent, state: &mut State, settings: &Settings) -> bool {
         KeyCode::Char('c') => {
             state.picker = true;
             state.picker_at = 0;
+            state.help = false;
+            state.detail = false;
+        }
+        KeyCode::Char('T') => {
+            state.themes = true;
+            state.themes_kept = state.theme;
+            state.themes_at = THEMES
+                .iter()
+                .position(|theme| theme.id == state.theme.id)
+                .unwrap_or(0);
             state.help = false;
             state.detail = false;
         }
@@ -844,9 +900,8 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         let settings = Settings {
-            prices: Default::default(),
-            columns: Columns::ALL,
             file: Some(dir.join(SETTINGS_FILE)),
+            ..Settings::default()
         };
         let mut state = State::new();
         state.columns = settings.columns;
@@ -878,18 +933,90 @@ mod tests {
         // written down as it happened.
         assert!(!key_press(press(KeyCode::Char('q')), &mut state, &settings));
         assert!(!state.picker);
-        assert_eq!(Settings::load(&dir, None).columns, state.columns);
+        assert_eq!(Settings::load(&dir, None, None).columns, state.columns);
 
         // The flag overrides the file for one run and leaves it alone.
-        let asked = Settings::load(&dir, Some(&[Column::Time, Column::Tokens]));
+        let asked = Settings::load(&dir, Some(&[Column::Time, Column::Tokens]), None);
         assert!(asked.columns.contains(Column::Tokens));
         assert!(!asked.columns.contains(Column::Route));
-        assert_eq!(Settings::load(&dir, None).columns, state.columns);
+        assert_eq!(Settings::load(&dir, None, None).columns, state.columns);
 
         // A file that says something unreadable falls back, it does not stop
         // the dashboard.
         fs::write(dir.join(SETTINGS_FILE), "columns=nope\n").unwrap();
-        assert_eq!(Settings::load(&dir, None).columns, Columns::ALL);
+        assert_eq!(Settings::load(&dir, None, None).columns, Columns::ALL);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// `T` opens the theme picker on the theme in use, the cursor puts each
+    /// theme it passes on the dashboard, `esc` puts the old one back, and a
+    /// keep writes the new one down beside the file's other settings.
+    #[test]
+    fn the_theme_picker_previews_reverts_and_keeps() {
+        let dir = std::env::temp_dir().join("portway-tui-test-themes");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join(SETTINGS_FILE);
+        fs::write(&file, "columns=time,model\nlater=kept\n").unwrap();
+        let settings = Settings {
+            file: Some(file.clone()),
+            ..Settings::default()
+        };
+        let mut state = State::new();
+        state.theme = &theme::NORD;
+
+        assert!(!key_press(press(KeyCode::Char('T')), &mut state, &settings));
+        assert!(state.themes);
+        assert_eq!(THEMES[state.themes_at], &theme::NORD);
+        assert!(!key_press(press(KeyCode::Down), &mut state, &settings));
+        assert_eq!(state.theme, &theme::DRACULA, "the cursor's theme is worn");
+        for _ in 0..20 {
+            key_press(press(KeyCode::Char('j')), &mut state, &settings);
+        }
+        assert_eq!(state.theme, THEMES[THEMES.len() - 1], "it stops at the end");
+        // `q` closes the picker rather than quitting, and puts Nord back.
+        assert!(!key_press(press(KeyCode::Char('q')), &mut state, &settings));
+        assert!(!state.themes);
+        assert_eq!(state.theme, &theme::NORD);
+        assert_eq!(
+            fs::read_to_string(&file).unwrap(),
+            "columns=time,model\nlater=kept\n"
+        );
+
+        key_press(press(KeyCode::Char('T')), &mut state, &settings);
+        for _ in 0..20 {
+            key_press(press(KeyCode::Up), &mut state, &settings);
+        }
+        assert_eq!(state.theme, &theme::TERMINAL, "it stops at the top");
+        key_press(press(KeyCode::Char('j')), &mut state, &settings);
+        assert!(!key_press(press(KeyCode::Enter), &mut state, &settings));
+        assert!(!state.themes);
+        assert_eq!(state.theme, &theme::PORTWAY_DARK);
+        assert_eq!(
+            fs::read_to_string(&file).unwrap(),
+            "columns=time,model\nlater=kept\ntheme=portway-dark\n"
+        );
+
+        // The next run starts in it, and a flag overrides it for one run
+        // without writing it down, even when something else is.
+        assert_eq!(Settings::load(&dir, None, None).theme, &theme::PORTWAY_DARK);
+        let asked = Settings::load(&dir, Some(&[Column::Time]), Some(&theme::GRUVBOX));
+        assert_eq!(asked.theme, &theme::GRUVBOX);
+        state.columns = asked.columns;
+        for code in [KeyCode::Char('c'), KeyCode::Char('j'), KeyCode::Char(' ')] {
+            key_press(press(code), &mut state, &asked);
+        }
+        assert_eq!(
+            fs::read_to_string(&file).unwrap(),
+            "later=kept\ntheme=portway-dark\ncolumns=time,status\n"
+        );
+
+        // A theme the file names but this build does not have falls back.
+        fs::write(&file, "theme=solarized-dark\n").unwrap();
+        assert_eq!(
+            Settings::load(&dir, None, None).theme,
+            theme::fallback(std::env::var("COLORTERM").ok().as_deref())
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 }

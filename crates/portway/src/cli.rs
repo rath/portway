@@ -1,6 +1,8 @@
 //! Portway's application arguments.
 #[cfg(feature = "tui")]
 use crate::tui::state::{COLUMNS, Column};
+#[cfg(feature = "tui")]
+use crate::tui::theme::{self, THEMES, Theme};
 use clap::{Parser, ValueEnum};
 pub use portway_core::config::{CodingPreference as CodingArg, DictionaryPreference as DictArg};
 use std::{path::PathBuf, time::Duration};
@@ -53,6 +55,11 @@ pub struct Args {
     #[cfg(feature = "tui")]
     #[arg(long,value_name="LIST",value_delimiter=',',value_parser=column,requires="tui")]
     pub event_columns: Option<Vec<Column>>,
+    /// Draw the dashboard in this theme for one run, such as catppuccin-mocha,
+    /// leaving the one `T` saved alone.
+    #[cfg(feature = "tui")]
+    #[arg(long, value_name = "ID", value_parser = theme_id, requires = "tui")]
+    pub theme: Option<&'static Theme>,
     /// Serve the dashboard in a browser, and open it in the default one.
     /// Attaches to a forwarder already on the port, like --tui, and combines
     /// with --daemon, which only prints the link.
@@ -162,6 +169,19 @@ fn column(raw: &str) -> Result<Column, String> {
             COLUMNS
                 .into_iter()
                 .map(Column::name)
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    })
+}
+#[cfg(feature = "tui")]
+fn theme_id(raw: &str) -> Result<&'static Theme, String> {
+    theme::find(raw).ok_or_else(|| {
+        format!(
+            "unknown theme {raw:?}: {}",
+            THEMES
+                .iter()
+                .map(|theme| theme.id)
                 .collect::<Vec<_>>()
                 .join(", ")
         )
@@ -278,6 +298,27 @@ mod tests {
             ])
             .is_ok()
         );
+    }
+
+    #[cfg(feature = "tui")]
+    #[test]
+    fn a_theme_is_named_by_its_id_and_only_for_a_dashboard() {
+        let args = Args::try_parse_from(["portway", "--tui", "--theme", "nord"]).unwrap();
+        assert_eq!(args.theme.map(|theme| theme.id), Some("nord"));
+        let url = "https://console.example/portway/";
+        assert!(
+            Args::try_parse_from(["portway", "--tui", "--attach", url, "--theme", "dracula"])
+                .is_ok()
+        );
+        let err = Args::try_parse_from(["portway", "--tui", "--theme", "Nord"])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("terminal, portway-dark, catppuccin-mocha"),
+            "{err}"
+        );
+        assert!(Args::try_parse_from(["portway", "--theme", "nord"]).is_err());
+        assert_eq!(Args::default().theme, None);
     }
 
     #[test]

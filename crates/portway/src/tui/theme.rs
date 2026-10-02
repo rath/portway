@@ -60,7 +60,7 @@ pub static TERMINAL: Theme = Theme {
     select_raised: None,
 };
 
-/// Every theme, the terminal's own first.
+/// Every theme, in the order the picker lists them.
 pub static THEMES: [&Theme; 8] = [
     &TERMINAL,
     &PORTWAY_DARK,
@@ -178,6 +178,26 @@ const fn blend(accent: u32, ground: u32) -> u8 {
     (((accent & 0xff) + (ground & 0xff) * 3 + 2) / 4) as u8
 }
 
+/// The theme called `id`, if there is one.
+pub fn find(id: &str) -> Option<&'static Theme> {
+    THEMES.iter().copied().find(|theme| theme.id == id)
+}
+
+/// What a dashboard with no theme saved starts in: Catppuccin Mocha where the
+/// terminal says it draws 24-bit color (`COLORTERM`), and the terminal's own
+/// colors anywhere else, where a fixed palette would come out as whatever the
+/// terminal made of it.
+pub fn fallback(colorterm: Option<&str>) -> &'static Theme {
+    match colorterm {
+        Some(value)
+            if value.eq_ignore_ascii_case("truecolor") || value.eq_ignore_ascii_case("24bit") =>
+        {
+            &CATPPUCCIN_MOCHA
+        }
+        _ => &TERMINAL,
+    }
+}
+
 fn highlight(select: Option<Color>) -> Style {
     match select {
         Some(select) => Style::new().bg(select),
@@ -265,6 +285,24 @@ mod tests {
                 "{} twice",
                 theme.id
             );
+        }
+    }
+
+    #[test]
+    fn a_theme_is_found_by_its_id() {
+        assert_eq!(find("nord"), Some(&NORD));
+        assert_eq!(find("terminal"), Some(&TERMINAL));
+        assert_eq!(find("Nord"), None);
+        assert_eq!(find("solarized-dark"), None, "a console theme left out");
+    }
+
+    #[test]
+    fn only_a_terminal_that_says_it_draws_24_bit_color_starts_in_one() {
+        for said in ["truecolor", "24bit", "TrueColor"] {
+            assert_eq!(fallback(Some(said)), &CATPPUCCIN_MOCHA, "{said}");
+        }
+        for said in [None, Some(""), Some("256color"), Some("yes")] {
+            assert_eq!(fallback(said), &TERMINAL, "{said:?}");
         }
     }
 
