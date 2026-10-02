@@ -16,6 +16,7 @@
 pub mod chart;
 pub use crate::spend;
 pub mod state;
+pub mod theme;
 pub mod view;
 
 use std::fs;

@@ -17,17 +17,7 @@ use crate::spend;
 use crate::telemetry::RequestRecord;
 use crate::tui::chart::TwoToneBars;
 use crate::tui::state::{COLUMNS, Column, Columns, Entry, State, USAGE_REFRESH, mean, percentile};
-
-// The 16 terminal colors only: the dashboard has to sit inside whatever theme
-// the user's terminal already has.
-const DIM: Color = Color::DarkGray;
-/// The body before compression, and the bytes that actually left.
-const RAW: Color = Color::Blue;
-const WIRE: Color = Color::Cyan;
-const GOOD: Color = Color::Green;
-const TIME: Color = Color::Yellow;
-const BAD: Color = Color::Red;
-const MODEL: Color = Color::Magenta;
+use crate::tui::theme::Theme;
 
 const HUD_HEIGHT: u16 = 5;
 const FOOTER_HEIGHT: u16 = 1;
@@ -139,7 +129,13 @@ pub fn events_height(area: Rect, models: usize) -> usize {
 }
 
 pub fn draw(frame: &mut Frame, state: &State, header: &Header) {
+    let t = state.theme;
     let area = frame.area();
+    // Everything starts on the theme's own ground; a theme that leaves it to
+    // the terminal paints `Reset`, which is what the cell held already.
+    frame
+        .buffer_mut()
+        .set_style(area, Style::default().fg(t.text).bg(t.surface));
     if state.usage_open {
         usage_screen(frame, state, area);
         if state
@@ -159,7 +155,7 @@ pub fn draw(frame: &mut Frame, state: &State, header: &Header) {
         frame.render_widget(
             // Short enough to survive the truncation it is warning about.
             Paragraph::new("too small")
-                .style(Style::default().fg(BAD))
+                .style(Style::default().fg(t.bad))
                 .alignment(Alignment::Center),
             area,
         );
@@ -182,19 +178,19 @@ pub fn draw(frame: &mut Frame, state: &State, header: &Header) {
         frame.buffer_mut().set_style(
             area,
             Style::default()
-                .fg(DIM)
-                .bg(Color::Reset)
+                .fg(t.border)
+                .bg(t.surface)
                 .remove_modifier(Modifier::all()),
         );
         flights_dialog(frame, state, area);
     } else if state.help {
-        popup(frame, area, "keys", help_lines());
+        popup(t, frame, area, "keys", help_lines(t));
     } else if state.picker {
-        popup(frame, area, "columns", column_lines(state));
+        popup(t, frame, area, "columns", column_lines(state));
     } else if state.detail
         && let Some(record) = state.selected()
     {
-        popup(frame, area, "request", detail_lines(record));
+        popup(t, frame, area, "request", detail_lines(t, record));
     }
 }
 
@@ -214,17 +210,17 @@ fn is_stalled(flight: &FlightView) -> bool {
     flight.phase == Phase::Stream && flight.idle > STALLED
 }
 
-fn flight_phase(flight: &FlightView) -> (&'static str, Color) {
+fn flight_phase(t: &Theme, flight: &FlightView) -> (&'static str, Color) {
     if is_slow(flight) {
-        return ("slow prefill", TIME);
+        return ("slow prefill", t.time);
     }
     if is_stalled(flight) {
-        return ("stalled", BAD);
+        return ("stalled", t.bad);
     }
     match flight.phase {
-        Phase::Upload => ("upload", WIRE),
-        Phase::Prefill => ("prefill", TIME),
-        Phase::Stream => ("stream", GOOD),
+        Phase::Upload => ("upload", t.wire),
+        Phase::Prefill => ("prefill", t.time),
+        Phase::Stream => ("stream", t.good),
     }
 }
 
@@ -277,14 +273,14 @@ fn clipped(text: &str, width: u16) -> String {
 /// The flights that are worth a word in the HUD while the dialog is closed:
 /// `1 stalled` in red, or `2 slow` when nothing has stalled. `None` while
 /// every one of them is moving.
-fn flight_alarm(flights: &[FlightView]) -> Option<(String, Color)> {
+fn flight_alarm(t: &Theme, flights: &[FlightView]) -> Option<(String, Color)> {
     let stalled = flights.iter().filter(|flight| is_stalled(flight)).count();
     let slow = flights.iter().filter(|flight| is_slow(flight)).count();
     match (stalled, slow) {
         (0, 0) => None,
-        (0, slow) => Some((format!("{slow} slow"), TIME)),
-        (stalled, 0) => Some((format!("{stalled} stalled"), BAD)),
-        (stalled, slow) => Some((format!("{stalled} stalled, {slow} slow"), BAD)),
+        (0, slow) => Some((format!("{slow} slow"), t.time)),
+        (stalled, 0) => Some((format!("{stalled} stalled"), t.bad)),
+        (stalled, slow) => Some((format!("{stalled} stalled, {slow} slow"), t.bad)),
     }
 }
 
@@ -295,6 +291,7 @@ fn flight_alarm(flights: &[FlightView]) -> Option<(String, Color)> {
 /// terminal, and as wide as its columns; its title counts the rows that did
 /// not fit.
 fn flights_dialog(frame: &mut Frame, state: &State, area: Rect) {
+    let t = state.theme;
     let flights = &state.flights;
     // The header row over the rows, or one line of message.
     let body = if flights.is_empty() {
@@ -336,19 +333,20 @@ fn flights_dialog(frame: &mut Frame, state: &State, area: Rect) {
         .border_type(BorderType::Double)
         .title_top(Line::styled(
             format!(" {title} "),
-            Style::default().fg(WIRE).add_modifier(Modifier::BOLD),
+            Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
         ))
         .title_bottom(
             Line::from(vec![
                 Span::styled(
                     " f / esc",
-                    Style::default().fg(WIRE).add_modifier(Modifier::BOLD),
+                    Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(" close ", Style::default().fg(DIM)),
+                Span::styled(" close ", Style::default().fg(t.dim)),
             ])
             .right_aligned(),
         )
-        .border_style(Style::default().fg(WIRE))
+        .border_style(Style::default().fg(t.accent))
+        .style(Style::default().fg(t.text).bg(t.raised))
         .padding(Padding::uniform(1));
     let box_area = Rect {
         x: area.x + (area.width - width) / 2,
@@ -362,17 +360,20 @@ fn flights_dialog(frame: &mut Frame, state: &State, area: Rect) {
         // The HUD says the same: a failed snapshot is not an empty one.
         Some(Span::styled(
             "unavailable: the server did not answer",
-            Style::default().fg(TIME),
+            Style::default().fg(t.time),
         ))
     } else if flights.is_empty() {
-        Some(Span::styled("nothing in flight", Style::default().fg(DIM)))
+        Some(Span::styled(
+            "nothing in flight",
+            Style::default().fg(t.dim),
+        ))
     } else {
         None
     };
     match message {
         Some(message) => frame.render_widget(Paragraph::new(message).block(block), box_area),
         None => frame.render_widget(
-            flights_table(&flights[..shown], &columns).block(block),
+            flights_table(t, &flights[..shown], &columns).block(block),
             box_area,
         ),
     }
@@ -469,7 +470,7 @@ impl FlightColumns {
 }
 
 /// The rows of the dialog, in the columns it has room for.
-fn flights_table(flights: &[FlightView], columns: &FlightColumns) -> Table<'static> {
+fn flights_table(t: &Theme, flights: &[FlightView], columns: &FlightColumns) -> Table<'static> {
     let roomy = columns.roomy;
     let mut headers = vec![
         Cell::from("model"),
@@ -494,11 +495,11 @@ fn flights_table(flights: &[FlightView], columns: &FlightColumns) -> Table<'stat
         .map(Constraint::Length)
         .collect();
     let rows = flights.iter().map(|flight| {
-        let (phase, shade) = flight_phase(flight);
+        let (phase, shade) = flight_phase(t, flight);
         let mut cells = vec![
             Cell::from(Span::styled(
                 clipped(flight_name(flight), columns.model),
-                Style::default().fg(MODEL),
+                Style::default().fg(t.model),
             )),
             Cell::from(Span::styled(phase, Style::default().fg(shade))),
             number(human_time(flight.age)),
@@ -528,7 +529,7 @@ fn flights_table(flights: &[FlightView], columns: &FlightColumns) -> Table<'stat
         Row::new(cells)
     });
     Table::new(rows, widths)
-        .header(Row::new(headers).style(Style::default().fg(DIM)))
+        .header(Row::new(headers).style(Style::default().fg(t.dim)))
         .column_spacing(1)
 }
 
@@ -563,9 +564,9 @@ fn share(part: u64, whole: u64) -> Option<String> {
     (whole > 0).then(|| format!("{}%", part.min(whole) * 100 / whole))
 }
 
-fn stat<'a>(label: &'a str, value: String, shade: Color) -> Vec<Span<'a>> {
+fn stat<'a>(t: &Theme, label: &'a str, value: String, shade: Color) -> Vec<Span<'a>> {
     vec![
-        Span::styled(label, Style::default().fg(DIM)),
+        Span::styled(label, Style::default().fg(t.dim)),
         Span::raw(" "),
         Span::styled(value, Style::default().fg(shade)),
         Span::raw("  "),
@@ -573,12 +574,13 @@ fn stat<'a>(label: &'a str, value: String, shade: Color) -> Vec<Span<'a>> {
 }
 
 fn hud<'a>(state: &State, header: &'a Header) -> Paragraph<'a> {
+    let t = state.theme;
     let totals = &state.totals;
 
     let mut title = vec![
         Span::styled(" portway", Style::default().add_modifier(Modifier::BOLD)),
         Span::raw("  "),
-        Span::styled(header.listen.clone(), Style::default().fg(WIRE)),
+        Span::styled(header.listen.clone(), Style::default().fg(t.accent)),
         Span::raw("  "),
     ];
     let up = state
@@ -599,39 +601,36 @@ fn hud<'a>(state: &State, header: &'a Header) -> Paragraph<'a> {
                 .unwrap_or_else(|| state.started.elapsed())
                 .as_secs()
         });
-    title.extend(stat("up", uptime(up), TIME));
+    title.extend(stat(t, "up", uptime(up), t.time));
     // A window cannot see the compressor this process never asked for; the
     // slot says what it is instead: how wide the window it reads is.
     if let Some(remote) = &state.remote {
         title.extend(stat(
+            t,
             "remote",
             remote.message.clone(),
-            if remote.connected { GOOD } else { TIME },
+            if remote.connected { t.good } else { t.time },
         ));
-        title.extend(stat("coding", remote.coding.clone(), GOOD));
+        title.extend(stat(t, "coding", remote.coding.clone(), t.good));
     } else {
         match header.watching {
-            Some(span) => title.extend(stat("watching", logfmt::span(span), GOOD)),
-            None => title.extend(stat("coding", header.coding.clone(), GOOD)),
+            Some(span) => title.extend(stat(t, "watching", logfmt::span(span), t.good)),
+            None => title.extend(stat(t, "coding", header.coding.clone(), t.good)),
         }
     }
-    title.extend(stat(
-        "upstreams",
-        state.models.len().to_string(),
-        Color::Reset,
-    ));
+    title.extend(stat(t, "upstreams", state.models.len().to_string(), t.text));
 
     let reuse = match (state.reused * 100).checked_div(state.seen) {
         Some(share) => format!("{share}%"),
         None => "-".to_string(),
     };
-    let mut requests = vec![Span::styled(" REQUESTS ", Style::default().fg(DIM))];
-    requests.extend(stat("total", totals.requests.to_string(), Color::Reset));
+    let mut requests = vec![Span::styled(" REQUESTS ", Style::default().fg(t.dim))];
+    requests.extend(stat(t, "total", totals.requests.to_string(), t.text));
     if state.flights_available {
-        requests.extend(stat("live", totals.in_flight.to_string(), GOOD));
+        requests.extend(stat(t, "live", totals.in_flight.to_string(), t.good));
         // The one thing about the flights that cannot wait for `f`: something
         // stopped moving. It goes between the count and the gap after it.
-        if let Some((alarm, shade)) = flight_alarm(&state.flights) {
+        if let Some((alarm, shade)) = flight_alarm(t, &state.flights) {
             requests.insert(
                 requests.len() - 1,
                 Span::styled(format!(" ({alarm})"), Style::default().fg(shade)),
@@ -640,87 +639,103 @@ fn hud<'a>(state: &State, header: &'a Header) -> Paragraph<'a> {
     } else {
         requests.push(Span::styled(
             "in flight unavailable  ",
-            Style::default().fg(TIME),
+            Style::default().fg(t.time),
         ));
     }
-    requests.extend(stat("2xx", state.ok.to_string(), GOOD));
+    requests.extend(stat(t, "2xx", state.ok.to_string(), t.good));
     requests.extend(stat(
+        t,
         "4xx",
         state.client_errors.to_string(),
-        if state.client_errors > 0 { TIME } else { DIM },
+        if state.client_errors > 0 {
+            t.time
+        } else {
+            t.dim
+        },
     ));
     requests.extend(stat(
+        t,
         "5xx",
         state.server_errors.to_string(),
-        if state.server_errors > 0 { BAD } else { DIM },
+        if state.server_errors > 0 {
+            t.bad
+        } else {
+            t.dim
+        },
     ));
-    requests.extend(stat("cut", state.truncated.to_string(), DIM));
-    requests.extend(stat("aborts", totals.aborts.to_string(), DIM));
+    requests.extend(stat(t, "cut", state.truncated.to_string(), t.dim));
+    requests.extend(stat(t, "aborts", totals.aborts.to_string(), t.dim));
     requests.extend(stat(
+        t,
         "up-err",
         totals.upstream_errors.to_string(),
-        if totals.upstream_errors > 0 { BAD } else { DIM },
+        if totals.upstream_errors > 0 {
+            t.bad
+        } else {
+            t.dim
+        },
     ));
-    requests.extend(stat("reuse", reuse, GOOD));
+    requests.extend(stat(t, "reuse", reuse, t.good));
 
     let saved = totals.body_bytes.saturating_sub(totals.wire_bytes);
-    let mut upload = vec![Span::styled(" UPLOAD   ", Style::default().fg(DIM))];
-    upload.extend(stat("raw", human(totals.body_bytes), RAW));
-    upload.extend(stat("wire", human(totals.wire_bytes), WIRE));
+    let mut upload = vec![Span::styled(" UPLOAD   ", Style::default().fg(t.dim))];
+    upload.extend(stat(t, "raw", human(totals.body_bytes), t.raw));
+    upload.extend(stat(t, "wire", human(totals.wire_bytes), t.wire));
     upload.extend(stat(
+        t,
         "saved",
         format!(
             "{} ({})",
             human(saved),
             ratio(totals.body_bytes, totals.wire_bytes)
         ),
-        GOOD,
+        t.good,
     ));
     upload.extend(stat(
+        t,
         "encoded",
         format!("{}/{}", totals.encoded, totals.requests),
-        Color::Reset,
+        t.text,
     ));
     upload.extend(stat(
+        t,
         "415-retry",
         totals.retried_identity.to_string(),
         if totals.retried_identity > 0 {
-            TIME
+            t.time
         } else {
-            DIM
+            t.dim
         },
     ));
 
-    let mut download = vec![Span::styled(" DOWNLOAD ", Style::default().fg(DIM))];
-    download.extend(stat("wire", human(totals.down_wire_bytes), WIRE));
+    let mut download = vec![Span::styled(" DOWNLOAD ", Style::default().fg(t.dim))];
+    download.extend(stat(t, "wire", human(totals.down_wire_bytes), t.wire));
     download.extend(stat(
+        t,
         "decoded",
         format!(
             "{} ({})",
             human(totals.down_bytes),
             ratio(totals.down_bytes, totals.down_wire_bytes)
         ),
-        RAW,
+        t.raw,
     ));
     // The hop's own saving, next to the upstream leg's: the same shape the
     // upload row uses, and the decoded size it came out of is the stat beside
     // it. Hidden until a response actually went out encoded.
     if totals.agent_bytes > 0 {
         download.extend(stat(
+            t,
             "agent",
             format!(
                 "{} ({})",
                 human(totals.agent_bytes),
                 ratio(totals.down_bytes, totals.agent_bytes)
             ),
-            GOOD,
+            t.good,
         ));
     }
-    download.extend(stat(
-        "idle conns",
-        totals.idle_conns.to_string(),
-        Color::Reset,
-    ));
+    download.extend(stat(t, "idle conns", totals.idle_conns.to_string(), t.text));
 
     let quantile = |samples: &_, q, remote: Option<f64>| {
         (if state.remote.is_some() {
@@ -731,8 +746,9 @@ fn hud<'a>(state: &State, header: &'a Header) -> Paragraph<'a> {
         .map(human_time)
         .unwrap_or_else(|| "-".to_string())
     };
-    let mut latency = vec![Span::styled(" LATENCY  ", Style::default().fg(DIM))];
+    let mut latency = vec![Span::styled(" LATENCY  ", Style::default().fg(t.dim))];
     latency.extend(stat(
+        t,
         "ttfb p50/p95",
         format!(
             "{} / {}",
@@ -747,9 +763,10 @@ fn hud<'a>(state: &State, header: &'a Header) -> Paragraph<'a> {
                 state.remote.as_ref().and_then(|r| r.latency.ttfb.p95)
             )
         ),
-        TIME,
+        t.time,
     ));
     latency.extend(stat(
+        t,
         "upload p50/p95",
         format!(
             "{} / {}",
@@ -764,9 +781,10 @@ fn hud<'a>(state: &State, header: &'a Header) -> Paragraph<'a> {
                 state.remote.as_ref().and_then(|r| r.latency.upload.p95)
             )
         ),
-        TIME,
+        t.time,
     ));
     latency.extend(stat(
+        t,
         "handshake avg",
         (match &state.remote {
             Some(remote) => remote.latency.handshake_mean,
@@ -774,7 +792,7 @@ fn hud<'a>(state: &State, header: &'a Header) -> Paragraph<'a> {
         })
         .map(human_time)
         .unwrap_or_else(|| "-".to_string()),
-        TIME,
+        t.time,
     ));
 
     Paragraph::new(vec![
@@ -788,8 +806,12 @@ fn hud<'a>(state: &State, header: &'a Header) -> Paragraph<'a> {
 
 // -------------------------------------------------------------------- models
 
-fn coding_span(coding: Coding, dict: bool) -> Span<'static> {
-    let color = if coding == Coding::None { DIM } else { GOOD };
+fn coding_span(t: &Theme, coding: Coding, dict: bool) -> Span<'static> {
+    let color = if coding == Coding::None {
+        t.dim
+    } else {
+        t.good
+    };
     Span::styled(
         board::coding_label(coding, dict),
         Style::default().fg(color),
@@ -805,6 +827,7 @@ const STATUS_TABLE: u16 = 146;
 const SIZE_COLUMNS: [&str; 5] = ["raw", "wire", "saved", "down", "↓ saved"];
 
 fn models_table(state: &State, width: u16) -> Table<'_> {
+    let t = state.theme;
     let roomy = width >= ROOMY_TABLE;
     let show_status = width >= STATUS_TABLE;
     let mut names = vec!["upstream", "coding", "reqs", "live", "raw", "wire", "saved"];
@@ -823,7 +846,7 @@ fn models_table(state: &State, width: u16) -> Table<'_> {
             Cell::from(name)
         }
     }))
-    .style(Style::default().fg(DIM));
+    .style(Style::default().fg(t.dim));
 
     let models = state.recent_models();
     let title = format!("recent upstreams · {}/{}", models.len(), state.models.len());
@@ -832,8 +855,8 @@ fn models_table(state: &State, width: u16) -> Table<'_> {
         let errors = view.upstream_errors;
         let saved = view.saved_bytes().max(0) as u64;
         let mut cells = vec![
-            Cell::from(Span::styled(row.name.clone(), Style::default().fg(MODEL))),
-            Cell::from(coding_span(view.coding, view.dict)),
+            Cell::from(Span::styled(row.name.clone(), Style::default().fg(t.model))),
+            Cell::from(coding_span(t, view.coding, view.dict)),
             Cell::from(view.requests.to_string()),
             Cell::from(Span::styled(
                 if state.flights_available {
@@ -841,15 +864,15 @@ fn models_table(state: &State, width: u16) -> Table<'_> {
                 } else {
                     "-".to_string()
                 },
-                Style::default().fg(if view.in_flight > 0 { GOOD } else { DIM }),
+                Style::default().fg(if view.in_flight > 0 { t.good } else { t.dim }),
             )),
             number(Span::styled(
                 human(view.body_bytes),
-                Style::default().fg(RAW),
+                Style::default().fg(t.raw),
             )),
             number(Span::styled(
                 human(view.wire_bytes),
-                Style::default().fg(WIRE),
+                Style::default().fg(t.wire),
             )),
             // The saving with the ratio it came out of, as the HUD's upload
             // row prints it: `879KB (-96%)`.
@@ -859,27 +882,27 @@ fn models_table(state: &State, width: u16) -> Table<'_> {
                     human(saved),
                     ratio(view.body_bytes, view.wire_bytes)
                 ),
-                Style::default().fg(GOOD),
+                Style::default().fg(t.good),
             )),
         ];
         if roomy {
             cells.extend([
                 number(Span::styled(
                     human(view.down_bytes),
-                    Style::default().fg(RAW),
+                    Style::default().fg(t.raw),
                 )),
                 number(Span::styled(
                     human(view.down_saved_bytes().max(0) as u64),
-                    Style::default().fg(GOOD),
+                    Style::default().fg(t.good),
                 )),
                 Cell::from(view.idle_conns.to_string()),
                 Cell::from(Span::styled(
                     errors.to_string(),
-                    Style::default().fg(if errors > 0 { BAD } else { DIM }),
+                    Style::default().fg(if errors > 0 { t.bad } else { t.dim }),
                 )),
                 Cell::from(Span::styled(
                     view.client_aborts.to_string(),
-                    Style::default().fg(DIM),
+                    Style::default().fg(t.dim),
                 )),
             ]);
         }
@@ -891,7 +914,7 @@ fn models_table(state: &State, width: u16) -> Table<'_> {
                     .and_then(|r| r.statuses.get(&row.name))
                     .cloned()
                     .unwrap_or_else(|| compression_status(view)),
-                Style::default().fg(TIME),
+                Style::default().fg(t.time),
             )));
         }
         Row::new(cells)
@@ -925,9 +948,9 @@ fn models_table(state: &State, width: u16) -> Table<'_> {
             Block::bordered()
                 .title_top(Line::styled(
                     format!(" {title} "),
-                    Style::default().fg(DIM).add_modifier(Modifier::BOLD),
+                    Style::default().fg(t.dim).add_modifier(Modifier::BOLD),
                 ))
-                .border_style(Style::default().fg(DIM))
+                .border_style(Style::default().fg(t.border))
                 .padding(Padding::horizontal(1)),
         )
 }
@@ -948,6 +971,7 @@ const USAGE_MIN_HEIGHT: u16 = 6;
 /// it is also the only place the two can be held against each other — and the
 /// only one that can answer for a day that started before the dashboard did.
 fn usage_screen(frame: &mut Frame, state: &State, area: Rect) {
+    let t = state.theme;
     let Some(table) = &state.usage else {
         let reason = state
             .usage_error
@@ -955,7 +979,7 @@ fn usage_screen(frame: &mut Frame, state: &State, area: Rect) {
             .unwrap_or("no counts have been read");
         frame.render_widget(
             Paragraph::new(reason)
-                .style(Style::default().fg(BAD))
+                .style(Style::default().fg(t.bad))
                 .alignment(Alignment::Center),
             area,
         );
@@ -964,14 +988,14 @@ fn usage_screen(frame: &mut Frame, state: &State, area: Rect) {
     if area.width < USAGE_MIN_WIDTH || area.height < USAGE_MIN_HEIGHT {
         frame.render_widget(
             Paragraph::new("too small")
-                .style(Style::default().fg(BAD))
+                .style(Style::default().fg(t.bad))
                 .alignment(Alignment::Center),
             area,
         );
         return;
     }
 
-    let notes = usage_notes(table);
+    let notes = usage_notes(t, table);
     // Both ends carry their date: a window that is over ends at a midnight,
     // and `00:00:00` alone would not say which one.
     let title = state
@@ -986,8 +1010,8 @@ fn usage_screen(frame: &mut Frame, state: &State, area: Rect) {
             )
         });
     let block = Block::bordered()
-        .title_top(titled(&title))
-        .border_style(Style::default().fg(DIM))
+        .title_top(titled(t, &title))
+        .border_style(Style::default().fg(t.border))
         .padding(Padding::horizontal(1));
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -1009,17 +1033,17 @@ fn usage_screen(frame: &mut Frame, state: &State, area: Rect) {
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(
                 " no usage recorded in this window",
-                Style::default().fg(DIM),
+                Style::default().fg(t.dim),
             ))),
             rows[1],
         );
     } else {
-        frame.render_widget(usage_table(table, area.width, rows[1].width), rows[1]);
+        frame.render_widget(usage_table(t, table, area.width, rows[1].width), rows[1]);
     }
     frame.render_widget(Paragraph::new(notes), rows[3]);
 
     if state.usage_rates {
-        popup(frame, area, "costs", cost_lines(table));
+        popup(t, frame, area, "costs", cost_lines(t, table));
     }
 }
 
@@ -1057,7 +1081,7 @@ fn label_width(table: &spend::Table, most: u16) -> u16 {
 
 /// `room` is the width the table is drawn in; the numbers keep their columns
 /// and the label takes what they leave, up to what it needs.
-fn usage_table(table: &spend::Table, width: u16, room: u16) -> Table<'static> {
+fn usage_table(t: &Theme, table: &spend::Table, width: u16, room: u16) -> Table<'static> {
     let roomy = width >= USAGE_ROOMY;
     let mut names = vec!["model", "reqs", "prompt", "cached", "hit", "output"];
     if roomy {
@@ -1073,9 +1097,9 @@ fn usage_table(table: &spend::Table, width: u16, room: u16) -> Table<'static> {
     let mut rows: Vec<Row> = table
         .rows
         .iter()
-        .map(|model| usage_row(model, roomy, false))
+        .map(|model| usage_row(t, model, roomy, false))
         .collect();
-    rows.push(usage_row(&table.total, roomy, true));
+    rows.push(usage_row(t, &table.total, roomy, true));
 
     let mut numbers: Vec<u16> = vec![5, 9, 9, 6, 9];
     if roomy {
@@ -1090,32 +1114,28 @@ fn usage_table(table: &spend::Table, width: u16, room: u16) -> Table<'static> {
         .map(Constraint::Length)
         .collect::<Vec<_>>();
     Table::new(rows, widths)
-        .header(Row::new(header).style(Style::default().fg(DIM)))
+        .header(Row::new(header).style(Style::default().fg(t.dim)))
         .column_spacing(1)
 }
 
 /// The window selector, drawn above the table: what is being measured, with
 /// the one in force reversed and the arrows that move it spelled out.
 fn usage_ranges(state: &State) -> Line<'static> {
+    let t = state.theme;
     let mut spans = vec![Span::raw(" ")];
     for (at, range) in spend::Range::ALL.into_iter().enumerate() {
         if at > 0 {
-            spans.push(Span::styled(" · ", Style::default().fg(DIM)));
+            spans.push(Span::styled(" · ", Style::default().fg(t.dim)));
         }
         if range == state.usage_range {
-            spans.push(Span::styled(
-                format!(" {} ", range.label()),
-                Style::default()
-                    .fg(WIRE)
-                    .add_modifier(Modifier::BOLD | Modifier::REVERSED),
-            ));
+            spans.push(Span::styled(format!(" {} ", range.label()), t.chosen()));
         } else {
-            spans.push(Span::styled(range.label(), Style::default().fg(DIM)));
+            spans.push(Span::styled(range.label(), Style::default().fg(t.dim)));
         }
     }
     spans.push(Span::styled(
         "   ←→ window · p costs",
-        Style::default().fg(DIM),
+        Style::default().fg(t.dim),
     ));
     Line::from(spans)
 }
@@ -1132,20 +1152,20 @@ fn usage_ranges(state: &State) -> Line<'static> {
 /// line, less the margin and the four money columns.
 const COST_LABEL_MAX: u16 = 70 - 1 - 41;
 
-fn cost_lines(table: &spend::Table) -> Vec<Line<'static>> {
+fn cost_lines(t: &Theme, table: &spend::Table) -> Vec<Line<'static>> {
     let width = label_width(table, COST_LABEL_MAX) as usize;
     let mut lines = vec![Line::from(Span::styled(
         " cost by source",
-        Style::default().fg(WIRE),
+        Style::default().fg(t.accent),
     ))];
     lines.push(Line::from(vec![
-        Span::styled(format!(" {:<width$}", "model"), Style::default().fg(DIM)),
+        Span::styled(format!(" {:<width$}", "model"), Style::default().fg(t.dim)),
         Span::styled(
             format!(
                 "{:>10}{:>10}{:>10}{:>11}",
                 "prompt", "cached", "output", "total$"
             ),
-            Style::default().fg(DIM),
+            Style::default().fg(t.dim),
         ),
     ]));
     for row in &table.rows {
@@ -1163,15 +1183,15 @@ fn cost_lines(table: &spend::Table) -> Vec<Line<'static>> {
         lines.push(Line::from(vec![
             Span::styled(
                 format!(" {label:<width$.width$}"),
-                Style::default().fg(if priced { MODEL } else { DIM }),
+                Style::default().fg(if priced { t.model } else { t.dim }),
             ),
             Span::styled(
                 format!("{:>10}{:>10}{:>10}", prompt, cached, output),
-                Style::default().fg(if priced { GOOD } else { DIM }),
+                Style::default().fg(if priced { t.good } else { t.dim }),
             ),
             Span::styled(
                 format!("{:>11}", total.as_deref().unwrap_or("-")),
-                Style::default().fg(if priced { GOOD } else { DIM }),
+                Style::default().fg(if priced { t.good } else { t.dim }),
             ),
         ]));
     }
@@ -1179,7 +1199,7 @@ fn cost_lines(table: &spend::Table) -> Vec<Line<'static>> {
         lines.push(Line::from(vec![
             Span::styled(
                 format!(" {:<width$}", "total"),
-                Style::default().fg(GOOD).add_modifier(Modifier::BOLD),
+                Style::default().fg(t.good).add_modifier(Modifier::BOLD),
             ),
             Span::styled(
                 format!(
@@ -1188,29 +1208,29 @@ fn cost_lines(table: &spend::Table) -> Vec<Line<'static>> {
                     dollars(sum.cache_read),
                     dollars(sum.output)
                 ),
-                Style::default().fg(GOOD),
+                Style::default().fg(t.good),
             ),
             Span::styled(
                 format!("{:>11}", dollars(sum.total())),
-                Style::default().fg(GOOD).add_modifier(Modifier::BOLD),
+                Style::default().fg(t.good).add_modifier(Modifier::BOLD),
             ),
         ]));
     }
     lines.push(Line::from(Span::styled(
         " p / esc close",
-        Style::default().fg(DIM),
+        Style::default().fg(t.dim),
     )));
     lines
 }
 
 /// One line of the usage table. `total` is the same row with the day's pooled
 /// counts in it, drawn bold — the columns are identical on purpose.
-fn usage_row(model: &spend::Row, roomy: bool, total: bool) -> Row<'static> {
+fn usage_row(t: &Theme, model: &spend::Row, roomy: bool, total: bool) -> Row<'static> {
     let charge = model.charge;
     let mut cells = vec![
         Cell::from(Span::styled(
             model.label(),
-            Style::default().fg(if total { GOOD } else { MODEL }),
+            Style::default().fg(if total { t.good } else { t.model }),
         )),
         number(model.requests.to_string()),
         number(human_count(model.prompt)),
@@ -1218,12 +1238,12 @@ fn usage_row(model: &spend::Row, roomy: bool, total: bool) -> Row<'static> {
             if model.unreported == model.requests && model.requests > 0 && !total {
                 // Not a zero: the engine said nothing about its cache, and a dash
                 // is the only honest thing to put in the column.
-                Span::styled("-", Style::default().fg(DIM))
+                Span::styled("-", Style::default().fg(t.dim))
             } else {
                 Span::raw(human_count(model.cached))
             },
         ),
-        number(hit_span(model.hit_rate())),
+        number(hit_span(t, model.hit_rate())),
         number(human_count(model.completion)),
     ];
     if roomy {
@@ -1238,7 +1258,7 @@ fn usage_row(model: &spend::Row, roomy: bool, total: bool) -> Row<'static> {
             .cost()
             .map(dollars)
             .unwrap_or_else(|| "unpriced".to_string()),
-        Style::default().fg(GOOD).add_modifier(Modifier::BOLD),
+        Style::default().fg(t.good).add_modifier(Modifier::BOLD),
     )));
     let row = Row::new(cells);
     if total {
@@ -1258,13 +1278,13 @@ fn number<'a>(content: impl Into<Text<'a>>) -> Cell<'a> {
 
 /// A rate worth reading at a glance: green once half the context is coming off
 /// the cache, because that is the price of the other half.
-fn hit_span(rate: Option<f64>) -> Span<'static> {
+fn hit_span(t: &Theme, rate: Option<f64>) -> Span<'static> {
     match rate {
         Some(rate) => Span::styled(
             format!("{:.1}%", rate * 100.0),
-            Style::default().fg(if rate >= 0.5 { GOOD } else { TIME }),
+            Style::default().fg(if rate >= 0.5 { t.good } else { t.time }),
         ),
-        None => Span::styled("n/a", Style::default().fg(DIM)),
+        None => Span::styled("n/a", Style::default().fg(t.dim)),
     }
 }
 
@@ -1276,36 +1296,43 @@ fn part(amount: Option<f64>) -> String {
 /// What the numbers above are not: written under them, in the order a reader
 /// would ask. A screen full of money has to say whose money, and which part of
 /// it is a floor.
-fn usage_notes(table: &spend::Table) -> Vec<Line<'static>> {
-    let mut notes: Vec<Line<'static>> = spend::notes(table).into_iter().map(note).collect();
+fn usage_notes(t: &Theme, table: &spend::Table) -> Vec<Line<'static>> {
+    let mut notes: Vec<Line<'static>> = spend::notes(table)
+        .into_iter()
+        .map(|text| note(t, text))
+        .collect();
     notes.push(Line::from(vec![
-        Span::styled(" u / esc", Style::default().fg(WIRE)),
+        Span::styled(" u / esc", Style::default().fg(t.accent)),
         Span::styled(
             format!(
                 "  back to the dashboard · re-read every {}s",
                 USAGE_REFRESH.as_secs()
             ),
-            Style::default().fg(DIM),
+            Style::default().fg(t.dim),
         ),
     ]));
     notes
 }
 
-fn note(text: String) -> Line<'static> {
-    Line::from(Span::styled(format!(" {text}"), Style::default().fg(DIM)))
+fn note(t: &Theme, text: String) -> Line<'static> {
+    Line::from(Span::styled(format!(" {text}"), Style::default().fg(t.dim)))
 }
 
 // -------------------------------------------------------------------- charts
 
-fn titled(text: &str) -> Line<'_> {
+fn titled<'a>(t: &Theme, text: &'a str) -> Line<'a> {
     Line::from(vec![
         Span::raw(" "),
-        Span::styled(text, Style::default().fg(DIM).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            text,
+            Style::default().fg(t.dim).add_modifier(Modifier::BOLD),
+        ),
         Span::raw(" "),
     ])
 }
 
 fn draw_charts(frame: &mut Frame, state: &State, area: Rect, mode: Charts) {
+    let t = state.theme;
     let (bars_area, traffic_area) = match mode {
         Charts::SideBySide => {
             let split =
@@ -1332,22 +1359,22 @@ fn draw_charts(frame: &mut Frame, state: &State, area: Rect, mode: Charts) {
             .iter()
             .fold((0, 0), |sum, (raw, wire)| (sum.0 + raw, sum.1 + wire));
         let legend = Line::from(vec![
-            Span::styled(" raw ", Style::default().fg(DIM)),
-            Span::styled("█", Style::default().fg(RAW)),
-            Span::styled(" wire ", Style::default().fg(DIM)),
-            Span::styled("█", Style::default().fg(WIRE)),
+            Span::styled(" raw ", Style::default().fg(t.dim)),
+            Span::styled("█", Style::default().fg(t.raw)),
+            Span::styled(" wire ", Style::default().fg(t.dim)),
+            Span::styled("█", Style::default().fg(t.wire)),
             Span::styled(
                 format!(" {} turns · {} ", samples.len(), ratio(window.0, window.1)),
-                Style::default().fg(DIM),
+                Style::default().fg(t.dim),
             ),
         ]);
         let block = Block::bordered()
-            .title_top(titled("request body / turn"))
+            .title_top(titled(t, "request body / turn"))
             .title_bottom(legend.right_aligned())
-            .border_style(Style::default().fg(DIM));
+            .border_style(Style::default().fg(t.border));
         let inner = block.inner(bars_area);
         frame.render_widget(block, bars_area);
-        frame.render_widget(TwoToneBars::new(&samples, RAW, WIRE), inner);
+        frame.render_widget(TwoToneBars::new(&samples, t.raw, t.wire), inner);
     }
 
     // Socket throughput.
@@ -1355,15 +1382,15 @@ fn draw_charts(frame: &mut Frame, state: &State, area: Rect, mode: Charts) {
         return;
     };
     let block = Block::bordered()
-        .title_top(titled("socket bytes/s"))
+        .title_top(titled(t, "socket bytes/s"))
         .title_bottom(
             Line::from(Span::styled(
                 format!(" {}s buckets · peak ", state.scale),
-                Style::default().fg(DIM),
+                Style::default().fg(t.dim),
             ))
             .right_aligned(),
         )
-        .border_style(Style::default().fg(DIM));
+        .border_style(Style::default().fg(t.border));
     let inner = block.inner(traffic_area);
     frame.render_widget(block, traffic_area);
     if inner.width <= LABEL + 4 || inner.height < 2 {
@@ -1376,8 +1403,8 @@ fn draw_charts(frame: &mut Frame, state: &State, area: Rect, mode: Charts) {
     let halves =
         Layout::vertical([Constraint::Percentage(50), Constraint::Percentage(50)]).split(inner);
     for (half, data, arrow, shade) in [
-        (halves[0], &series.up, "↑ up", WIRE),
-        (halves[1], &series.down, "↓ down", RAW),
+        (halves[0], &series.up, "↑ up", t.wire),
+        (halves[1], &series.down, "↓ down", t.raw),
     ] {
         let peak = data.iter().copied().max().unwrap_or(0);
         let columns =
@@ -1392,7 +1419,7 @@ fn draw_charts(frame: &mut Frame, state: &State, area: Rect, mode: Charts) {
         frame.render_widget(
             Paragraph::new(Line::from(vec![
                 Span::styled(arrow, Style::default().fg(shade)),
-                Span::styled(format!(" {:>7}", human(peak)), Style::default().fg(DIM)),
+                Span::styled(format!(" {:>7}", human(peak)), Style::default().fg(t.dim)),
             ])),
             label,
         );
@@ -1414,10 +1441,10 @@ fn draw_charts(frame: &mut Frame, state: &State, area: Rect, mode: Charts) {
 /// and the full method/path live in the detail popup — which is also where
 /// `POST /v1/completions` is told apart from its chat sibling, whose tail the
 /// abbreviation happens to match.
-fn route(record: &RequestRecord) -> (String, Style) {
+fn route(t: &Theme, record: &RequestRecord) -> (String, Style) {
     let (shown, known) = board::route(&record.method, &record.path);
     let style = if known {
-        Style::default().fg(DIM)
+        Style::default().fg(t.dim)
     } else {
         Style::default().add_modifier(Modifier::BOLD)
     };
@@ -1464,12 +1491,12 @@ impl Fields {
     }
 }
 
-fn request_line(record: &RequestRecord, columns: Columns) -> Line<'static> {
+fn request_line(t: &Theme, record: &RequestRecord, columns: Columns) -> Line<'static> {
     let status_shade = match record.status {
-        status if status < 300 => GOOD,
-        status if status < 400 => WIRE,
-        status if status < 500 => TIME,
-        _ => BAD,
+        status if status < 300 => t.good,
+        status if status < 400 => t.wire,
+        status if status < 500 => t.time,
+        _ => t.bad,
     };
     let mut line = Fields::default();
     for column in COLUMNS
@@ -1477,7 +1504,10 @@ fn request_line(record: &RequestRecord, columns: Columns) -> Line<'static> {
         .filter(|column| columns.contains(*column))
     {
         match column {
-            Column::Time => line.word(Span::styled(record.stamp.clone(), Style::default().fg(DIM))),
+            Column::Time => line.word(Span::styled(
+                record.stamp.clone(),
+                Style::default().fg(t.dim),
+            )),
             Column::Status => line.word(Span::styled(
                 record.status.to_string(),
                 Style::default().fg(status_shade),
@@ -1487,17 +1517,17 @@ fn request_line(record: &RequestRecord, columns: Columns) -> Line<'static> {
             // have said anyway.
             Column::Cut => {
                 if !record.complete {
-                    line.glue(Span::styled("✂", Style::default().fg(TIME)));
+                    line.glue(Span::styled("✂", Style::default().fg(t.time)));
                 }
             }
             Column::Model => {
                 line.word(Span::styled(
                     shown_model(&record.model).to_string(),
-                    Style::default().fg(MODEL),
+                    Style::default().fg(t.model),
                 ));
             }
             Column::Route => {
-                let (route, style) = route(record);
+                let (route, style) = route(t, record);
                 line.word(Span::styled(route, style));
                 // Every turn rides a pooled connection, so reuse needs no
                 // announcing — a line without the mark is a reused one. A
@@ -1506,7 +1536,7 @@ fn request_line(record: &RequestRecord, columns: Columns) -> Line<'static> {
                 // it is ASCII — one byte, one cell in every terminal, unlike
                 // `●`/`•` (East Asian ambiguous width).
                 if record.handshake().is_some() {
-                    line.bare(Span::styled(".", Style::default().fg(TIME)));
+                    line.bare(Span::styled(".", Style::default().fg(t.time)));
                 }
             }
             Column::Sizes => {
@@ -1517,35 +1547,38 @@ fn request_line(record: &RequestRecord, columns: Columns) -> Line<'static> {
                 // claims a negative saving.
                 line.word(Span::styled(
                     human(record.body_len),
-                    Style::default().fg(RAW),
+                    Style::default().fg(t.raw),
                 ));
-                line.glue(Span::styled("→", Style::default().fg(DIM)));
+                line.glue(Span::styled("→", Style::default().fg(t.dim)));
                 line.word(Span::styled(
                     human(record.wire_len),
-                    Style::default().fg(WIRE),
+                    Style::default().fg(t.wire),
                 ));
                 if record.coding != Coding::None {
                     line.word(Span::styled(
                         ratio(record.body_len, record.wire_len),
-                        Style::default().fg(GOOD),
+                        Style::default().fg(t.good),
                     ));
                 }
                 if let Some(upload) = record.upload {
-                    line.word(Span::styled(human_time(upload), Style::default().fg(TIME)));
+                    line.word(Span::styled(
+                        human_time(upload),
+                        Style::default().fg(t.time),
+                    ));
                 }
             }
             Column::Ttfb => {
-                line.word(Span::styled("ttfb", Style::default().fg(DIM)));
+                line.word(Span::styled("ttfb", Style::default().fg(t.dim)));
                 line.word(Span::styled(
                     human_time(record.ttfb),
-                    Style::default().fg(TIME),
+                    Style::default().fg(t.time),
                 ));
             }
             Column::Down => {
-                line.word(Span::styled("down", Style::default().fg(DIM)));
+                line.word(Span::styled("down", Style::default().fg(t.dim)));
                 line.word(Span::styled(
                     human(record.received),
-                    Style::default().fg(RAW),
+                    Style::default().fg(t.raw),
                 ));
                 // The answer and what it crossed a hop as: the same pair the
                 // upload column shows, spaced the same way. The upstream hop
@@ -1553,17 +1586,17 @@ fn request_line(record: &RequestRecord, columns: Columns) -> Line<'static> {
                 // saved; the agent leg when only it was coded. An identity
                 // answer keeps the single size it always had.
                 if let Some(wire) = down_wire(record) {
-                    line.glue(Span::styled("→", Style::default().fg(DIM)));
-                    line.word(Span::styled(human(wire), Style::default().fg(WIRE)));
+                    line.glue(Span::styled("→", Style::default().fg(t.dim)));
+                    line.word(Span::styled(human(wire), Style::default().fg(t.wire)));
                     line.word(Span::styled(
                         ratio(record.received, wire),
-                        Style::default().fg(GOOD),
+                        Style::default().fg(t.good),
                     ));
                 }
                 if let Some(download) = record.download {
                     line.word(Span::styled(
                         human_time(download),
-                        Style::default().fg(TIME),
+                        Style::default().fg(t.time),
                     ));
                 }
             }
@@ -1575,10 +1608,10 @@ fn request_line(record: &RequestRecord, columns: Columns) -> Line<'static> {
                 let Some(usage) = record.usage else {
                     continue;
                 };
-                line.word(Span::styled("tok", Style::default().fg(DIM)));
+                line.word(Span::styled("tok", Style::default().fg(t.dim)));
                 line.word(Span::styled(
                     human_count(usage.prompt),
-                    Style::default().fg(RAW),
+                    Style::default().fg(t.raw),
                 ));
                 // The share of the prompt a prefix cache read instead of
                 // prefilling, glued to the count it is a share of:
@@ -1589,13 +1622,13 @@ fn request_line(record: &RequestRecord, columns: Columns) -> Line<'static> {
                 if let Some(cached) = usage.cached.and_then(|count| share(count, usage.prompt)) {
                     line.glue(Span::styled(
                         format!("({cached} cached)"),
-                        Style::default().fg(DIM),
+                        Style::default().fg(t.dim),
                     ));
                 }
-                line.glue(Span::styled("→", Style::default().fg(DIM)));
+                line.glue(Span::styled("→", Style::default().fg(t.dim)));
                 line.word(Span::styled(
                     human_count(usage.completion),
-                    Style::default().fg(WIRE),
+                    Style::default().fg(t.wire),
                 ));
             }
         }
@@ -1603,14 +1636,14 @@ fn request_line(record: &RequestRecord, columns: Columns) -> Line<'static> {
     Line::from(line.spans)
 }
 
-fn log_line(stamp: &str, level: Level, message: &str) -> Line<'static> {
+fn log_line(t: &Theme, stamp: &str, level: Level, message: &str) -> Line<'static> {
     let shade = match level {
-        Level::Info => Color::Reset,
-        Level::Warning => TIME,
-        Level::Error => BAD,
+        Level::Info => t.text,
+        Level::Warning => t.time,
+        Level::Error => t.bad,
     };
     let mut spans = vec![
-        Span::styled(stamp.to_string(), Style::default().fg(DIM)),
+        Span::styled(stamp.to_string(), Style::default().fg(t.dim)),
         Span::raw(" "),
     ];
     if level >= Level::Warning {
@@ -1627,20 +1660,21 @@ fn log_line(stamp: &str, level: Level, message: &str) -> Line<'static> {
 }
 
 fn events(state: &State, width: u16) -> Paragraph<'static> {
+    let t = state.theme;
     let lines: Vec<Line> = state
         .visible()
         .into_iter()
         .map(|(entry, selected)| {
             let line = match entry {
-                Entry::Request(record) => request_line(record, state.columns),
+                Entry::Request(record) => request_line(t, record, state.columns),
                 Entry::Log {
                     stamp,
                     level,
                     message,
-                } => log_line(stamp, *level, message),
+                } => log_line(t, stamp, *level, message),
             };
             if selected {
-                line.style(Style::default().add_modifier(Modifier::REVERSED))
+                line.style(t.cursor())
             } else {
                 line
             }
@@ -1648,7 +1682,7 @@ fn events(state: &State, width: u16) -> Paragraph<'static> {
         .collect();
 
     let position = if state.follow {
-        Span::styled("FOLLOW", Style::default().fg(GOOD))
+        Span::styled("FOLLOW", Style::default().fg(t.good))
     } else {
         let hidden = state.below();
         let suffix = if hidden > 0 {
@@ -1656,7 +1690,7 @@ fn events(state: &State, width: u16) -> Paragraph<'static> {
         } else {
             String::new()
         };
-        Span::styled(format!("PAUSED{suffix}"), Style::default().fg(TIME))
+        Span::styled(format!("PAUSED{suffix}"), Style::default().fg(t.time))
     };
     let status = Line::from(vec![
         Span::raw(" "),
@@ -1667,12 +1701,12 @@ fn events(state: &State, width: u16) -> Paragraph<'static> {
                 state.len(),
                 state.filter.label()
             ),
-            Style::default().fg(DIM),
+            Style::default().fg(t.dim),
         ),
     ]);
     let block = Block::bordered()
-        .title_top(titled("events"))
-        .border_style(Style::default().fg(DIM));
+        .title_top(titled(t, "events"))
+        .border_style(Style::default().fg(t.border));
     // A narrow pane has no room for both titles.
     let block = if width > 60 {
         block.title_top(status.right_aligned())
@@ -1683,11 +1717,12 @@ fn events(state: &State, width: u16) -> Paragraph<'static> {
 }
 
 fn footer(state: &State) -> Paragraph<'static> {
+    let t = state.theme;
     if let Some(remote) = &state.remote
         && !remote.connected
     {
         return Paragraph::new(format!(" q close · {}", remote.message))
-            .style(Style::default().fg(TIME));
+            .style(Style::default().fg(t.time));
     }
     if state.confirm_quit {
         return Paragraph::new(Line::from(Span::styled(
@@ -1695,7 +1730,7 @@ fn footer(state: &State) -> Paragraph<'static> {
                 " {} request(s) still streaming — press q again to cut them off, f to see them ",
                 state.totals.in_flight
             ),
-            Style::default().fg(BAD).add_modifier(Modifier::BOLD),
+            Style::default().fg(t.bad).add_modifier(Modifier::BOLD),
         )));
     }
     let keys = [
@@ -1713,8 +1748,11 @@ fn footer(state: &State) -> Paragraph<'static> {
     ];
     let mut spans = vec![Span::raw(" ")];
     for (key, what) in keys {
-        spans.push(Span::styled(key, Style::default().fg(WIRE)));
-        spans.push(Span::styled(format!(" {what}  "), Style::default().fg(DIM)));
+        spans.push(Span::styled(key, Style::default().fg(t.accent)));
+        spans.push(Span::styled(
+            format!(" {what}  "),
+            Style::default().fg(t.dim),
+        ));
     }
     Paragraph::new(Line::from(spans))
 }
@@ -1722,6 +1760,7 @@ fn footer(state: &State) -> Paragraph<'static> {
 /// The picker: every column, on or off, with the one under the cursor
 /// reversed the way a selected line is.
 fn column_lines(state: &State) -> Vec<Line<'static>> {
+    let t = state.theme;
     let mut lines: Vec<Line<'static>> = COLUMNS
         .into_iter()
         .enumerate()
@@ -1730,20 +1769,20 @@ fn column_lines(state: &State) -> Vec<Line<'static>> {
             let line = Line::from(vec![
                 Span::styled(
                     format!(" {} ", if on { '✓' } else { '·' }),
-                    Style::default().fg(if on { GOOD } else { DIM }),
+                    Style::default().fg(if on { t.good } else { t.dim }),
                 ),
                 Span::styled(
                     format!("{:<8}", column.name()),
                     if on {
                         Style::default().add_modifier(Modifier::BOLD)
                     } else {
-                        Style::default().fg(DIM)
+                        Style::default().fg(t.dim)
                     },
                 ),
-                Span::styled(column.note(), Style::default().fg(DIM)),
+                Span::styled(column.note(), Style::default().fg(t.dim)),
             ]);
             if at == state.picker_at {
-                line.style(Style::default().add_modifier(Modifier::REVERSED))
+                line.style(t.cursor())
             } else {
                 line
             }
@@ -1751,14 +1790,14 @@ fn column_lines(state: &State) -> Vec<Line<'static>> {
         .collect();
     lines.push(Line::from(Span::styled(
         " space/↵ toggle · esc close (kept for the next run)",
-        Style::default().fg(DIM),
+        Style::default().fg(t.dim),
     )));
     lines
 }
 
 // -------------------------------------------------------------------- popups
 
-fn popup(frame: &mut Frame, area: Rect, title: &str, lines: Vec<Line<'static>>) {
+fn popup(t: &Theme, frame: &mut Frame, area: Rect, title: &str, lines: Vec<Line<'static>>) {
     let width = area.width.clamp(MIN_WIDTH, 72.max(MIN_WIDTH));
     let height = (lines.len() as u16 + 2).min(area.height);
     let box_area = Rect {
@@ -1768,37 +1807,41 @@ fn popup(frame: &mut Frame, area: Rect, title: &str, lines: Vec<Line<'static>>) 
         height,
     };
     let block = Block::bordered()
-        .title_top(titled(title))
-        .border_style(Style::default().fg(WIRE));
+        .title_top(titled(t, title))
+        .border_style(Style::default().fg(t.accent))
+        .style(Style::default().fg(t.text).bg(t.raised));
     frame.render_widget(Clear, box_area);
     frame.render_widget(Paragraph::new(lines).block(block), box_area);
 }
 
-fn field(name: &str, value: String) -> Line<'static> {
+fn field(t: &Theme, name: &str, value: String) -> Line<'static> {
     Line::from(vec![
-        Span::styled(format!(" {name:<16}"), Style::default().fg(DIM)),
+        Span::styled(format!(" {name:<16}"), Style::default().fg(t.dim)),
         Span::raw(value),
     ])
 }
 
-fn detail_lines(record: &RequestRecord) -> Vec<Line<'static>> {
+fn detail_lines(t: &Theme, record: &RequestRecord) -> Vec<Line<'static>> {
     let optional = |value: Option<f64>| {
         value
             .map(human_time)
             .unwrap_or_else(|| "not measured".to_string())
     };
     vec![
-        field("when", record.stamp.clone()),
-        field("upstream", record.upstream.clone()),
+        field(t, "when", record.stamp.clone()),
+        field(t, "upstream", record.upstream.clone()),
         field(
+            t,
             "model",
             spend::label(shown_model(&record.model), record.tier.as_deref()),
         ),
         field(
+            t,
             "request",
             format!("{} {} -> {}", record.method, record.path, record.status),
         ),
         field(
+            t,
             "connection",
             match record.handshake() {
                 None => "reused from the pool".to_string(),
@@ -1812,6 +1855,7 @@ fn detail_lines(record: &RequestRecord) -> Vec<Line<'static>> {
             },
         ),
         field(
+            t,
             "upload",
             format!(
                 "{} -> {} ({}, {})",
@@ -1821,9 +1865,10 @@ fn detail_lines(record: &RequestRecord) -> Vec<Line<'static>> {
                 ratio(record.body_len, record.wire_len),
             ),
         ),
-        field("upload acked in", optional(record.upload)),
-        field("ttfb", human_time(record.ttfb)),
+        field(t, "upload acked in", optional(record.upload)),
+        field(t, "ttfb", human_time(record.ttfb)),
         field(
+            t,
             "download",
             format!(
                 "{} on the wire -> {} decoded ({}{}){}",
@@ -1846,8 +1891,9 @@ fn detail_lines(record: &RequestRecord) -> Vec<Line<'static>> {
                 },
             ),
         ),
-        field("download took", optional(record.download)),
+        field(t, "download took", optional(record.download)),
         field(
+            t,
             "tokens",
             match record.usage {
                 None => "not reported".to_string(),
@@ -1867,6 +1913,7 @@ fn detail_lines(record: &RequestRecord) -> Vec<Line<'static>> {
             },
         ),
         field(
+            t,
             "ended",
             if record.complete {
                 "upstream body finished".to_string()
@@ -1877,7 +1924,7 @@ fn detail_lines(record: &RequestRecord) -> Vec<Line<'static>> {
     ]
 }
 
-fn help_lines() -> Vec<Line<'static>> {
+fn help_lines(t: &Theme) -> Vec<Line<'static>> {
     [
         ("q / ctrl-c", "quit (confirms while a stream is live)"),
         ("j / ↓ / k / ↑", "move the cursor, wheel scrolls too"),
@@ -1895,7 +1942,7 @@ fn help_lines() -> Vec<Line<'static>> {
     .into_iter()
     .map(|(key, what)| {
         Line::from(vec![
-            Span::styled(format!(" {key:<16}"), Style::default().fg(WIRE)),
+            Span::styled(format!(" {key:<16}"), Style::default().fg(t.accent)),
             Span::raw(what),
         ])
     })
@@ -1907,6 +1954,7 @@ mod tests {
     use super::*;
     use crate::forwarder::{CompressionIssue, StatsView};
     use crate::telemetry::Event;
+    use crate::tui::theme::TERMINAL;
     use crate::usage::Usage;
     use crate::watch;
     use ratatui::Terminal;
@@ -2171,13 +2219,13 @@ mod tests {
                 && (top % 80..=bottom % 80).contains(&(index % 80));
             if !inside {
                 assert_eq!(cell.symbol(), dashboard.content()[index].symbol());
-                assert_eq!(cell.fg, DIM);
+                assert_eq!(cell.fg, TERMINAL.border);
                 assert_eq!(cell.bg, Color::Reset);
                 assert!(cell.modifier.is_empty());
             }
         }
-        assert!(overlay.content().iter().any(|c| c.fg == MODEL));
-        assert_eq!(overlay.content()[top + 2].fg, WIRE);
+        assert!(overlay.content().iter().any(|c| c.fg == TERMINAL.model));
+        assert_eq!(overlay.content()[top + 2].fg, TERMINAL.accent);
         assert!(overlay.content()[top + 2].modifier.contains(Modifier::BOLD));
         state.flights_open = false;
         terminal
@@ -2344,9 +2392,9 @@ mod tests {
         let flight = registry.begin("alpha", "", &http::Method::GET, "/v1/models", 0);
         let mut view = flight.view();
         view.age = 30.0;
-        assert_eq!(flight_phase(&view).0, "prefill");
+        assert_eq!(flight_phase(&TERMINAL, &view).0, "prefill");
         view.age = 30.1;
-        assert_eq!(flight_phase(&view).0, "slow prefill");
+        assert_eq!(flight_phase(&TERMINAL, &view).0, "slow prefill");
         let mut state = State::new();
         state.flights.push(view.clone());
         state.totals.in_flight = 1;
@@ -2361,11 +2409,11 @@ mod tests {
 
         view.phase = Phase::Stream;
         view.idle = 60.0;
-        assert_eq!(flight_phase(&view).0, "stream");
+        assert_eq!(flight_phase(&TERMINAL, &view).0, "stream");
         state.flights = vec![view.clone()];
         assert!(!screen(44, 14, &state).contains("live 1 ("));
         view.idle = 60.1;
-        assert_eq!(flight_phase(&view), ("stalled", BAD));
+        assert_eq!(flight_phase(&TERMINAL, &view), ("stalled", TERMINAL.bad));
         state.flights = vec![view.clone()];
         state.flights_open = true;
         assert!(dialog(&screen(44, 14, &state)).contains("stalled"));
@@ -2397,7 +2445,7 @@ mod tests {
 
     /// One popup field's value, whatever the column padding came out as.
     fn field_text(record: &RequestRecord, name: &str) -> String {
-        detail_lines(record)
+        detail_lines(&TERMINAL, record)
             .iter()
             .map(text)
             .find_map(|line| {
@@ -2413,7 +2461,7 @@ mod tests {
     #[test]
     fn the_counts_the_engine_reported_ride_the_line_and_the_popup() {
         let quiet = record("model-zeta", 200);
-        assert!(!text(&request_line(&quiet, Columns::ALL)).contains("tok"));
+        assert!(!text(&request_line(&TERMINAL, &quiet, Columns::ALL)).contains("tok"));
         assert!(
             field_text(&quiet, "tokens") == "not reported",
             "the popup still says what happened"
@@ -2426,7 +2474,7 @@ mod tests {
             completion: 891,
             reasoning: Some(742),
         });
-        let line = text(&request_line(&counted, Columns::ALL));
+        let line = text(&request_line(&TERMINAL, &counted, Columns::ALL));
         assert!(line.ends_with(" tok 18.2K(99% cached)→891"), "{line}");
         assert_eq!(
             field_text(&counted, "tokens"),
@@ -2442,7 +2490,7 @@ mod tests {
             completion: 891,
             reasoning: None,
         });
-        let line = text(&request_line(&bare, Columns::ALL));
+        let line = text(&request_line(&TERMINAL, &bare, Columns::ALL));
         assert!(line.ends_with(" tok 18.2K→891"), "{line}");
     }
 
@@ -2972,7 +3020,7 @@ mod tests {
         let out = screen(120, 20, &state);
         assert!(out.contains(label), "{out}");
 
-        let lines: Vec<String> = cost_lines(state.usage.as_ref().unwrap())
+        let lines: Vec<String> = cost_lines(&TERMINAL, state.usage.as_ref().unwrap())
             .iter()
             .map(text)
             .collect();
@@ -3002,7 +3050,7 @@ mod tests {
         );
         // The three sources of a row that is in play, beside what that upstream
         // cost in this window.
-        let lines: Vec<String> = cost_lines(state.usage.as_ref().unwrap())
+        let lines: Vec<String> = cost_lines(&TERMINAL, state.usage.as_ref().unwrap())
             .iter()
             .map(text)
             .collect();
@@ -3149,6 +3197,7 @@ mod tests {
         });
         assert_eq!(
             text(&request_line(
+                &TERMINAL,
                 &record,
                 Columns::parse("time,tokens").unwrap()
             )),
@@ -3157,12 +3206,12 @@ mod tests {
 
         let narrowed = Columns::parse("status,cut,route").unwrap();
         assert_eq!(
-            text(&request_line(&record, narrowed)),
+            text(&request_line(&TERMINAL, &record, narrowed)),
             "200 POST ../completions"
         );
         record.complete = false;
         assert_eq!(
-            text(&request_line(&record, narrowed)),
+            text(&request_line(&TERMINAL, &record, narrowed)),
             "200✂POST ../completions",
             "the mark is one cell, so a cut line is no wider than a whole one"
         );
@@ -3174,12 +3223,19 @@ mod tests {
         fresh.tcp = Some(0.028);
         fresh.tls = Some(0.061);
         assert_eq!(
-            text(&request_line(&fresh, narrowed)),
+            text(&request_line(&TERMINAL, &fresh, narrowed)),
             "200 POST ../completions."
         );
 
         // Everything off is a request too, and an empty line answers it.
-        assert_eq!(text(&request_line(&fresh, Columns::parse("").unwrap())), "");
+        assert_eq!(
+            text(&request_line(
+                &TERMINAL,
+                &fresh,
+                Columns::parse("").unwrap()
+            )),
+            ""
+        );
     }
     /// The web console ports these formatters to JavaScript; one fixture,
     /// asserted on both sides, keeps the two printing the same text.

@@ -24,6 +24,7 @@ use crate::logfmt::{self, Level};
 use crate::router::Router;
 use crate::spend;
 use crate::telemetry::{Event, RequestRecord};
+use crate::tui::theme::{TERMINAL, Theme};
 
 /// Event pane backlog. ~10k lines is minutes of a busy agent session and a
 /// couple of MB at worst.
@@ -235,6 +236,8 @@ pub struct State {
     pub picker_at: usize,
     /// What a request line carries.
     pub columns: Columns,
+    /// What everything is drawn in.
+    pub theme: &'static Theme,
     /// Set by the first quit keystroke while requests are still in flight.
     pub confirm_quit: bool,
     pub scale: usize,
@@ -281,6 +284,7 @@ impl State {
             picker: false,
             picker_at: 0,
             columns: Columns::ALL,
+            theme: &TERMINAL,
             confirm_quit: false,
             scale: SCALES[0],
             board: Board::new(),
