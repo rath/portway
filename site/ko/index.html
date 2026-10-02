@@ -47,8 +47,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=Fragment+Mono&display=swap">
-<link rel="stylesheet" href="../style.css?v=245f489f7168">
-<script type="module" src="../main.js?v=a43c79eba2e2"></script>
+<link rel="stylesheet" href="../style.css?v=ff0002b9faa1">
+<script type="module" src="../main.js?v=b8b9b5530beb"></script>
 <script type="module" src="../install.js?v=be55ca0cf537"></script>
 <script type="module" src="../langmenu.js"></script>
 </head>
@@ -150,6 +150,19 @@
       <input id="turn" type="range" min="1" max="40" value="40" step="1">
     </div>
     <p class="turn-note" data-turn-note>40턴: 에이전트가 <b>429,900</b>바이트를 보냈고, 실제로 전송된 것은 <b class="w">1,029</b>바이트입니다.</p>
+  </figure>
+</section>
+
+<section class="chapter screens" id="screens" aria-labelledby="screens-title">
+  <h2 id="screens-title"><span>바이트가 줄어드는 걸</span> <span>화면으로 확인하세요</span></h2>
+  <p>Portway에는 터미널 대시보드(<code>portway --tui</code>)와 브라우저 콘솔(<code>--web</code>)이 들어 있습니다. 요청이 나갈 때마다 에이전트가 보낸 크기, 실제로 전송된 크기, 걸린 시간과 토큰 수를 보여 줍니다. 아래 화면은 실제 Claude Code와 Codex 세션에서 캡처한 것입니다.</p>
+  <figure class="screen" data-screens>
+    <div class="views" role="group" aria-label="화면 선택">
+      <button type="button" data-screen="console" aria-pressed="true">브라우저</button>
+      <button type="button" data-screen="tui" aria-pressed="false">터미널</button>
+    </div>
+    <a class="shot" href="../screens/console.webp" data-shot="console"><img src="../screens/console.webp" width="1120" height="700" alt="브라우저 콘솔: 요청 47건, 204.6 MB(96%) 업로드 절약, 사용 중인 업스트림 표와 턴별 요청 크기 차트"></a>
+    <a class="shot" href="../screens/tui.webp" data-shot="tui" hidden><img loading="lazy" src="../screens/tui.webp" width="1058" height="675" alt="터미널 대시보드: Claude Code의 10.9 MB 요청이 몇 KB로 전송되고, Codex 등 다른 모델과 함께 업로드의 96%가 절약된 모습"></a>
   </figure>
 </section>
 

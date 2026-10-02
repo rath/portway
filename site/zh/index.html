@@ -31,8 +31,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=Fragment+Mono&display=swap">
-<link rel="stylesheet" href="../style.css?v=245f489f7168">
-<script type="module" src="../main.js?v=a43c79eba2e2"></script>
+<link rel="stylesheet" href="../style.css?v=ff0002b9faa1">
+<script type="module" src="../main.js?v=b8b9b5530beb"></script>
 <script type="module" src="../install.js?v=be55ca0cf537"></script>
 <script type="module" src="../langmenu.js"></script>
 </head>
@@ -130,6 +130,19 @@
       <input id="turn" type="range" min="1" max="40" value="40" step="1">
     </div>
     <p class="turn-note" data-turn-note>第 40 轮：智能体发送了 <b>429,900</b> 字节，实际发出的只有 <b class="w">1,029</b> 字节。</p>
+  </figure>
+</section>
+
+<section class="chapter screens" id="screens" aria-labelledby="screens-title">
+  <h2 id="screens-title">在屏幕上看着字节变少</h2>
+  <p>Portway 自带终端面板（<code>portway --tui</code>）和浏览器控制台（<code>--web</code>）。每个请求发出时，两者都会显示智能体发送的大小、实际经过网络的大小，以及耗时和 token 数。下面的画面截自真实的 Claude Code 和 Codex 会话。</p>
+  <figure class="screen" data-screens>
+    <div class="views" role="group" aria-label="切换画面">
+      <button type="button" data-screen="console" aria-pressed="true">浏览器</button>
+      <button type="button" data-screen="tui" aria-pressed="false">终端</button>
+    </div>
+    <a class="shot" href="../screens/console.webp" data-shot="console"><img src="../screens/console.webp" width="1120" height="700" alt="浏览器控制台：47 个请求，节省 204.6 MB（96%）的上传、正在使用的上游表格和每轮请求大小图表"></a>
+    <a class="shot" href="../screens/tui.webp" data-shot="tui" hidden><img loading="lazy" src="../screens/tui.webp" width="1058" height="675" alt="终端面板：Claude Code 的 10.9 MB 请求只以几 KB 发出，与 Codex 等其他模型一起，上传节省 96%"></a>
   </figure>
 </section>
 

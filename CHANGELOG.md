@@ -20,6 +20,9 @@ version may contain breaking changes.
   upstream row without taking a line; one that failed, was cut or was
   redirected is still listed, and the console's `is:catalog` search lists them
   all.
+- The project page shows the browser console and the terminal dashboard on a
+  real Claude Code and Codex session right under its headline, in all four
+  languages.
 
 ## [0.2.3] - 2026-10-02
 

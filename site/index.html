@@ -46,8 +46,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=Fragment+Mono&display=swap">
-<link rel="stylesheet" href="style.css?v=245f489f7168">
-<script type="module" src="main.js?v=a43c79eba2e2"></script>
+<link rel="stylesheet" href="style.css?v=ff0002b9faa1">
+<script type="module" src="main.js?v=b8b9b5530beb"></script>
 <script type="module" src="install.js?v=be55ca0cf537"></script>
 <script type="module" src="langmenu.js"></script>
 </head>
@@ -149,6 +149,19 @@
       <input id="turn" type="range" min="1" max="40" value="40" step="1">
     </div>
     <p class="turn-note" data-turn-note>Turn 40: the agent sent <b>429,900</b> bytes and <b class="w">1,029</b> crossed the wire.</p>
+  </figure>
+</section>
+
+<section class="chapter screens" id="screens" aria-labelledby="screens-title">
+  <h2 id="screens-title">Watch the bytes shrink</h2>
+  <p>Portway comes with a terminal dashboard (<code>portway --tui</code>) and a browser console (<code>--web</code>). Both show each request as it leaves: what the agent sent, what crossed the network, how long it took and how many tokens it carried. These screens were captured from a real Claude Code and Codex session.</p>
+  <figure class="screen" data-screens>
+    <div class="views" role="group" aria-label="Screen">
+      <button type="button" data-screen="console" aria-pressed="true">Browser</button>
+      <button type="button" data-screen="tui" aria-pressed="false">Terminal</button>
+    </div>
+    <a class="shot" href="screens/console.webp" data-shot="console"><img src="screens/console.webp" width="1120" height="700" alt="The browser console: 47 requests, 204.6 MB (96 percent) of upload saved, the upstreams in use and a per-turn request size chart."></a>
+    <a class="shot" href="screens/tui.webp" data-shot="tui" hidden><img loading="lazy" src="screens/tui.webp" width="1058" height="675" alt="The terminal dashboard: Claude Code turns of 10.9 MB sent as a few kilobytes each, beside Codex and other models, with 96 percent of the upload saved."></a>
   </figure>
 </section>
 

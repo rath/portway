@@ -47,8 +47,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=Fragment+Mono&display=swap">
-<link rel="stylesheet" href="../style.css?v=245f489f7168">
-<script type="module" src="../main.js?v=a43c79eba2e2"></script>
+<link rel="stylesheet" href="../style.css?v=ff0002b9faa1">
+<script type="module" src="../main.js?v=b8b9b5530beb"></script>
 <script type="module" src="../install.js?v=be55ca0cf537"></script>
 <script type="module" src="../langmenu.js"></script>
 </head>
@@ -146,6 +146,19 @@
       <input id="turn" type="range" min="1" max="40" value="40" step="1">
     </div>
     <p class="turn-note" data-turn-note>40 ターン目：エージェントは <b>429,900</b> バイトを送信し、回線を通過したのは <b class="w">1,029</b> バイトでした。</p>
+  </figure>
+</section>
+
+<section class="chapter screens" id="screens" aria-labelledby="screens-title">
+  <h2 id="screens-title">バイトが減る様子を、画面で</h2>
+  <p>Portway にはターミナルダッシュボード（<code>portway --tui</code>）とブラウザーコンソール（<code>--web</code>）が付いています。どちらもリクエストが出ていくたびに、エージェントが送ったサイズ、実際に回線を渡ったサイズ、かかった時間とトークン数を表示します。下の画面は実際の Claude Code と Codex のセッションでキャプチャしたものです。</p>
+  <figure class="screen" data-screens>
+    <div class="views" role="group" aria-label="画面の切り替え">
+      <button type="button" data-screen="console" aria-pressed="true">ブラウザー</button>
+      <button type="button" data-screen="tui" aria-pressed="false">ターミナル</button>
+    </div>
+    <a class="shot" href="../screens/console.webp" data-shot="console"><img src="../screens/console.webp" width="1120" height="700" alt="ブラウザーコンソール：リクエスト 47 件、204.6 MB（96%）のアップロード削減、使用中のアップストリーム表とターンごとのリクエストサイズのグラフ"></a>
+    <a class="shot" href="../screens/tui.webp" data-shot="tui" hidden><img loading="lazy" src="../screens/tui.webp" width="1058" height="675" alt="ターミナルダッシュボード：Claude Code の 10.9 MB のリクエストが数 KB で送られ、Codex などほかのモデルと合わせてアップロードの 96% が削減されている"></a>
   </figure>
 </section>
 

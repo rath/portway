@@ -219,3 +219,16 @@ build();
 
 // Show the complete comparison on arrival. Replay is an explicit action so
 // the first viewport explains the result without waiting for an animation.
+
+// The dashboards: one screen at a time, chosen like the graph's view.
+const screens = document.querySelector("[data-screens]");
+if (screens) {
+  const buttons = [...screens.querySelectorAll("[data-screen]")];
+  const shots = [...screens.querySelectorAll("[data-shot]")];
+  for (const button of buttons) {
+    button.addEventListener("click", () => {
+      for (const b of buttons) b.setAttribute("aria-pressed", String(b === button));
+      for (const shot of shots) shot.hidden = shot.dataset.shot !== button.dataset.screen;
+    });
+  }
+}
