@@ -177,12 +177,14 @@ impl Entry {
         }
     }
 
-    /// A model catalog fetch that went through: counted, but not a line.
-    /// One that failed is trouble, and stays.
+    /// A model catalog fetch answered with a 2xx in full: counted, but not a
+    /// line. One that failed, was cut or was redirected stays.
     fn is_quiet(&self) -> bool {
         match self {
             Entry::Request(record) => {
-                board::catalog(&record.method, &record.path) && !self.is_trouble()
+                board::catalog(&record.method, &record.path)
+                    && (200..300).contains(&record.status)
+                    && record.complete
             }
             Entry::Log { .. } => false,
         }

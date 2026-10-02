@@ -203,11 +203,14 @@ test("an upstream nothing has used yet is left out", () => {
 
 test("a catalog fetch is counted, not listed, unless it failed or is asked for", () => {
   const fetch = { method: "GET", path: "/codex/models", route: "GET /codex/models", route_known: false, catalog: true, model: "", upstream: "codex", body_len: 0, wire_len: 0, usage: null };
-  const events = [request(), request({ seq: 4, ...fetch }), request({ seq: 5, ...fetch, status: 503, trouble: true })];
+  const events = [
+    request(), request({ seq: 4, ...fetch }), request({ seq: 5, ...fetch, status: 503, trouble: true }),
+    request({ seq: 6, ...fetch, status: 302 }),
+  ];
   const run = (query) => events.filter(compile(query).test).map((e) => e.seq);
-  assert.deepEqual(run(""), [1, 5]);
-  assert.deepEqual(run("upstream:codex"), [5]);
-  assert.deepEqual(run("is:catalog"), [4, 5]);
+  assert.deepEqual(run(""), [1, 5, 6]);
+  assert.deepEqual(run("upstream:codex"), [5, 6]);
+  assert.deepEqual(run("is:catalog"), [4, 5, 6]);
   assert.deepEqual(run("-is:catalog"), [1]);
 });
 

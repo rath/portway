@@ -168,8 +168,8 @@ export function searchText(event) {
   return text;
 }
 
-/** A model catalog fetch that went through: counted, but not a line. */
-const quiet = (event) => event.catalog === true && !event.trouble;
+/** A model catalog fetch answered with a 2xx in full: counted, but not a line. */
+const quiet = (event) => event.catalog === true && event.status >= 200 && event.status < 300 && event.complete;
 
 /**
  * A query compiled once: `{ test, errors }`. An empty query accepts every

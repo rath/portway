@@ -3426,9 +3426,13 @@ mod tests {
         assert!(!out.contains("/models"), "{out}");
         assert!(out.contains("model-alpha"), "{out}");
 
+        // A redirect is not the catalog either, and stays like a failure.
+        fetch.status = 302;
+        state.push(Event::Request(Arc::new(fetch.clone())));
+        assert_eq!(state.len(), 2);
         fetch.status = 503;
         state.push(Event::Request(Arc::new(fetch)));
-        assert_eq!(state.len(), 2);
+        assert_eq!(state.len(), 3);
         assert!(screen(140, 30, &state).contains("GET /codex/models"));
     }
 
