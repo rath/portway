@@ -30,6 +30,15 @@ version may contain breaking changes.
   tier each client sends and what the estimates leave out, such as cache
   writes.
 
+### Changed
+
+- The terminal dashboard gives savings and cache hits as shares. The upstream
+  table's `saved` cell adds its share of the raw bodies (`942KB (96%)`), and an
+  event line gives the cached part of its prompt as a share of it
+  (`tok 91.2K(92% cached)→891`) instead of a second count; the detail popup
+  keeps the exact count. The wider cell moves the table's download and error
+  columns to 114 columns of terminal and its compression status to 146.
+
 ## [0.2.2] - 2026-10-01
 
 ### Fixed

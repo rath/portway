@@ -556,6 +556,13 @@ fn ratio(raw: u64, wire: u64) -> String {
     format!("-{}%", raw.saturating_sub(wire) * 100 / raw)
 }
 
+/// `part` as a whole percentage of `whole`, truncated like `ratio` so it never
+/// rounds up to a 100% the counts do not reach. `None` when there is no whole
+/// to take a share of.
+fn percent(part: u64, whole: u64) -> Option<u64> {
+    (whole > 0).then(|| part.min(whole) * 100 / whole)
+}
+
 fn stat<'a>(label: &'a str, value: String, shade: Color) -> Vec<Span<'a>> {
     vec![
         Span::styled(label, Style::default().fg(DIM)),
@@ -791,8 +798,8 @@ fn coding_span(coding: Coding, dict: bool) -> Span<'static> {
 
 /// Below this the table sheds columns rather than letting every one of them
 /// shrink until the model names are unreadable.
-const ROOMY_TABLE: u16 = 108;
-const STATUS_TABLE: u16 = 140;
+const ROOMY_TABLE: u16 = 114;
+const STATUS_TABLE: u16 = 146;
 
 fn models_table(state: &State, width: u16) -> Table<'_> {
     let roomy = width >= ROOMY_TABLE;
@@ -811,6 +818,7 @@ fn models_table(state: &State, width: u16) -> Table<'_> {
     let rows = models.into_iter().map(|row| {
         let view = &row.view;
         let errors = view.upstream_errors;
+        let saved = view.saved_bytes().max(0) as u64;
         let mut cells = vec![
             Cell::from(Span::styled(row.name.clone(), Style::default().fg(MODEL))),
             Cell::from(coding_span(view.coding, view.dict)),
@@ -831,8 +839,13 @@ fn models_table(state: &State, width: u16) -> Table<'_> {
                 human(view.wire_bytes),
                 Style::default().fg(WIRE),
             )),
+            // The saving and what share of the raw bodies it is: `879KB (96%)`.
+            // A route that carried no body has no share to give.
             Cell::from(Span::styled(
-                human(view.saved_bytes().max(0) as u64),
+                match percent(saved, view.body_bytes) {
+                    Some(share) => format!("{} ({share}%)", human(saved)),
+                    None => human(saved),
+                },
                 Style::default().fg(GOOD),
             )),
         ];
@@ -878,7 +891,7 @@ fn models_table(state: &State, width: u16) -> Table<'_> {
         Constraint::Length(5),
         Constraint::Length(8),
         Constraint::Length(8),
-        Constraint::Length(8),
+        Constraint::Length(14),
     ];
     if roomy {
         widths.extend([
@@ -1554,14 +1567,18 @@ fn request_line(record: &RequestRecord, columns: Columns) -> Line<'static> {
                     human_count(usage.prompt),
                     Style::default().fg(RAW),
                 ));
-                // The part of the prompt a prefix cache read instead of
-                // prefilling, glued to the count it came out of. Spelled out
-                // like the log line's: 91.2K(91.1K) leaves a reader guessing at
-                // what the parentheses hold. An engine that reported counts
-                // without the breakdown gets none at all.
-                if let Some(cached) = usage.cached {
+                // The share of the prompt a prefix cache read instead of
+                // prefilling, glued to the count it is a share of:
+                // 91.2K(99% cached) says at a glance what 91.2K(91.1K cached)
+                // leaves to arithmetic. The popup keeps the exact count. An
+                // engine that reported counts without the breakdown gets none
+                // at all.
+                if let Some(share) = usage
+                    .cached
+                    .and_then(|cached| percent(cached, usage.prompt))
+                {
                     line.glue(Span::styled(
-                        format!("({} cached)", human_count(cached)),
+                        format!("({share}% cached)"),
                         Style::default().fg(DIM),
                     ));
                 }
@@ -2400,7 +2417,7 @@ mod tests {
             reasoning: Some(742),
         });
         let line = text(&request_line(&counted, Columns::ALL));
-        assert!(line.ends_with(" tok 18.2K(18.2K cached)→891"), "{line}");
+        assert!(line.ends_with(" tok 18.2K(99% cached)→891"), "{line}");
         assert_eq!(
             field_text(&counted, "tokens"),
             "18234 in (18200 cached) -> 891 out (742 reasoning)"
@@ -2529,6 +2546,43 @@ mod tests {
             .find(|line| line.starts_with("│ codex"))
             .expect("the codex row");
         assert!(row.contains("879KB"), "900,000 bytes saved:\n{wide}");
+    }
+
+    /// The saved cell says what share of the raw bodies the saving is, on the
+    /// narrowest table that still has the column; a route that carried no body
+    /// has no share to give.
+    #[test]
+    fn the_saved_cell_gives_its_share_of_the_raw_bodies() {
+        let mut state = State::new();
+        state.models = vec![
+            crate::tui::state::ModelRow {
+                name: "codex".into(),
+                view: StatsView {
+                    requests: 1,
+                    body_bytes: 1_000_000,
+                    wire_bytes: 35_000,
+                    ..StatsView::default()
+                },
+            },
+            crate::tui::state::ModelRow {
+                name: "catalog".into(),
+                view: StatsView {
+                    requests: 1,
+                    ..StatsView::default()
+                },
+            },
+        ];
+        let out = screen(78, 44, &state);
+        let cells = |name: &str| {
+            out.lines()
+                .find(|line| line.starts_with(&format!("│ {name} ")))
+                .unwrap_or_else(|| panic!("the {name} row:\n{out}"))
+                .trim_end_matches(['│', ' '])
+                .to_string()
+        };
+        // 965,000 of 1,000,000 bytes: 96.5%, truncated.
+        assert!(cells("codex").ends_with(" 942KB (96%)"), "{out}");
+        assert!(cells("catalog").ends_with(" 0B"), "{out}");
     }
 
     #[test]
@@ -2986,6 +3040,11 @@ mod tests {
         // An incompressible body can come back bigger; the bar is clamped, so
         // the label must not claim a negative saving.
         assert_eq!(ratio(100, 200), "-0%");
+        assert_eq!(percent(0, 0), None);
+        assert_eq!(percent(965, 1000), Some(96));
+        assert_eq!(percent(18_234, 18_234), Some(100));
+        // A count past its whole is a share of all of it, not more.
+        assert_eq!(percent(200, 100), Some(100));
     }
 
     /// The dashboard watching a forwarder it did not start: the model table is
@@ -3083,7 +3142,7 @@ mod tests {
                 &record,
                 Columns::parse("time,tokens").unwrap()
             )),
-            "23:41:02 tok 18.2K(18.2K cached)→891"
+            "23:41:02 tok 18.2K(99% cached)→891"
         );
 
         let narrowed = Columns::parse("status,cut,route").unwrap();
