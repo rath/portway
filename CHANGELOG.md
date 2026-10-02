@@ -32,12 +32,14 @@ version may contain breaking changes.
 
 ### Changed
 
-- The terminal dashboard gives savings and cache hits as shares. The upstream
-  table's `saved` cell adds its share of the raw bodies (`942KB (96%)`), and an
+- The terminal dashboard prints savings and cache hits at a glance. The
+  upstream table's `saved` cell adds the ratio the HUD prints
+  (`15.9MB (-96%)`), its sizes are right-aligned under their headings, and an
   event line gives the cached part of its prompt as a share of it
   (`tok 91.2K(92% cached)→891`) instead of a second count; the detail popup
-  keeps the exact count. The wider cell moves the table's download and error
-  columns to 114 columns of terminal and its compression status to 146.
+  keeps the exact count. The table needs 114 columns of terminal for its
+  download and error cells and 146 for its compression status, six more than
+  before.
 
 ## [0.2.2] - 2026-10-01
 

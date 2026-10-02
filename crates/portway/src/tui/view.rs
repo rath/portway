@@ -556,11 +556,11 @@ fn ratio(raw: u64, wire: u64) -> String {
     format!("-{}%", raw.saturating_sub(wire) * 100 / raw)
 }
 
-/// `part` as a whole percentage of `whole`, truncated like `ratio` so it never
-/// rounds up to a 100% the counts do not reach. `None` when there is no whole
-/// to take a share of.
-fn percent(part: u64, whole: u64) -> Option<u64> {
-    (whole > 0).then(|| part.min(whole) * 100 / whole)
+/// `part` as a whole percentage of `whole`, `92%`: truncated like `ratio`, so
+/// it never rounds up to a 100% the counts do not reach. `None` when there is
+/// no whole to take a share of.
+fn share(part: u64, whole: u64) -> Option<String> {
+    (whole > 0).then(|| format!("{}%", part.min(whole) * 100 / whole))
 }
 
 fn stat<'a>(label: &'a str, value: String, shade: Color) -> Vec<Span<'a>> {
@@ -801,6 +801,9 @@ fn coding_span(coding: Coding, dict: bool) -> Span<'static> {
 const ROOMY_TABLE: u16 = 114;
 const STATUS_TABLE: u16 = 146;
 
+/// The upstream table's byte columns, drawn right-aligned.
+const SIZE_COLUMNS: [&str; 5] = ["raw", "wire", "saved", "down", "↓ saved"];
+
 fn models_table(state: &State, width: u16) -> Table<'_> {
     let roomy = width >= ROOMY_TABLE;
     let show_status = width >= STATUS_TABLE;
@@ -811,7 +814,16 @@ fn models_table(state: &State, width: u16) -> Table<'_> {
     if show_status {
         names.push("compression status");
     }
-    let header = Row::new(names).style(Style::default().fg(DIM));
+    // Sizes are right-aligned, headings with them: a column of them is read
+    // by its last digit, as the usage table's money is.
+    let header = Row::new(names.into_iter().map(|name| {
+        if SIZE_COLUMNS.contains(&name) {
+            number(name)
+        } else {
+            Cell::from(name)
+        }
+    }))
+    .style(Style::default().fg(DIM));
 
     let models = state.recent_models();
     let title = format!("recent upstreams · {}/{}", models.len(), state.models.len());
@@ -831,31 +843,32 @@ fn models_table(state: &State, width: u16) -> Table<'_> {
                 },
                 Style::default().fg(if view.in_flight > 0 { GOOD } else { DIM }),
             )),
-            Cell::from(Span::styled(
+            number(Span::styled(
                 human(view.body_bytes),
                 Style::default().fg(RAW),
             )),
-            Cell::from(Span::styled(
+            number(Span::styled(
                 human(view.wire_bytes),
                 Style::default().fg(WIRE),
             )),
-            // The saving and what share of the raw bodies it is: `879KB (96%)`.
-            // A route that carried no body has no share to give.
-            Cell::from(Span::styled(
-                match percent(saved, view.body_bytes) {
-                    Some(share) => format!("{} ({share}%)", human(saved)),
-                    None => human(saved),
-                },
+            // The saving with the ratio it came out of, as the HUD's upload
+            // row prints it: `879KB (-96%)`.
+            number(Span::styled(
+                format!(
+                    "{} ({})",
+                    human(saved),
+                    ratio(view.body_bytes, view.wire_bytes)
+                ),
                 Style::default().fg(GOOD),
             )),
         ];
         if roomy {
             cells.extend([
-                Cell::from(Span::styled(
+                number(Span::styled(
                     human(view.down_bytes),
                     Style::default().fg(RAW),
                 )),
-                Cell::from(Span::styled(
+                number(Span::styled(
                     human(view.down_saved_bytes().max(0) as u64),
                     Style::default().fg(GOOD),
                 )),
@@ -888,10 +901,10 @@ fn models_table(state: &State, width: u16) -> Table<'_> {
         Constraint::Length(20),
         Constraint::Length(8),
         Constraint::Length(6),
-        Constraint::Length(5),
+        Constraint::Length(4),
         Constraint::Length(8),
         Constraint::Length(8),
-        Constraint::Length(14),
+        Constraint::Length(15),
     ];
     if roomy {
         widths.extend([
@@ -1573,12 +1586,9 @@ fn request_line(record: &RequestRecord, columns: Columns) -> Line<'static> {
                 // leaves to arithmetic. The popup keeps the exact count. An
                 // engine that reported counts without the breakdown gets none
                 // at all.
-                if let Some(share) = usage
-                    .cached
-                    .and_then(|cached| percent(cached, usage.prompt))
-                {
+                if let Some(cached) = usage.cached.and_then(|count| share(count, usage.prompt)) {
                     line.glue(Span::styled(
-                        format!("({share}% cached)"),
+                        format!("({cached} cached)"),
                         Style::default().fg(DIM),
                     ));
                 }
@@ -2548,11 +2558,11 @@ mod tests {
         assert!(row.contains("879KB"), "900,000 bytes saved:\n{wide}");
     }
 
-    /// The saved cell says what share of the raw bodies the saving is, on the
-    /// narrowest table that still has the column; a route that carried no body
-    /// has no share to give.
+    /// On the narrowest table that still has them, the sizes line up on the
+    /// right under their headings, and the saved cell carries the ratio the
+    /// HUD's upload row prints; a route that carried no body has none to give.
     #[test]
-    fn the_saved_cell_gives_its_share_of_the_raw_bodies() {
+    fn the_sizes_line_up_on_the_right_and_the_saving_gives_its_ratio() {
         let mut state = State::new();
         state.models = vec![
             crate::tui::state::ModelRow {
@@ -2581,8 +2591,13 @@ mod tests {
                 .to_string()
         };
         // 965,000 of 1,000,000 bytes: 96.5%, truncated.
-        assert!(cells("codex").ends_with(" 942KB (96%)"), "{out}");
-        assert!(cells("catalog").ends_with(" 0B"), "{out}");
+        assert!(cells("codex").ends_with(" 942KB (-96%)"), "{out}");
+        assert!(cells("catalog").ends_with(" 0B (-)"), "{out}");
+        let header = table_header(&out);
+        let end = |line: &str, text: &str| line.find(text).map(|at| at + text.len());
+        assert_eq!(end(&cells("codex"), "977KB"), end(&header, "raw"), "{out}");
+        assert_eq!(end(&cells("codex"), "34KB"), end(&header, "wire"), "{out}");
+        assert_eq!(cells("codex").len(), header.len(), "{out}");
     }
 
     #[test]
@@ -3040,11 +3055,6 @@ mod tests {
         // An incompressible body can come back bigger; the bar is clamped, so
         // the label must not claim a negative saving.
         assert_eq!(ratio(100, 200), "-0%");
-        assert_eq!(percent(0, 0), None);
-        assert_eq!(percent(965, 1000), Some(96));
-        assert_eq!(percent(18_234, 18_234), Some(100));
-        // A count past its whole is a share of all of it, not more.
-        assert_eq!(percent(200, 100), Some(100));
     }
 
     /// The dashboard watching a forwarder it did not start: the model table is
@@ -3205,6 +3215,10 @@ mod tests {
         }
         for case in cases("dollars") {
             assert_eq!(dollars(case[0].as_f64().unwrap()), text(&case));
+        }
+        for case in cases("share") {
+            let pair = (case[0][0].as_u64().unwrap(), case[0][1].as_u64().unwrap());
+            assert_eq!(share(pair.0, pair.1).as_deref(), case[1].as_str());
         }
         for case in cases("label") {
             let (model, tier) = (case[0][0].as_str().unwrap(), case[0][1].as_str());
