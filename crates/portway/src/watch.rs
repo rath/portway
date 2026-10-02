@@ -770,6 +770,7 @@ mod tests {
     #[test]
     fn the_window_lands_a_row_in_its_own_second() {
         let dir = dir("seconds");
+        let start = logfmt::epoch() as u64;
         let recorder = store::spawn(&dir, 0).unwrap();
         recorder.sender().send(record(request("23:41:02"))).unwrap();
         recorder.shutdown();
@@ -778,13 +779,20 @@ mod tests {
         let buckets = reader
             .traffic(logfmt::epoch() - WINDOW.as_secs_f64(), 60)
             .unwrap();
+        let lag = (logfmt::epoch() as u64 - start) as usize;
         assert_eq!(buckets.len(), 60);
         let up: u64 = buckets.iter().map(|(up, _)| up).sum();
         let down: u64 = buckets.iter().map(|(_, down)| down).sum();
         assert_eq!(up, 210_000);
         assert_eq!(down, 98);
-        // The row's second is the last one the window ends on.
-        assert_eq!(buckets.last().copied(), Some((210_000, 98)));
+        // The row's second is the last one the window ends on, or as many
+        // before it as the clock moved on while this test read it back.
+        let at = buckets
+            .iter()
+            .rposition(|bucket| *bucket != (0, 0))
+            .unwrap();
+        assert_eq!(buckets[at], (210_000, 98));
+        assert!(buckets.len() - 1 - at <= lag, "row {at} of 60, {lag}s late");
     }
 
     /// The probe is the whole attach decision: a forwarder answers with the
