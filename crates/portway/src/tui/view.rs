@@ -3407,6 +3407,31 @@ mod tests {
         assert!(chip(state.theme), "the row's own colors");
     }
 
+    /// A catalog fetch counts, but a successful one is not a line: the event
+    /// list is the agent's turns. One that failed is trouble, and shows.
+    #[test]
+    fn a_catalog_fetch_is_counted_but_not_listed() {
+        let mut state = State::new();
+        state.viewport = 4;
+        let mut fetch = record("", 200);
+        fetch.upstream = "codex".to_string();
+        fetch.method = http::Method::GET;
+        fetch.path = "/codex/models".to_string();
+        fetch.body_len = 0;
+        fetch.wire_len = 0;
+        state.push(Event::Request(Arc::new(fetch.clone())));
+        state.push(Event::Request(Arc::new(record("model-alpha", 200))));
+        assert_eq!(state.len(), 1);
+        let out = screen(140, 30, &state);
+        assert!(!out.contains("/models"), "{out}");
+        assert!(out.contains("model-alpha"), "{out}");
+
+        fetch.status = 503;
+        state.push(Event::Request(Arc::new(fetch)));
+        assert_eq!(state.len(), 2);
+        assert!(screen(140, 30, &state).contains("GET /codex/models"));
+    }
+
     /// A theme that paints its own ground paints all of it. A cell left at
     /// `Reset` is the terminal's own color showing through: a dark hole in a
     /// light theme, with whatever text it holds drawn for the other one.

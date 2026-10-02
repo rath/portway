@@ -414,6 +414,16 @@ const KNOWN: [(Method, &str); 6] = [
     (Method::POST, "/responses"),
 ];
 
+/// A model catalog fetch: the bodiless `GET …/models` an agent sends to learn
+/// what it may ask for, which Codex does every time it starts, its reviews
+/// included. It is traffic, and counts as such everywhere, but it is not a
+/// turn: an event list leaves a successful one out, or it would be half
+/// catalog fetches.
+pub fn catalog(method: &Method, path: &str) -> bool {
+    let path = path.split('?').next().unwrap_or(path);
+    method == Method::GET && path.ends_with("/models")
+}
+
 /// How a route is shown: one an agent's turns take as `POST ../messages`,
 /// marked known so it can be drawn quietly, and anything else whole, which is
 /// worth a second look. The query never shows.
@@ -508,6 +518,15 @@ mod tests {
         view.identity_reason = None;
         view.last_probe_ok = Some(false);
         assert_eq!(compression_status(&view), "probe failed; coding kept");
+    }
+
+    #[test]
+    fn a_catalog_fetch_is_a_get_of_models_under_any_mount() {
+        assert!(catalog(&Method::GET, "/codex/models"));
+        assert!(catalog(&Method::GET, "/v1/models?client_version=1"));
+        assert!(!catalog(&Method::POST, "/v1/models"));
+        assert!(!catalog(&Method::GET, "/v1/models/claude-x"));
+        assert!(!catalog(&Method::GET, "/codex/responses"));
     }
 
     #[test]

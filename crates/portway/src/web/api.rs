@@ -50,6 +50,7 @@ fn request(seq: u64, ts: f64, record: &RequestRecord) -> Value {
         "path": record.path.split('?').next().unwrap_or(&record.path),
         "route": route,
         "route_known": known,
+        "catalog": board::catalog(&record.method, &record.path),
         "status": record.status,
         "dns": record.dns,
         "tcp": record.tcp,

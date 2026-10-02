@@ -12,6 +12,12 @@ version may contain breaking changes.
 - The browser console's upstream table, its filters and the `m` key leave out
   routes nothing has used yet, as the terminal dashboard's table does, and the
   table says how many it left out. A route joins them with its first request.
+- Model catalog fetches are counted but no longer listed. Codex sends a
+  bodiless `GET …/models` every time it starts, its reviews included, so the
+  event lists of both dashboards were up to half catalog fetches. A
+  successful one now counts in every total and upstream row without taking a
+  line; one that failed is still listed as trouble, and the console's
+  `is:catalog` search lists them all.
 
 ## [0.2.3] - 2026-10-02
 

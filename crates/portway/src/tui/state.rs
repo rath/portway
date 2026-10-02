@@ -15,10 +15,10 @@ use std::time::{Duration, Instant};
 
 use std::ops::{Deref, DerefMut};
 
+use crate::board::{self, Board, push_capped};
 pub use crate::board::{
     BARS, ModelRow, SAMPLES, SCALES, Series, TRAFFIC_SECONDS, Totals, Traffic, mean, percentile,
 };
-use crate::board::{Board, push_capped};
 use crate::flights::FlightView;
 use crate::logfmt::{self, Level};
 use crate::router::Router;
@@ -176,6 +176,17 @@ impl Entry {
             Entry::Log { .. } => None,
         }
     }
+
+    /// A model catalog fetch that went through: counted, but not a line.
+    /// One that failed is trouble, and stays.
+    fn is_quiet(&self) -> bool {
+        match self {
+            Entry::Request(record) => {
+                board::catalog(&record.method, &record.path) && !self.is_trouble()
+            }
+            Entry::Log { .. } => false,
+        }
+    }
 }
 
 /// Entries carry a monotonic sequence number so the viewport can stay anchored
@@ -204,6 +215,9 @@ impl Filter {
     }
 
     fn accepts(&self, entry: &Entry) -> bool {
+        if entry.is_quiet() {
+            return false;
+        }
         match self {
             Filter::All => true,
             Filter::Trouble => entry.is_trouble(),

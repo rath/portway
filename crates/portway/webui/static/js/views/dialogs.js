@@ -98,7 +98,7 @@ const HELP = [
   ["u", "tokens and cost per model, by window (←→ window, p costs)"],
   ["t", "1s / 10s / 60s traffic buckets"],
   ["c", "choose what a request line shows"],
-  ["/", "search: words, -word, \"phrase\", status:5xx, model:, upstream:, route:, is:cut, ttfb:>2s, size:>1MB, tok:>50K"],
+  ["/", "search: words, -word, \"phrase\", status:5xx, model:, upstream:, route:, is:cut, is:catalog, ttfb:>2s, size:>1MB, tok:>50K"],
   ["H · I · A", "history · insights · appearance"],
   ["r", "reload the configuration"],
   ["⌘K / Ctrl-K", "every command, including every theme"],

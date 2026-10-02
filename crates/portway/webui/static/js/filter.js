@@ -10,6 +10,8 @@
 //   route:chat     method + path (substring)
 //   level:warning  log level, WARNING and up with level:>=warning
 //   is:cut is:trouble is:log is:request is:fresh is:reused is:coded
+//   is:catalog     model catalog fetches (GET …/models), which are otherwise
+//                  left out unless they failed (board::catalog)
 //   ttfb:>2s  size:>1MB  down:>10KB  tok:>50K   compare a number
 
 import { lineText, requestLine, logLine, ALL_COLUMNS } from "./eventline.js";
@@ -121,7 +123,8 @@ function term({ text, phrase }) {
           case "fresh": return request((event) => event.handshake != null);
           case "reused": return request((event) => event.reused);
           case "coded": return request((event) => event.coding != null);
-          default: return `is: wants cut, trouble, log, request, fresh, reused or coded, not "${value}"`;
+          case "catalog": return request((event) => event.catalog === true);
+          default: return `is: wants cut, trouble, log, request, fresh, reused, coded or catalog, not "${value}"`;
         }
       case "ttfb": {
         const limit = seconds(value);
@@ -165,22 +168,32 @@ export function searchText(event) {
   return text;
 }
 
+/** A model catalog fetch that went through: counted, but not a line. */
+const quiet = (event) => event.catalog === true && !event.trouble;
+
 /**
- * A query compiled once: `{ test, errors }`. An empty query accepts
- * everything; a malformed term is reported and left out.
+ * A query compiled once: `{ test, errors }`. An empty query accepts every
+ * line, which leaves out a successful catalog fetch unless the query asks for
+ * `is:catalog`; a malformed term is reported and left out.
  */
 export function compile(query) {
   const errors = [];
   const tests = [];
+  let catalog = false;
   for (const parsed of tokenize(query || "")) {
     const predicate = term(parsed);
     if (typeof predicate === "string") {
       errors.push(predicate);
       continue;
     }
+    if (!parsed.negated && parsed.text.toLowerCase() === "is:catalog") catalog = true;
     tests.push(parsed.negated ? (event) => !predicate(event) : predicate);
   }
-  return { test: (event) => tests.every((predicate) => predicate(event)), errors, empty: tests.length === 0 };
+  return {
+    test: (event) => (catalog || !quiet(event)) && tests.every((predicate) => predicate(event)),
+    errors,
+    empty: tests.length === 0,
+  };
 }
 
 /** The TUI's cycle filter: "all", "trouble", or an upstream's name. */

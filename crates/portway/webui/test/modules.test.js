@@ -201,6 +201,16 @@ test("an upstream nothing has used yet is left out", () => {
   assert.deepEqual(inUse([]), []);
 });
 
+test("a catalog fetch is counted, not listed, unless it failed or is asked for", () => {
+  const fetch = { method: "GET", path: "/codex/models", route: "GET /codex/models", route_known: false, catalog: true, model: "", upstream: "codex", body_len: 0, wire_len: 0, usage: null };
+  const events = [request(), request({ seq: 4, ...fetch }), request({ seq: 5, ...fetch, status: 503, trouble: true })];
+  const run = (query) => events.filter(compile(query).test).map((e) => e.seq);
+  assert.deepEqual(run(""), [1, 5]);
+  assert.deepEqual(run("upstream:codex"), [5]);
+  assert.deepEqual(run("is:catalog"), [4, 5]);
+  assert.deepEqual(run("-is:catalog"), [1]);
+});
+
 test("the cycle filter walks all, trouble, then each upstream", () => {
   assert.equal(nextMode("all", ["a", "b"]), "trouble");
   assert.equal(nextMode("trouble", ["a", "b"]), "a");

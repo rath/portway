@@ -711,4 +711,7 @@ setInterval(async () => {
   }
 }, 24 * 60 * 60 * 1000);
 
+// The store starts with the empty query's filter, which already leaves a
+// catalog fetch out, rather than accepting everything until a key is pressed.
+applyFilter();
 boot();
