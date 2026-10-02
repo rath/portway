@@ -57,6 +57,12 @@ version may contain breaking changes.
 - The terminal dashboard's panes and popups have rounded corners, its pane
   titles are drawn in the theme's accent, the header names Portway on a
   badge, and the footer's keys are chips.
+- Claude Code's and Codex's routes read as an agent's turns:
+  `/anthropic/v1/messages` and `/codex/responses`, under any mount, are
+  shortened to `POST ../messages` and `POST ../responses` and drawn quietly in
+  both dashboards, as `/v1/chat/completions` always was. The terminal
+  dashboard draws every route dim; one an agent's turns do not take keeps its
+  full path.
 
 ## [0.2.2] - 2026-10-01
 

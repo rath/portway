@@ -13,6 +13,101 @@ struct Viewer {
     master: File,
     _slave: File,
     screen: Vec<u8>,
+    grid: Grid,
+}
+
+/// What the terminal shows, replayed from what the viewer wrote to it. The
+/// dashboard sends only the cells that changed since its last frame, so a
+/// word it redraws over one in the same style arrives in pieces, around the
+/// letters the two share; a test that waits for text to be drawn reads the
+/// screen, not the stream. It follows what ratatui writes and no more: cursor
+/// moves, clears, line ends and text, ignoring styles and modes.
+struct Grid {
+    rows: Vec<Vec<char>>,
+    row: usize,
+    column: usize,
+    /// The end of the last read: half a character or half an escape.
+    pending: Vec<u8>,
+}
+impl Grid {
+    fn new(rows: usize, columns: usize) -> Self {
+        Self {
+            rows: vec![vec![' '; columns]; rows],
+            row: 0,
+            column: 0,
+            pending: Vec::new(),
+        }
+    }
+    fn feed(&mut self, bytes: &[u8]) {
+        self.pending.extend_from_slice(bytes);
+        let pending = std::mem::take(&mut self.pending);
+        let valid = match std::str::from_utf8(&pending) {
+            Ok(text) => text,
+            Err(error) => std::str::from_utf8(&pending[..error.valid_up_to()]).unwrap(),
+        };
+        let mut chars = valid.char_indices().peekable();
+        while let Some((at, char)) = chars.next() {
+            match char {
+                '\x1b' => {
+                    if chars.peek().map(|(_, next)| *next) != Some('[') {
+                        // A two-character escape, or the start of one cut off.
+                        if chars.next().is_none() {
+                            self.pending = pending[at..].to_vec();
+                            return;
+                        }
+                        continue;
+                    }
+                    chars.next();
+                    let mut params = String::new();
+                    let finished = loop {
+                        match chars.next() {
+                            Some((_, end)) if ('@'..='~').contains(&end) => break Some(end),
+                            Some((_, param)) => params.push(param),
+                            None => break None,
+                        }
+                    };
+                    match finished {
+                        None => {
+                            self.pending = pending[at..].to_vec();
+                            return;
+                        }
+                        Some('H') => {
+                            let mut numbers = params
+                                .split(';')
+                                .map(|number| number.parse::<usize>().unwrap_or(1).max(1) - 1);
+                            self.row = numbers.next().unwrap_or(0);
+                            self.column = numbers.next().unwrap_or(0);
+                        }
+                        Some('J') if params == "2" => {
+                            for row in &mut self.rows {
+                                row.fill(' ');
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                '\r' => self.column = 0,
+                '\n' => self.row += 1,
+                char if char.is_control() => {}
+                char => {
+                    if let Some(cell) = self
+                        .rows
+                        .get_mut(self.row)
+                        .and_then(|row| row.get_mut(self.column))
+                    {
+                        *cell = char;
+                    }
+                    self.column += 1;
+                }
+            }
+        }
+        self.pending = pending[valid.len()..].to_vec();
+    }
+    fn contains(&self, text: &str) -> bool {
+        self.rows
+            .iter()
+            .any(|row| row.iter().collect::<String>().contains(text))
+    }
 }
 impl Viewer {
     fn start(url: &str, dir: &Path) -> Self {
@@ -62,6 +157,7 @@ impl Viewer {
             master,
             _slave: slave,
             screen: Vec::new(),
+            grid: Grid::new(size.ws_row.into(), size.ws_col.into()),
         }
     }
     fn drain(&mut self) {
@@ -69,7 +165,10 @@ impl Viewer {
         loop {
             match self.master.read(&mut bytes) {
                 Ok(0) => break,
-                Ok(n) => self.screen.extend_from_slice(&bytes[..n]),
+                Ok(n) => {
+                    self.screen.extend_from_slice(&bytes[..n]);
+                    self.grid.feed(&bytes[..n]);
+                }
                 Err(error)
                     if matches!(error.kind(), std::io::ErrorKind::WouldBlock)
                         || error.raw_os_error() == Some(libc::EIO) =>
@@ -84,7 +183,7 @@ impl Viewer {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
         loop {
             self.drain();
-            if String::from_utf8_lossy(&self.screen).contains(text) {
+            if String::from_utf8_lossy(&self.screen).contains(text) || self.grid.contains(text) {
                 return;
             }
             assert!(

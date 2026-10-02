@@ -44,7 +44,7 @@ export const CELLS = [
     read: (e) => ({ text: e.method, tone: "dim" }),
   },
   {
-    key: "path", always: true, column: "route", label: "path", cap: 120, note: "the full path; bold when it is not a registered OpenAI route",
+    key: "path", always: true, column: "route", label: "path", cap: 120, note: "the full path; bold when it is not a route an agent's turns take",
     read: (e) => ({ text: e.path, tone: e.route_known ? null : "bold", title: `${e.method} ${e.path}` }),
   },
   {

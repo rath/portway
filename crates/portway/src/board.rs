@@ -403,18 +403,25 @@ pub fn coding_label(coding: Coding, dict: bool) -> String {
     }
 }
 
-/// How a route is shown: the four the forwarder is built for as
-/// `POST ../completions`, marked known so they can be drawn quietly, and
-/// anything else whole, which is worth a second look. The query never shows.
+/// The routes an agent's turns take, by how their paths end: under a mount
+/// (`/anthropic/v1/messages`, `/codex/responses`) as much as at the root.
+const KNOWN: [(Method, &str); 6] = [
+    (Method::POST, "/v1/chat/completions"),
+    (Method::POST, "/v1/completions"),
+    (Method::POST, "/v1/embeddings"),
+    (Method::GET, "/v1/models"),
+    (Method::POST, "/v1/messages"),
+    (Method::POST, "/responses"),
+];
+
+/// How a route is shown: one an agent's turns take as `POST ../messages`,
+/// marked known so it can be drawn quietly, and anything else whole, which is
+/// worth a second look. The query never shows.
 pub fn route(method: &Method, path: &str) -> (String, bool) {
     let path = path.split('?').next().unwrap_or(path);
-    let known = matches!(
-        (method, path),
-        (&Method::POST, "/v1/chat/completions")
-            | (&Method::POST, "/v1/completions")
-            | (&Method::POST, "/v1/embeddings")
-            | (&Method::GET, "/v1/models")
-    );
+    let known = KNOWN
+        .iter()
+        .any(|(known, tail)| known == method && path.ends_with(tail));
     let shown = if known {
         format!("{method} ../{}", path.rsplit('/').next().unwrap_or(path))
     } else {
@@ -512,6 +519,29 @@ mod tests {
         assert_eq!(
             route(&Method::GET, "/health"),
             ("GET /health".to_string(), false)
+        );
+        // An agent's turns through a mount, which is how Claude Code and
+        // Codex arrive.
+        assert_eq!(
+            route(&Method::POST, "/anthropic/v1/messages?beta=true"),
+            ("POST ../messages".to_string(), true)
+        );
+        assert_eq!(
+            route(&Method::POST, "/codex/responses"),
+            ("POST ../responses".to_string(), true)
+        );
+        // A path that only starts like one, or the right path under the wrong
+        // method, is spelled out.
+        assert_eq!(
+            route(&Method::POST, "/anthropic/v1/messages/count_tokens"),
+            (
+                "POST /anthropic/v1/messages/count_tokens".to_string(),
+                false
+            )
+        );
+        assert_eq!(
+            route(&Method::GET, "/codex/responses"),
+            ("GET /codex/responses".to_string(), false)
         );
         assert_eq!(coding_label(Coding::Zstd, true), "zstd+dcz");
         assert_eq!(coding_label(Coding::None, true), "identity");

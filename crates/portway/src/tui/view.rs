@@ -1431,21 +1431,16 @@ fn draw_charts(frame: &mut Frame, state: &State, area: Rect, mode: Charts) {
 
 // -------------------------------------------------------------------- events
 
-/// The route reads abbreviated — `POST ../completions` — so the line still
-/// names where the request went without re-spelling the `/v1/` trunk every
-/// line. The routes an agent's turns share stay dim; anything else keeps its
-/// full path and is bold, because that is the line worth noticing. The query
-/// and the full method/path live in the detail popup — which is also where
-/// `POST /v1/completions` is told apart from its chat sibling, whose tail the
-/// abbreviation happens to match.
-fn route(t: &Theme, record: &RequestRecord) -> (String, Style) {
-    let (shown, known) = board::route(&record.method, &record.path);
-    let style = if known {
-        Style::default().fg(t.dim)
-    } else {
-        Style::default().add_modifier(Modifier::BOLD)
-    };
-    (shown, style)
+/// The route reads abbreviated — `POST ../messages` — so the line still
+/// names where the request went without re-spelling the mount and the `/v1/`
+/// trunk every line; anything an agent's turns do not share keeps its full
+/// path. Either way it is dim: the model beside it already says whose turn it
+/// was. The query and the full method/path live in the detail popup — which
+/// is also where `POST /v1/completions` is told apart from its chat sibling,
+/// whose tail the abbreviation happens to match.
+fn route(t: &Theme, record: &RequestRecord) -> Span<'static> {
+    let (shown, _) = board::route(&record.method, &record.path);
+    Span::styled(shown, Style::default().fg(t.dim))
 }
 
 /// A line built field by field, so a field that is turned off closes the gap
@@ -1524,8 +1519,7 @@ fn request_line(t: &Theme, record: &RequestRecord, columns: Columns) -> Line<'st
                 ));
             }
             Column::Route => {
-                let (route, style) = route(t, record);
-                line.word(Span::styled(route, style));
+                line.word(route(t, record));
                 // Every turn rides a pooled connection, so reuse needs no
                 // announcing — a line without the mark is a reused one. A
                 // fresh dial costs latency and says so with the mark alone;
