@@ -122,7 +122,10 @@ is complete, with its usage, and its connection is pooled. An answer that sends
 more than 1 KiB of itself meanwhile is still generating, and is cancelled at
 once, as is one still open when the grace runs out: both proxy hops drop it and
 close the active upstream HTTP/1.1 connection. Only fully consumed responses
-return a connection to the pool.
+return a connection to the pool. Upstream connections are HTTP/1.1 only, with
+ALPN pinned, because that close is the cancellation signal: an HTTP/2 stream
+cancel would leave the shared connection, and the generation, running (see the
+[FAQ](faq.md#does-it-support-http2-websockets-streaming-uploads-or-inbound-tls)).
 
 Hop-by-hop headers, including those named by `Connection`, are not forwarded.
 Content length and encoding are recomputed after transformations. When the

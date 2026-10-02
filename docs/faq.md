@@ -148,3 +148,26 @@ No. Portway speaks HTTP/1.1, buffers each request body up to a configurable
 limit (256 MiB by default), and streams responses. Terminate TLS and
 authenticate callers in a gateway in front of it. See
 [limits](../README.md#limits-and-verification).
+
+Each of these is a decision rather than a gap:
+
+- **HTTP/2.** The one signal an engine honors when an agent gives up is its
+  connection closing. HTTP/1.1 gives each request its own connection, so
+  dropping the response closes it and the engine stops. HTTP/2 multiplexes
+  requests over a shared connection: cancelling a stream leaves that
+  connection up, and an engine that watches the connection keeps generating
+  to `max_tokens`, every token of it paid for. Portway therefore pins ALPN to
+  `http/1.1` and dials upstreams with an HTTP/1.1 client. The per-connection
+  phase timings (DNS, TCP, TLS, first byte) rest on the same
+  one-request-per-connection rule.
+- **WebSockets and CONNECT.** Both turn the proxy into an opaque byte pipe.
+  Everything Portway does — dictionary compression, usage capture, pricing —
+  needs to read the request and the response, and an open tunnel would also
+  let callers reach arbitrary hosts through it. Vendor LLM APIs are plain
+  request/response with SSE streaming, so nothing is lost; such requests are
+  refused with a 501 rather than passed through.
+- **Streaming uploads.** The dictionary lookup, the compression and the
+  identity replay after a 415 all need the whole body in hand, so uploads are
+  buffered up to the limit rather than streamed.
+- **Inbound TLS.** Certificates and caller authentication belong in one place,
+  the gateway, as [authentication](authentication.md) describes.

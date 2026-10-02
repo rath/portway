@@ -7,8 +7,10 @@
 //! HTTP/1.1 on purpose. hyper's h1 client has no h2 path at all and the TLS
 //! config pins ALPN to `http/1.1`, because an agent abort must *close the
 //! connection* — that disconnect is what stops the engine generating. On a
-//! pooled h2 connection an early close left the engine running to max_tokens
-//! HTTP/1.1 makes cancellation close the request connection.
+//! pooled h2 connection an early close left the engine running to max_tokens,
+//! because only the stream ended while the shared connection stayed up.
+//! HTTP/1.1 gives each request its own connection, so cancelling the request
+//! closes it.
 
 use std::collections::VecDeque;
 use std::io;
