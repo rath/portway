@@ -21,6 +21,9 @@ version may contain breaking changes.
   (`model · tier`), and a tier without rates stays unpriced instead of being
   billed at the standard rates. Embedders: `Forwarder::handle_scoped` takes a
   `router::Named` in place of the model, and `RequestRecord` gains `tier`.
+- `docs/prices.md`: OpenAI's and Anthropic's published list prices as
+  `[prices]` tables to copy, with the tier each client sends and what the
+  estimates leave out, such as OpenAI's long-context rates.
 
 ## [0.2.2] - 2026-10-01
 

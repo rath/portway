@@ -132,13 +132,20 @@ and [authentication](authentication.md#receivers-and-dictionary-isolation).
 ## Prices and what you will see
 
 Prices are keyed by the model names the clients send, whatever mount the
-request went through:
+request went through, and by the tier each request names.
+[Vendor prices](prices.md) has both vendors' list prices as tables to copy,
+fast and ultrafast tiers included:
 
 ```toml
 [prices."claude-opus-5-5"]
-input = 5.0
-output = 25.0
-cache_read = 0.5
+input = 4.0
+output = 20.0
+cache_read = 0.2
+
+[prices."claude-opus-5-5".tiers.fast]
+input = 8.0
+output = 40.0
+cache_read = 0.4
 ```
 
 The dashboards list `anthropic` and `codex` as upstreams and each request

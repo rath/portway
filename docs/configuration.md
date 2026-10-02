@@ -264,7 +264,8 @@ Keys are sent by the client, not registered in the routing table. See
 | `[prices.NAME.tiers.TIER]` | absent | The same three rates for requests whose tier is `TIER` (their `speed`, else their `service_tier`) |
 
 Prices are optional inputs to the TUI's usage and cost estimates. They do not
-change requests, charge a balance, or discover provider rates. For example:
+change requests, charge a balance, or discover provider rates. Tables for the
+vendors' current list prices are in [Vendor prices](prices.md). For example:
 
 ```toml
 [models]

@@ -86,7 +86,9 @@ which carries one entry per language.
 
 - Use placeholder destinations such as `https://api.example.com` and model
   names such as `model-a`. Do not present a real provider's endpoints, models,
-  or prices as facts.
+  or prices as facts. The exception is `docs/prices.md`, a dated snapshot of
+  the vendors' published list prices for users to copy: change its figures only
+  against the sources it links, and update its date when you do.
 - Keep claims about savings conditional. State that compression needs a
   cooperating receiver, and that it saves bytes on the wire, not tokens.
 - `docs/protocol.md` is the contract for other implementations. Change it in

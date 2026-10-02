@@ -17,6 +17,8 @@ shows measured savings; the pages below cover setting it up and running it.
   picks its upstream, and every setting, including
   [compression](configuration.md#compression) and
   [receiving](configuration.md#receiving).
+- [Vendor prices](prices.md): OpenAI's and Anthropic's published list prices,
+  tiers included, as `[prices]` tables to copy, and what they leave out.
 - [Authentication](authentication.md): how API keys pass through Portway,
   routes with different credentials, and how receivers keep dictionaries apart
   per caller.
