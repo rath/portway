@@ -54,6 +54,9 @@ version may contain breaking changes.
   The browser console matches: its upstream table's `saved` cell carries the
   same ratio, and its event line and `cached` column give the same share,
   with the exact count in the cell's tooltip.
+- The terminal dashboard's panes and popups have rounded corners, its pane
+  titles are drawn in the theme's accent, the header names Portway on a
+  badge, and the footer's keys are chips.
 
 ## [0.2.2] - 2026-10-01
 

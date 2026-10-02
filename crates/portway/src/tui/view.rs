@@ -333,10 +333,7 @@ fn flights_dialog(frame: &mut Frame, state: &State, area: Rect) {
     };
     let block = Block::bordered()
         .border_type(BorderType::Double)
-        .title_top(Line::styled(
-            format!(" {title} "),
-            Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
-        ))
+        .title_top(Line::styled(format!(" {title} "), t.title()))
         .title_bottom(
             Line::from(vec![
                 Span::styled(
@@ -580,7 +577,7 @@ fn hud<'a>(state: &State, header: &'a Header) -> Paragraph<'a> {
     let totals = &state.totals;
 
     let mut title = vec![
-        Span::styled(" portway", Style::default().add_modifier(Modifier::BOLD)),
+        Span::styled(" portway ", t.chosen()),
         Span::raw("  "),
         Span::styled(header.listen.clone(), Style::default().fg(t.accent)),
         Span::raw("  "),
@@ -948,10 +945,8 @@ fn models_table(state: &State, width: u16) -> Table<'_> {
         .column_spacing(1)
         .block(
             Block::bordered()
-                .title_top(Line::styled(
-                    format!(" {title} "),
-                    Style::default().fg(t.dim).add_modifier(Modifier::BOLD),
-                ))
+                .border_type(BorderType::Rounded)
+                .title_top(Line::styled(format!(" {title} "), t.title()))
                 .border_style(Style::default().fg(t.border))
                 .padding(Padding::horizontal(1)),
         )
@@ -1012,6 +1007,7 @@ fn usage_screen(frame: &mut Frame, state: &State, area: Rect) {
             )
         });
     let block = Block::bordered()
+        .border_type(BorderType::Rounded)
         .title_top(titled(t, &title))
         .border_style(Style::default().fg(t.border))
         .padding(Padding::horizontal(1));
@@ -1325,10 +1321,7 @@ fn note(t: &Theme, text: String) -> Line<'static> {
 fn titled<'a>(t: &Theme, text: &'a str) -> Line<'a> {
     Line::from(vec![
         Span::raw(" "),
-        Span::styled(
-            text,
-            Style::default().fg(t.dim).add_modifier(Modifier::BOLD),
-        ),
+        Span::styled(text, t.title()),
         Span::raw(" "),
     ])
 }
@@ -1371,6 +1364,7 @@ fn draw_charts(frame: &mut Frame, state: &State, area: Rect, mode: Charts) {
             ),
         ]);
         let block = Block::bordered()
+            .border_type(BorderType::Rounded)
             .title_top(titled(t, "request body / turn"))
             .title_bottom(legend.right_aligned())
             .border_style(Style::default().fg(t.border));
@@ -1384,6 +1378,7 @@ fn draw_charts(frame: &mut Frame, state: &State, area: Rect, mode: Charts) {
         return;
     };
     let block = Block::bordered()
+        .border_type(BorderType::Rounded)
         .title_top(titled(t, "socket bytes/s"))
         .title_bottom(
             Line::from(Span::styled(
@@ -1707,6 +1702,7 @@ fn events(state: &State, width: u16) -> Paragraph<'static> {
         ),
     ]);
     let block = Block::bordered()
+        .border_type(BorderType::Rounded)
         .title_top(titled(t, "events"))
         .border_style(Style::default().fg(t.border));
     // A narrow pane has no room for both titles.
@@ -1749,13 +1745,13 @@ fn footer(state: &State) -> Paragraph<'static> {
         ("T", "theme"),
         ("?", "keys"),
     ];
-    let mut spans = vec![Span::raw(" ")];
+    // Each key a chip with its word after it, one space to the next: the
+    // chip's own padding is what tells one hint from the next.
+    let mut spans = Vec::new();
     for (key, what) in keys {
-        spans.push(Span::styled(key, Style::default().fg(t.accent)));
-        spans.push(Span::styled(
-            format!(" {what}  "),
-            Style::default().fg(t.dim),
-        ));
+        spans.push(Span::raw(" "));
+        spans.push(Span::styled(format!(" {key} "), t.key()));
+        spans.push(Span::styled(format!(" {what}"), Style::default().fg(t.dim)));
     }
     Paragraph::new(Line::from(spans))
 }
@@ -1850,6 +1846,7 @@ fn popup(t: &Theme, frame: &mut Frame, area: Rect, title: &str, lines: Vec<Line<
         height,
     };
     let block = Block::bordered()
+        .border_type(BorderType::Rounded)
         .title_top(titled(t, title))
         .border_style(Style::default().fg(t.accent))
         .style(Style::default().fg(t.text).bg(t.raised));

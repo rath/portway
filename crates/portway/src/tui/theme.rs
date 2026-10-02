@@ -279,6 +279,17 @@ impl Theme {
         highlight(self.select_raised)
     }
 
+    /// A pane's title, on its top border.
+    pub fn title(&self) -> Style {
+        Style::new().fg(self.accent).add_modifier(Modifier::BOLD)
+    }
+
+    /// A key a hint names: a chip on the raised ground, where the theme
+    /// paints one.
+    pub fn key(&self) -> Style {
+        Style::new().fg(self.accent).bg(self.raised)
+    }
+
     /// The one option in force among several, set on the accent.
     pub fn chosen(&self) -> Style {
         let style = Style::new().add_modifier(Modifier::BOLD);
