@@ -622,7 +622,7 @@ async fn a_reload_reprices_the_running_console() {
         .args(["--daemon", "--web", "--web-port", "0"])
         .output()
         .unwrap();
-    let _daemon = StopDaemon(dir.clone());
+    let daemon = StopDaemon(dir.clone());
     let out = String::from_utf8_lossy(&launched.stdout).to_string();
     assert!(
         launched.status.success(),
@@ -685,6 +685,9 @@ async fn a_reload_reprices_the_running_console() {
         2,
         "{log}"
     );
+    // Stopped while its pid file is still there to find: removing the
+    // directory first would leave the daemon running after the test.
+    drop(daemon);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
