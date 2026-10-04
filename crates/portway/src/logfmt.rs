@@ -133,14 +133,19 @@ pub fn take_capture() -> Vec<String> {
     capture().lock().unwrap().take().unwrap_or_default()
 }
 
-/// `HH:mm:ss [LEVEL ]message`, with a dim stamp. INFO stays bare.
+/// `YYYY-MM-DD HH:mm:ss [LEVEL ]message`, with a dim stamp. INFO stays bare.
+///
+/// The written line carries its date where the dashboards' stamps do not: a
+/// log file outlives the day it was started in, and a reader looking for
+/// `05:09:43` in one would otherwise find every day's. The dashboards keep
+/// `HH:MM:SS` for width alone.
 pub fn format_record(level: Level, message: &str) -> String {
     let prefix = if level >= Level::Warning {
         format!("{} ", c(shade(level), level.name()))
     } else {
         String::new()
     };
-    format!("{} {prefix}{message}", c(DIM, &stamp()))
+    format!("{} {prefix}{message}", c(DIM, &dated_stamp()))
 }
 
 /// A log record: the sinks see it, and the console prints it unless the
@@ -212,14 +217,26 @@ pub fn error(message: &str) {
 }
 
 /// Local `HH:MM:SS`, cached for the whole second it describes. A busy turn logs
-/// once per request, so this keeps `localtime_r` off the hot path.
+/// once per request, so this keeps `localtime_r` off the hot path. This is the
+/// stamp an event carries to the dashboards, which parse it as a clock.
 pub fn stamp() -> String {
     static CACHED: Mutex<(i64, String)> = Mutex::new((i64::MIN, String::new()));
+    cached_stamp(&CACHED, false)
+}
+
+/// Local `YYYY-MM-DD HH:MM:SS` of this second, cached the same way: the stamp
+/// a written log line starts with.
+fn dated_stamp() -> String {
+    static CACHED: Mutex<(i64, String)> = Mutex::new((i64::MIN, String::new()));
+    cached_stamp(&CACHED, true)
+}
+
+fn cached_stamp(cache: &Mutex<(i64, String)>, date: bool) -> String {
     let now = epoch() as i64;
-    let mut cached = CACHED.lock().unwrap();
+    let mut cached = cache.lock().unwrap();
     if cached.0 != now {
         cached.0 = now;
-        cached.1 = format_epoch(now, false);
+        cached.1 = format_epoch(now, date);
     }
     cached.1.clone()
 }

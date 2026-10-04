@@ -35,7 +35,7 @@ async fn plain_capture() -> MutexGuard<'static, ()> {
 }
 
 fn line_starting(lines: &[String], prefix: &str) -> String {
-    let stamped = Regex::new(r"^\d\d:\d\d:\d\d ").unwrap();
+    let stamped = Regex::new(r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d ").unwrap();
     lines
         .iter()
         .map(|line| stamped.replace(line, "").into_owned())
@@ -113,7 +113,7 @@ async fn the_request_log_prints_the_counts_the_engine_reported() {
     let posts: Vec<String> = lines
         .iter()
         .map(|line| {
-            Regex::new(r"^\d\d:\d\d:\d\d ")
+            Regex::new(r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d ")
                 .unwrap()
                 .replace(line, "")
                 .into_owned()
@@ -204,6 +204,13 @@ fn the_log_formatter_drops_the_info_level() {
     let info = logfmt::format_record(logfmt::Level::Info, "hello world");
     assert!(info.ends_with(" hello world"));
     assert!(!info.contains("INFO"));
+    // A written line carries its date, so a file spanning days can be read.
+    assert!(
+        Regex::new(r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d hello world$")
+            .unwrap()
+            .is_match(&info),
+        "{info}"
+    );
     assert!(logfmt::format_record(logfmt::Level::Warning, "careful").contains("WARNING careful"));
 }
 
