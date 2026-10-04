@@ -84,7 +84,10 @@ jobs:
       - name: Build
         run: |
           if [ -n "${{ matrix.zig_target }}" ]; then
-            cargo zigbuild --release --locked -p portway --features "$FEATURES" --target "${{ matrix.zig_target }}"
+            # jemalloc's configure picks its own archiver rather than
+            # cargo-zigbuild's; keep it on zig's, which reads every target.
+            AR="cargo-zigbuild zig ar --" RANLIB="cargo-zigbuild zig ranlib --" \
+              cargo zigbuild --release --locked -p portway --features "$FEATURES" --target "${{ matrix.zig_target }}"
           else
             cargo build --release --locked -p portway --features "$FEATURES" --target "${{ matrix.target }}"
           fi

@@ -36,6 +36,16 @@ version may contain breaking changes.
   in one found every day's. The dashboards keep the bare `HH:MM:SS`, which was
   only ever a matter of column width.
 
+### Fixed
+
+- Linux builds allocate with jemalloc instead of glibc's malloc. glibc kept
+  what each thread freed in that thread's arena, so a long-running forwarder or
+  receiver grew to its busiest moment and stayed there. Under a coding agent's
+  traffic, a forwarder with 17 MB in use held about 400 MB, and a receiver
+  with 350 MB in use about 650 MB. jemalloc returns freed pages from a
+  background thread, and it is the `malloc` of the bundled C libraries (zstd,
+  SQLite) as well. macOS builds keep the system allocator.
+
 ## [0.2.3] - 2026-10-02
 
 ### Added

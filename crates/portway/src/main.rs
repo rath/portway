@@ -26,6 +26,33 @@ type Settings = tui::Settings;
 #[cfg(not(feature = "tui"))]
 type Settings = ();
 
+/// jemalloc in place of glibc's malloc; the manifest says why.
+#[cfg(target_os = "linux")]
+#[global_allocator]
+static ALLOCATOR: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
+/// Give freed pages back from jemalloc's own thread, so a server that goes
+/// idle returns what its last burst freed instead of waiting for the next
+/// allocation to do it. After the fork: jemalloc stops this thread in a child.
+fn purge_in_background() {
+    #[cfg(target_os = "linux")]
+    {
+        let mut on = true;
+        // A refusal leaves purging to allocation time, which still happens.
+        // SAFETY: a known boolean option, written from a live bool of the
+        // size given, with no old value asked for.
+        unsafe {
+            tikv_jemalloc_sys::mallctl(
+                c"background_thread".as_ptr(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                (&raw mut on).cast(),
+                size_of::<bool>(),
+            );
+        }
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = Args::parse();
 
@@ -107,6 +134,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // exists: the child returns with the pid file held, the parent waits for
     // readiness and exits, and neither inherits a thread it did not create.
     let daemon = args.daemon.then(|| daemon::start(&dir)).transpose()?;
+    purge_in_background();
     let store = store::spawn(&dir, args.retention_days)?;
 
     let runtime = tokio::runtime::Builder::new_multi_thread()

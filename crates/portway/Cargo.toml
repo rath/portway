@@ -43,3 +43,12 @@ hyper = { version = "1.11.1", features = ["http1", "client", "server"] }
 hyper-util = { version = "0.1.20", features = ["tokio"] }
 sha2 = "0.11.0"
 zstd = "0.14.0"
+
+# glibc keeps what a thread frees in that thread's arena; with request bodies
+# of several megabytes going through zstd, a forwarder using 17MB held 400MB.
+# jemalloc hands freed pages back. Unprefixed, it is also the `malloc` of the
+# C libraries (zstd, SQLite), where zstd keeps its multi-megabyte state.
+# The problem is glibc's; macOS keeps its system allocator.
+[target.'cfg(target_os = "linux")'.dependencies]
+tikv-jemallocator = { version = "0.7.0", features = ["unprefixed_malloc_on_supported_platforms"] }
+tikv-jemalloc-sys = "0.7.1"
