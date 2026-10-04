@@ -55,6 +55,19 @@ fn body() -> Bytes {
 fn zstd(body: &[u8]) -> Vec<u8> {
     zstd::bulk::compress(body, 3).unwrap()
 }
+fn gzip(body: &[u8]) -> Vec<u8> {
+    use std::io::Write;
+    let mut w = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+    w.write_all(body).unwrap();
+    w.finish().unwrap()
+}
+fn dcz(body: &[u8], base: &Bytes) -> Vec<u8> {
+    let base = dict::Base {
+        hash: dict::sha256(base),
+        body: base.clone(),
+    };
+    dict::compress(body, &base, 3).unwrap()
+}
 
 #[tokio::test]
 async fn dictionaries_round_trip_only_in_their_context() {
@@ -162,12 +175,6 @@ async fn checksum_is_mandatory_and_must_match() {
 
 #[tokio::test]
 async fn gzip_is_bounded_and_requires_one_complete_member() {
-    use std::io::Write;
-    fn gzip(body: &[u8]) -> Vec<u8> {
-        let mut w = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
-        w.write_all(body).unwrap();
-        w.finish().unwrap()
-    }
     let receiver = Receiver::new(config()).unwrap();
     let data = body();
     let wire = gzip(&data);
@@ -183,6 +190,40 @@ async fn gzip_is_bounded_and_requires_one_complete_member() {
     trailing.extend(wire);
     rejected(&receiver, "gzip", trailing, 400).await;
     rejected(&receiver, "gzip", gzip(&vec![0; 8193]), 413).await;
+}
+
+#[tokio::test]
+async fn a_context_keeps_only_its_newest_dictionaries() {
+    let receiver = Receiver::new(ReceiverConfig {
+        dictionaries_per_scope: 2,
+        ..config()
+    })
+    .unwrap();
+    let turn = |n: usize| Bytes::from(format!("turn {n} ").repeat(64));
+    let other = Bytes::from("another caller ".repeat(64));
+    decode(&receiver, "zstd", zstd(&turn(0)), "alice", true).await;
+    decode(&receiver, "zstd", zstd(&other), "bob", true).await;
+    decode(&receiver, "zstd", zstd(&turn(1)), "alice", true).await;
+    decode(&receiver, "zstd", zstd(&turn(2)), "alice", true).await;
+    // Alice's third body pushed out her first, not Bob's older one.
+    assert_eq!(receiver.snapshot()["dictionary_entries"], 3);
+    rejected(&receiver, "dcz", dcz(&turn(3), &turn(0)), 412).await;
+    decode(&receiver, "dcz", dcz(&turn(3), &turn(1)), "alice", false).await;
+    decode(&receiver, "dcz", dcz(&turn(3), &other), "bob", false).await;
+}
+
+#[tokio::test]
+async fn a_decoded_body_carries_no_spare_capacity() {
+    // Past the decoders' 64KiB step, so the buffer has grown beyond it.
+    let plain = Bytes::from("x".repeat(100_000));
+    let receiver = Receiver::new(ReceiverConfig::default()).unwrap();
+    for (coding, wire) in [("zstd", zstd(&plain)), ("gzip", gzip(&plain))] {
+        let (request, _) = decode(&receiver, coding, wire, "alice", false)
+            .await
+            .into_parts();
+        let body = request.into_body().try_into_mut().expect("sole reference");
+        assert_eq!(body.capacity(), plain.len(), "{coding}");
+    }
 }
 
 #[tokio::test]

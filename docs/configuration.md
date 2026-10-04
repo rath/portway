@@ -431,12 +431,20 @@ contacted.
 
 | `[receiver]` setting | Default |
 | --- | --- |
-| `dictionary_bytes` | `268435456` (256MiB); zero disables dictionaries |
+| `dictionary_bytes` | `67108864` (64MiB); zero disables dictionaries |
+| `dictionaries_per_scope` | `16` bodies per authentication context |
 | `dictionary_ttl_seconds` | `3600` idle seconds |
 | `min_dictionary_bytes` | `32768` (32KiB) |
 | `max_dictionary_bytes` | `33554432` (32MiB) |
 | `max_body_bytes` | `268435456` (256MiB), for encoded and decoded bodies |
 | `max_window_bytes` | `134217728` (128MiB) |
+
+Every stored turn is a whole conversation, and a sender only ever names its own
+last eight confirmed bodies per route, so a context's older bodies are evicted
+first: `dictionaries_per_scope` keeps its newest sixteen, and `dictionary_bytes`
+bounds the total across contexts, least recently used first. Raise the budget
+for a receiver shared by many credentials, or the count when one credential
+fronts several routes.
 
 Dictionary thresholds must be positive and ordered, with the maximum no larger
 than the body limit. The zstd window limit is a power of two between 1KiB and

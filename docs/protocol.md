@@ -55,7 +55,7 @@ the refusal backoff expires and capabilities are renegotiated.
 
 The receiver independently hashes the fully decoded body. It acknowledges only
 compressed bodies explicitly opted into storage that fit both its per-entry and
-total memory budgets. Identity requests do not seed dictionaries. Retained bodies
+total memory budgets, and within a context it keeps only the newest bodies. Identity requests do not seed dictionaries. Retained bodies
 never go to disk. Restarting a receiver empties its store.
 
 Authorization and Cookie values determine the default local storage partition;

@@ -35,6 +35,12 @@ version may contain breaking changes.
   A log file outlives the day it was started in, and a search for `05:09:43`
   in one found every day's. The dashboards keep the bare `HH:MM:SS`, which was
   only ever a matter of column width.
+- The receiver keeps only the newest sixteen dictionaries per credential
+  context (`dictionaries_per_scope`), and its total budget defaults to 64 MiB
+  instead of 256 MiB. Every turn re-sends the whole conversation and was stored
+  whole for an hour, while a sender only ever names its own last eight bodies,
+  so one active session filled the 256 MiB budget with bodies nothing could ask
+  for again.
 
 ### Fixed
 
@@ -45,6 +51,9 @@ version may contain breaking changes.
   with 350 MB in use about 650 MB. jemalloc returns freed pages from a
   background thread, and it is the `malloc` of the bundled C libraries (zstd,
   SQLite) as well. macOS builds keep the system allocator.
+- The receiver counted a stored dictionary by its length while its allocation
+  kept the decoder's spare capacity, up to twice that: the 256 MiB budget held
+  about 350 MB.
 
 ## [0.2.3] - 2026-10-02
 

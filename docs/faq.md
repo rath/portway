@@ -84,8 +84,10 @@ budget each require one full request to warm up again.
 ### How much memory do dictionaries use?
 
 The sender keeps at most eight confirmed bodies and 64 MiB per route. The
-receiver's store defaults to 256 MiB in total, evicting the least recently
-used entries first, and keeps nothing larger than 32 MiB. The limits are in
+receiver keeps the newest sixteen bodies per credential context and 64 MiB in
+total, evicting the least recently used entries first, and keeps nothing
+larger than 32 MiB. A coding agent's turns average about 1.4 MB, so one
+active context holds roughly 22 MB. The limits are in
 [receiver settings](configuration.md#receiving).
 
 ### What happens when the receiver no longer has the dictionary?

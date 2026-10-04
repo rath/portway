@@ -23,6 +23,8 @@ pub struct ReceiverConfig {
     /// Standalone forwarding policy; embedding users apply it to their forwarder.
     pub origin_compression: crate::origin::OriginCompressionConfig,
     pub dictionary_bytes: usize,
+    /// Bodies kept per authentication context, newest first.
+    pub dictionaries_per_scope: usize,
     pub dictionary_ttl_seconds: u64,
     pub min_dictionary_bytes: usize,
     pub max_dictionary_bytes: usize,
@@ -33,7 +35,13 @@ impl Default for ReceiverConfig {
     fn default() -> Self {
         Self {
             origin_compression: Default::default(),
-            dictionary_bytes: 256 << 20,
+            // Bounds the total when bodies are large or contexts are many:
+            // sixteen of a coding agent's 1.4MB average fill a third of it.
+            dictionary_bytes: 64 << 20,
+            // A sender names only its own last eight confirmed bodies. Twice
+            // that, so the turns it never confirms (aborted, failed) cannot
+            // push out one it still holds.
+            dictionaries_per_scope: 2 * dict::RING_ENTRIES,
             dictionary_ttl_seconds: 3600,
             min_dictionary_bytes: 32 << 10,
             max_dictionary_bytes: dict::MAX_BASE_BYTES,
@@ -45,6 +53,7 @@ impl Default for ReceiverConfig {
 impl ReceiverConfig {
     pub fn validate(&self) -> Result<(), String> {
         if self.max_body_bytes == 0
+            || self.dictionaries_per_scope == 0
             || self.dictionary_ttl_seconds == 0
             || self.min_dictionary_bytes == 0
             || self.min_dictionary_bytes > self.max_dictionary_bytes
@@ -117,6 +126,18 @@ impl Store {
             .iter()
             .position(|e| e.scope == scope && e.hash == hash)
         {
+            self.bytes -= self.entries.remove(at).expect("entry exists").body.len();
+        }
+        // Each turn re-sends the whole conversation and is stored whole, so
+        // a context's older bodies are dead weight long before they expire.
+        while self.entries.iter().filter(|e| e.scope == scope).count()
+            >= config.dictionaries_per_scope
+        {
+            let at = self
+                .entries
+                .iter()
+                .position(|e| e.scope == scope)
+                .expect("counted above");
             self.bytes -= self.entries.remove(at).expect("entry exists").body.len();
         }
         while body.len() > config.dictionary_bytes.saturating_sub(self.bytes) {
@@ -424,7 +445,7 @@ fn inflate_gzip(raw: &[u8], limit: usize) -> Result<Bytes, DecodeError> {
             if decoder.total_in() != raw.len() as u64 {
                 return Err(reject(400, "trailing gzip data"));
             }
-            return Ok(out.into());
+            return Ok(exact(out));
         }
         if decoder.total_in() == before_in && written == 0 {
             return Err(reject(400, "truncated gzip stream"));
@@ -470,12 +491,20 @@ fn inflate_zstd(
             if input.pos() != raw.len() {
                 return Err(reject(400, "trailing zstd data"));
             }
-            return Ok(out.into());
+            return Ok(exact(out));
         }
         if input.pos() == before && written == 0 {
             return Err(reject(400, "truncated zstd stream"));
         }
     }
+}
+
+/// The decoded body without the spare capacity growth left behind, up to half
+/// the allocation: `Bytes` keeps all of it, and a stored body is counted by
+/// its length.
+fn exact(mut out: Vec<u8>) -> Bytes {
+    out.shrink_to_fit();
+    out.into()
 }
 
 /// Capability documents are small; decoding them has the same bounded codec rules.

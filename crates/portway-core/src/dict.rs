@@ -24,7 +24,7 @@ pub const MISS_HEADER: &str = "x-dict-miss";
 pub const DCZ_MAGIC: [u8; 8] = [0x5e, 0x2a, 0x4d, 0x18, 0x20, 0x00, 0x00, 0x00];
 /// Confirmed bases kept per model. One conversation needs one; the rest cover
 /// sub-agents and conversations that interleave.
-const RING_ENTRIES: usize = 8;
+pub(crate) const RING_ENTRIES: usize = 8;
 const RING_BYTES: usize = 64 << 20;
 /// Sender base limit and default receiver per-entry storage limit.
 pub const MAX_BASE_BYTES: usize = 32 << 20;
