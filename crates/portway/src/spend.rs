@@ -198,8 +198,10 @@ impl Row {
 pub struct Table {
     pub since: f64,
     pub until: f64,
-    /// When the first request inside the window was recorded, blind ones
-    /// included; `None` when nothing was. `starts` is what a title shows.
+    /// When the first request inside the window that named a model was
+    /// recorded, blind ones included; `None` when nothing was. A catalog fetch
+    /// or a health probe names none and is not the day's work beginning.
+    /// `starts` is what a title shows.
     pub first: Option<f64>,
     pub rows: Vec<Row>,
     /// The same columns as a model, pooled: what the day costs is one row of
@@ -392,8 +394,12 @@ impl Part {
     }
 }
 
-/// When the window's first request was recorded, blind or not.
-const FIRST: &str = "SELECT MIN(ts_unix) FROM requests WHERE ts_unix >= ?1 AND ts_unix < ?2";
+/// When the window's first request of a model was recorded, blind or not.
+/// Codex fetches its catalog with a bodiless `GET …/models` every time it
+/// starts, and a health probe names no model either: neither is the day
+/// beginning, so a title drawn from them would start hours too early.
+const FIRST: &str = "SELECT MIN(ts_unix) FROM requests
+  WHERE ts_unix >= ?1 AND ts_unix < ?2 AND model <> ''";
 
 /// Requests the sums above had to skip, and how many of them were cut short.
 const BLIND: &str = "SELECT COUNT(*), COALESCE(SUM(complete = 0), 0)
@@ -988,6 +994,30 @@ mod tests {
             (standard.cost().unwrap() - (2800.0 * 1.0 + 600.0 * 0.1 + 40.0 * 2.0) / 1e6).abs()
                 < 1e-12
         );
+    }
+
+    /// Codex starts with a catalog fetch, hours before anyone asks a model
+    /// for anything: it is counted, blind, but the day has not begun.
+    #[test]
+    fn a_catalog_fetch_is_counted_but_does_not_start_the_day() {
+        let dir = std::env::temp_dir().join("portway-spend-test-catalog");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = store::spawn(&dir, 0).unwrap();
+        let mut fetch = record("", None);
+        fetch.upstream = "codex".to_string();
+        fetch.method = Method::GET;
+        fetch.path = "/codex/models".to_string();
+        store
+            .sender()
+            .send(Event::Request(Arc::new(fetch)))
+            .unwrap();
+        store.shutdown();
+
+        let table = at(&dir, crate::logfmt::epoch() - 1.0);
+        assert_eq!(table.blind, 1, "it is traffic");
+        assert_eq!(table.first, None, "but not the day's first request");
+        assert_eq!(table.starts(Range::Today), table.since);
     }
 
     #[test]
