@@ -198,6 +198,9 @@ impl Row {
 pub struct Table {
     pub since: f64,
     pub until: f64,
+    /// When the first request inside the window was recorded, blind ones
+    /// included; `None` when nothing was. `starts` is what a title shows.
+    pub first: Option<f64>,
     pub rows: Vec<Row>,
     /// The same columns as a model, pooled: what the day costs is one row of
     /// the same arithmetic, and the screen draws it with the same code.
@@ -218,6 +221,18 @@ impl Table {
 
     pub fn cost(&self) -> Option<f64> {
         self.total.cost()
+    }
+
+    /// Where the window a title describes begins. A day in progress starts at
+    /// its first request rather than at midnight: the hours before it were
+    /// not used, and `00:00:00 .. now` says nothing about when the work
+    /// began. Every other range keeps its midnight, since `7 days` that
+    /// started last Thursday would misname the window it adds up.
+    pub fn starts(&self, range: Range) -> f64 {
+        match (range, self.first) {
+            (Range::Today, Some(first)) => first,
+            _ => self.since,
+        }
     }
 
     fn absorb(&mut self, row: &Row) {
@@ -377,6 +392,9 @@ impl Part {
     }
 }
 
+/// When the window's first request was recorded, blind or not.
+const FIRST: &str = "SELECT MIN(ts_unix) FROM requests WHERE ts_unix >= ?1 AND ts_unix < ?2";
+
 /// Requests the sums above had to skip, and how many of them were cut short.
 const BLIND: &str = "SELECT COUNT(*), COALESCE(SUM(complete = 0), 0)
   FROM requests
@@ -466,6 +484,11 @@ pub fn load(db: &Path, since: f64, until: f64, prices: &Prices) -> Result<Table,
         .map_err(sqlite)?;
     table.blind = blind;
     table.cut = cut;
+    table.first = connection
+        .query_row(FIRST, params![since, until], |row| {
+            row.get::<_, Option<f64>>(0)
+        })
+        .map_err(sqlite)?;
 
     // Most expensive first, which is the one question the screen is opened to
     // answer. A model that could not be priced goes last: its tokens are still
@@ -755,6 +778,13 @@ mod tests {
         assert_eq!(table.blind, 2);
         assert_eq!(table.cut, 1);
         assert_eq!(table.unpriced, 0);
+        // The first request landed inside the window, and a day in progress
+        // is titled from it; a longer window keeps the midnight it was asked
+        // about.
+        let first = table.first.expect("something was recorded");
+        assert!(table.since <= first && first < table.until, "{first}");
+        assert_eq!(table.starts(Range::Today), first);
+        assert_eq!(table.starts(Range::Week), table.since);
 
         // Most expensive first: 2.7k cached tokens of model-alpha cost less
         // than the priced_model turns they outnumber.
@@ -968,6 +998,12 @@ mod tests {
         assert!(table.is_empty());
         assert_eq!(table.cost(), None, "no rows, no money");
         assert_eq!(table.blind, 0, "the blind count is the window's, too");
+        assert_eq!(table.first, None, "nothing to start from");
+        assert_eq!(
+            table.starts(Range::Today),
+            table.since,
+            "so the title keeps midnight"
+        );
 
         // A file that is not there at all reads as an error, so the screen can
         // say so instead of drawing an empty day.

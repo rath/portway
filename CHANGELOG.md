@@ -23,6 +23,11 @@ version may contain breaking changes.
 - The project page shows the browser console and the terminal dashboard on a
   real Claude Code and Codex session right under its headline, in all four
   languages.
+- The usage screen's `today` window is titled from its first request rather
+  than from midnight, in the terminal dashboard and the browser console alike:
+  `usage — 2026-10-04 09:12:31 .. 2026-10-04 17:40:02` says when the day's work
+  began, where `00:00:00` said nothing. The other windows keep the midnight
+  they are asked about, and `/api/usage` carries the start as `first`.
 
 ## [0.2.3] - 2026-10-02
 

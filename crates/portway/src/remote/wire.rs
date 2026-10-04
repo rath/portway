@@ -306,6 +306,10 @@ pub struct UsageReply {
 struct TableData {
     since: f64,
     until: f64,
+    // A console older than the field sends none; the title it sends already
+    // has the start it chose.
+    #[serde(default)]
+    first: Option<f64>,
     #[serde(deserialize_with = "rows")]
     rows: Vec<spend::Row>,
     #[serde(with = "RowData")]

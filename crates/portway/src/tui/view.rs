@@ -994,7 +994,8 @@ fn usage_screen(frame: &mut Frame, state: &State, area: Rect) {
 
     let notes = usage_notes(t, table);
     // Both ends carry their date: a window that is over ends at a midnight,
-    // and `00:00:00` alone would not say which one.
+    // and `00:00:00` alone would not say which one. Today begins at its first
+    // request rather than at midnight.
     let title = state
         .remote
         .as_ref()
@@ -1002,7 +1003,7 @@ fn usage_screen(frame: &mut Frame, state: &State, area: Rect) {
         .unwrap_or_else(|| {
             format!(
                 "usage — {} .. {}",
-                logfmt::datetime(table.since),
+                logfmt::datetime(table.starts(state.usage_range)),
                 logfmt::datetime(table.until)
             )
         });
@@ -2947,6 +2948,7 @@ mod tests {
         state.usage = Some(spend::Table {
             since: 1_789_941_600.0,
             until: 1_790_008_865.0,
+            first: None,
             total: spend::Row {
                 model: "total".to_string(),
                 tier: None,

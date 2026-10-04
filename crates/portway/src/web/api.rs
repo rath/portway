@@ -236,10 +236,12 @@ pub fn usage(range: spend::Range, table: &spend::Table) -> Value {
         "ranges": usage_ranges(),
         "since": table.since,
         "until": table.until,
-        // Both ends carry their date, as on the terminal's usage screen.
+        "first": table.first,
+        // Both ends carry their date, as on the terminal's usage screen, and
+        // today begins at its first request rather than at midnight.
         "title": format!(
             "usage — {} .. {}",
-            logfmt::datetime(table.since),
+            logfmt::datetime(table.starts(range)),
             logfmt::datetime(table.until)
         ),
         "rows": table.rows.iter().map(usage_row).collect::<Vec<_>>(),
