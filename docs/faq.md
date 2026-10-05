@@ -90,6 +90,11 @@ larger than 32 MiB. A coding agent's turns average about 1.4 MB, so one
 active context holds roughly 22 MB. The limits are in
 [receiver settings](configuration.md#receiving).
 
+In practice a receiver serving three active contexts holds about 70 MB of
+dictionaries and about 100 MB resident in total, peaking near 175 MB while it
+decodes large turns. Plan for the 128 MiB store plus the request bodies in
+flight.
+
 ### What happens when the receiver no longer has the dictionary?
 
 It answers 412 with `X-Dict-Miss: 1` before the application runs. The sender

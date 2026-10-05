@@ -277,7 +277,9 @@ streaming uploads are not supported. When the agent disconnects, Portway waits
 up to 2 s for the upstream answer to end, so an answer the agent stopped reading
 at its last event is still recorded whole; an answer still generating, or still
 open after that, is cancelled and its upstream HTTP/1.1 connection closed.
-Dictionary storage is memory-only and bounded.
+Dictionary storage is memory-only and bounded: 128 MiB on the receiver, 64 MiB
+per route on the sender; see the
+[FAQ](docs/faq.md#how-much-memory-do-dictionaries-use).
 
 `bash scripts/check.sh` runs formatting, clippy, and the tests for the
 default, `tui`, `web`, and `tui,web` builds, then the dependency-boundary and
