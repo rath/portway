@@ -20,6 +20,9 @@ version may contain breaking changes.
   upstream row without taking a line; one that failed, was cut or was
   redirected is still listed, and the console's `is:catalog` search lists them
   all.
+- A new mark replaces the zigzag in the browser console's header, its favicon,
+  the project page and its social preview cards: three bars that grow turn by
+  turn, the newest with a tip in the wire color, which is all that crosses.
 - The project page shows the browser console and the terminal dashboard on a
   real Claude Code and Codex session right under its headline, in all four
   languages.

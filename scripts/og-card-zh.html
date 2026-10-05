@@ -26,7 +26,9 @@
     display: flex; flex-direction: column;
   }
   .brand { display: flex; align-items: center; gap: 16px; font-size: 34px; font-weight: 700; font-stretch: 110%; }
-  .brand svg { width: 48px; height: 48px; }
+  .brand svg { width: 37.5px; height: 30px; }
+  .brand path { fill: none; stroke: var(--raw); stroke-width: 4; stroke-linecap: round; }
+  .brand .delta { stroke: var(--wire); }
   h1 {
     margin: 40px 0 0; font-size: 62px; line-height: 1.04; font-weight: 800;
     font-stretch: 88%; letter-spacing: -0.01em; max-width: 24ch;
@@ -45,7 +47,7 @@
 </head>
 <body>
   <div class="brand">
-    <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7" fill="#1d5fd0"/><path d="M6 23 L12 9 L18 23 L24 9" fill="none" stroke="#fff" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    <svg viewBox="3.5 6 25 20" aria-hidden="true"><path d="M5.5 8H11.5M5.5 16H17.5M5.5 24H17.5"/><path class="delta" d="M24 24H26.5"/></svg>
     Portway
   </div>
   <h1><span>减少编程智能体的</span><span>网络传输量。</span></h1>

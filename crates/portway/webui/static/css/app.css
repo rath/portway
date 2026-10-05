@@ -156,7 +156,9 @@ kbd {
   position: sticky; top: 0; z-index: var(--z-sticky);
 }
 .brand { display: flex; align-items: center; gap: 8px; font-weight: 650; font-size: 14px; letter-spacing: -0.01em; }
-.brand .mark { width: 20px; height: 20px; fill: none; stroke: var(--accent); stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+/* Raw bars and a wire tip, in the same sense as the .t-raw and .t-wire tones. */
+.brand .mark { width: 15.625px; height: 12.5px; fill: none; stroke: var(--raw); stroke-width: 4; stroke-linecap: round; }
+.brand .mark .delta { stroke: var(--wire); }
 .listen {
   display: flex; align-items: center; gap: 2px;
   padding: 2px 2px 2px 10px; border-radius: 999px;

@@ -78,9 +78,12 @@ code { font-size: 0.9em; }
   font-variation-settings: "wdth" 80;
   letter-spacing: 0.01em;
 }
-.brand svg { width: 26px; height: 26px; }
-.brand rect { fill: var(--raw); }
-.brand path { fill: none; stroke: var(--ground); stroke-width: 3.2; stroke-linecap: round; stroke-linejoin: round; }
+/* The mark keeps the signal colours' meaning: the blue bars are a conversation
+   growing turn by turn, the teal tip the only part that crosses the wire. Its
+   five equal bands land on whole pixels at this height. */
+.brand svg { width: 18.75px; height: 15px; }
+.brand path { fill: none; stroke: var(--raw); stroke-width: 4; stroke-linecap: round; }
+.brand .delta { stroke: var(--wire); }
 .masthead nav { display: flex; gap: clamp(12px, 3vw, 28px); font-size: 0.95rem; }
 .masthead nav a { text-decoration: none; color: var(--ink-dim); }
 .masthead nav a:hover { color: var(--ink); }
