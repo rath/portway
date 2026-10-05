@@ -881,7 +881,7 @@ checksum = "05c8b63e8d9609db387f0324918f81d68fe27748f084ef092fb35954d0539a85"
 
 [[package]]
 name = "portway"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "bytes",
  "clap",
@@ -908,7 +908,7 @@ dependencies = [
 
 [[package]]
 name = "portway-core"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "bytes",
  "flate2",
