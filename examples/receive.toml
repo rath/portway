@@ -18,7 +18,7 @@ port = 8788
 
 # Optional: all values below are defaults, in bytes except the TTL.
 [receiver]
-dictionary_bytes = 67108864        # 64MiB total memory; 0 disables dictionaries
+dictionary_bytes = 134217728       # 128MiB total memory; 0 disables dictionaries
 dictionaries_per_scope = 16        # Newest bodies kept per credential context
 dictionary_ttl_seconds = 3600      # Idle lifetime; dictionaries are memory-only
 min_dictionary_bytes = 32768       # Requests below 32KiB cannot seed a dictionary

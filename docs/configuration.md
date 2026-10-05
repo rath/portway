@@ -431,7 +431,7 @@ contacted.
 
 | `[receiver]` setting | Default |
 | --- | --- |
-| `dictionary_bytes` | `67108864` (64MiB); zero disables dictionaries |
+| `dictionary_bytes` | `134217728` (128MiB); zero disables dictionaries |
 | `dictionaries_per_scope` | `16` bodies per authentication context |
 | `dictionary_ttl_seconds` | `3600` idle seconds |
 | `min_dictionary_bytes` | `32768` (32KiB) |

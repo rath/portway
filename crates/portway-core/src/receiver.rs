@@ -36,8 +36,8 @@ impl Default for ReceiverConfig {
         Self {
             origin_compression: Default::default(),
             // Bounds the total when bodies are large or contexts are many:
-            // sixteen of a coding agent's 1.4MB average fill a third of it.
-            dictionary_bytes: 64 << 20,
+            // sixteen 4MB turns fill half of it.
+            dictionary_bytes: 128 << 20,
             // A sender names only its own last eight confirmed bodies. Twice
             // that, so the turns it never confirms (aborted, failed) cannot
             // push out one it still holds.
