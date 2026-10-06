@@ -723,6 +723,7 @@ mod tests {
             upstream_encoding: "identity".to_string(),
             agent_encoding: None,
             download: None,
+            max_gap: None,
             complete: true,
             usage,
             flight: None,

@@ -16,7 +16,7 @@ export const COLUMNS = [
   { name: "route", note: "method, full path, and the dial time of a fresh connection" },
   { name: "sizes", note: "request body raw and on the wire, saved, ↑ time" },
   { name: "ttfb", note: "first byte of the answer" },
-  { name: "down", note: "response bytes decoded and on the upstream hop, saved, what the agent got, ↓ time" },
+  { name: "down", note: "response bytes decoded and on the upstream hop, saved, what the agent got, ↓ time, ↓ gap" },
   { name: "tokens", note: "in, the share of it cached, and out, as the engine counted" },
 ];
 
@@ -184,6 +184,7 @@ export function detailFields(event) {
     ["ttfb", humanTime(event.ttfb)],
     ["download", `${human(event.received_wire)} on the wire -> ${human(event.received)} decoded (${event.upstream_encoding}${event.upstream_encoding === "identity" ? "" : `, ${ratio(event.received, event.received_wire)}`})${agent}`],
     ["download took", optional(event.download)],
+    ["longest gap", optional(event.max_gap)],
     ["tokens", usage
       ? `${usage.prompt} in${usage.cached != null ? ` (${usage.cached} cached)` : ""} -> ${usage.completion} out${usage.reasoning != null ? ` (${usage.reasoning} reasoning)` : ""}`
       : "not reported"],

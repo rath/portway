@@ -336,3 +336,43 @@ async fn an_answer_the_agent_stopped_reading_at_its_last_event_is_still_whole() 
     assert!(!record.complete, "{record:?}");
     assert!(record.usage.is_none(), "{record:?}");
 }
+
+/// The record keeps the longest the agent waited for the next chunk once the
+/// answer had begun: here the idle gap the upstream left between its frames.
+#[tokio::test]
+async fn the_longest_silence_between_chunks_reaches_the_record() {
+    let _serial = sink().await;
+    let up = upstream(Health::JsonBare, Reply::ZstdChunks).await;
+    let fwd = forwarder(&[("model-alpha", &up.base)], &[]).await;
+    fwd.post("/v1/chat/completions", chat_body("model-alpha"))
+        .await;
+    let record = next_request().await;
+    let gap = record.max_gap.expect("an answer that began has a gap");
+    // The upstream waits 40ms after handing over its first frame; loopback
+    // can only shave a little off that.
+    assert!(gap >= 0.03, "{record:?}");
+    assert!(gap <= record.download.unwrap(), "{record:?}");
+}
+
+/// The silence that counts is the one the agent sat through: the wait for
+/// the body's end is a gap, but what the relay reads after the agent left is
+/// not, however long it takes.
+#[tokio::test]
+async fn the_gap_ends_when_the_agent_does() {
+    let _serial = sink().await;
+    let up = upstream(Health::JsonBare, Reply::UsageStreamLingers(1_000)).await;
+    let fwd = forwarder(&[("model-alpha", &up.base)], &[]).await;
+
+    fwd.post("/v1/chat/completions", chat_body("model-alpha"))
+        .await;
+    let waited = next_request().await;
+    assert!(waited.max_gap.unwrap() >= 0.9, "{waited:?}");
+
+    fwd.read_then_abort("/v1/chat/completions", chat_body("model-alpha"), 1)
+        .await;
+    let left = next_request().await;
+    // Read on to its end after the agent went, so the answer is whole...
+    assert!(left.complete, "{left:?}");
+    // ...but the agent itself waited for none of that.
+    assert!(left.max_gap.unwrap() < 0.5, "{left:?}");
+}

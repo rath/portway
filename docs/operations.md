@@ -341,7 +341,7 @@ same code, with these views and additions:
 | View | What it adds |
 | --- | --- |
 | Dashboard | Requests in flight, with their phase (upload, prefill, stream), age and progress; a slow prefill (over 30s) or a stalled stream (no bytes for 60s) is flagged. A console attached to another instance cannot see that instance's flights. |
-| Events | An aligned table with a header per field and each request's full method and path, where the terminal shortens known routes to fit; a field no event has filled yet takes no room. Downloads read like uploads: `down` is the answer decoded, `↓ wire` and `↓ saved` what the upstream hop carried and kept off the wire (behind a receiver, its download saving), and `to agent` the leg to the agent when the agent asked for a coding. Drag the edge of a header to set a column's width; double-click it, or run "Reset column widths", to fit the content again. Widths are kept per browser. Search (`status:5xx`, `model:`, `upstream:`, `route:`, `is:cut`, `ttfb:>2s`, `size:>1MB`, `tok:>50K`, `-word`, `"phrase"`), CSV and JSON export of the filtered lines, and older lines on request. A model catalog fetch (`GET …/models`, which Codex sends each time it starts) counts in every total but is not listed unless it did not get a 2xx; `is:catalog` lists them. |
+| Events | An aligned table with a header per field and each request's full method and path, where the terminal shortens known routes to fit; a field no event has filled yet takes no room. Downloads read like uploads: `down` is the answer decoded, `↓ wire` and `↓ saved` what the upstream hop carried and kept off the wire (behind a receiver, its download saving), `to agent` the leg to the agent when the agent asked for a coding, and `↓ gap` the longest silence after the first byte (see below). Drag the edge of a header to set a column's width; double-click it, or run "Reset column widths", to fit the content again. Widths are kept per browser. Search (`status:5xx`, `model:`, `upstream:`, `route:`, `is:cut`, `ttfb:>2s`, `gap:>20s`, `size:>1MB`, `tok:>50K`, `-word`, `"phrase"`), CSV and JSON export of the filtered lines, and older lines on request. A model catalog fetch (`GET …/models`, which Codex sends each time it starts) counts in every total but is not listed unless it did not get a 2xx; `is:catalog` lists them. |
 | Usage | The terminal's usage screen, refreshed every 5s. |
 | History | `--report` for any window, per model, as tables with CSV, or as the exact text. |
 | Insights | ttfb percentiles and upload savings since the page opened, and each model's share. |
@@ -511,6 +511,16 @@ fallback; the failed trial can therefore produce negative savings. The warning
 `origin 415: retrying identity once` explains the retry. A preceding rejection
 warning names the attempted coding and the 600-second suspension. A 400 produces
 only the suspension warning and returns the original error.
+
+Every request line with an answer ends its timings with `gap`: the longest the
+relay went, after the answer's first byte, without passing the agent more of
+it — between two chunks, or from the last one to the end of the relay (the
+body ending, a cut, or the agent leaving). It is the silence a client's
+stalled-stream warning counts. Both hosts log the same request, so a long gap
+on the receiver too means the upstream went quiet, and one on the sender alone
+means the hop between them did. The database keeps it as `max_gap_ms`, the
+dashboards' request detail as `longest gap`, and the console finds them with
+`gap:>20s`.
 
 Existing `upstreams.upstream.wire_bytes` includes refused attempts for requests that
 obtained a final response. The nested origin `wire_bytes` also includes bytes

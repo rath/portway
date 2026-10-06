@@ -18,7 +18,7 @@ const request = (overrides = {}) => ({
   dns: null, tcp: null, tls: null, reused: true, handshake: null,
   body_len: 471859, wire_len: 113246, coding: "zstd", upload: 0.012, ttfb: 0.84,
   received: 2048, received_wire: 900, received_agent: 2048,
-  upstream_encoding: "gzip", agent_encoding: null, download: 1.5, complete: true,
+  upstream_encoding: "gzip", agent_encoding: null, download: 1.5, max_gap: 0.4, complete: true,
   usage: { prompt: 91234, cached: 91100, completion: 891, reasoning: null },
   trouble: false, flight: 7,
   ...overrides,
@@ -82,6 +82,8 @@ test("the detail popup's fields are the terminal's", () => {
   assert.equal(fields.connection, "reused from the pool");
   assert.equal(fields.upload, "461KB -> 111KB (zstd, -76%)");
   assert.equal(fields.tokens, "91234 in (91100 cached) -> 891 out");
+  assert.equal(fields["longest gap"], "400ms");
+  assert.equal(Object.fromEntries(detailFields(request({ max_gap: null })))["longest gap"], "not measured");
   assert.equal(fields.ended, "upstream body finished");
 });
 
@@ -160,7 +162,7 @@ test("every table cell belongs to a picker column, and every column has one", ()
 });
 
 test("the column picker names the cells each column holds, from the table", () => {
-  assert.deepEqual(cellsOf("down").map((cell) => cell.label), ["down", "↓ wire", "↓ saved", "to agent", "↓ time"]);
+  assert.deepEqual(cellsOf("down").map((cell) => cell.label), ["down", "↓ wire", "↓ saved", "to agent", "↓ time", "↓ gap"]);
   assert.deepEqual(cellsOf("model").map((cell) => cell.label), ["model", "upstream"]);
   assert.deepEqual(cellsOf("ttfb").map((cell) => cell.label), ["ttfb"]);
 });
@@ -173,7 +175,7 @@ test("column lists are validated", () => {
 test("search terms, phrases and negation", () => {
   assert.deepEqual(tokenize('a -b "c d"').map((t) => [t.negated, t.text, t.phrase]),
     [[false, "a", false], [true, "b", false], [false, "c d", true]]);
-  const events = [request(), request({ seq: 3, model: "beta", status: 502, trouble: true }), log()];
+  const events = [request(), request({ seq: 3, model: "beta", status: 502, trouble: true, max_gap: 21.3 }), log()];
   const run = (query) => events.filter(compile(query).test).map((e) => e.seq);
   assert.deepEqual(run(""), [1, 3, 2]);
   assert.deepEqual(run("status:5xx"), [3]);
@@ -184,6 +186,9 @@ test("search terms, phrases and negation", () => {
   assert.deepEqual(run("level:warning"), [2]);
   assert.deepEqual(run('"retrying identity"'), [2]);
   assert.deepEqual(run("ttfb:>500ms size:>400KB"), [1, 3]);
+  assert.deepEqual(run("gap:>20s"), [3]);
+  assert.deepEqual(run("gap:<1s"), [1]);
+  assert.deepEqual(compile("gap:soon").errors.length, 1);
   assert.deepEqual(run("tok:>90K"), [1, 3]);
   assert.deepEqual(run("completions"), [1, 3]);
   assert.deepEqual(compile("status:abc").errors.length, 1);

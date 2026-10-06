@@ -50,7 +50,7 @@ pub fn render(record: &RequestRecord) -> String {
     };
 
     let sep = logfmt::c(DIM, " | ");
-    let segments = [
+    let mut segments = vec![
         format!("{} {conn}", logfmt::c(DIM, "conn")),
         up,
         format!(
@@ -60,6 +60,15 @@ pub fn render(record: &RequestRecord) -> String {
         ),
         down(record, agent_coding, &download),
     ];
+    // The longest silence after the first byte, which only an answer that
+    // sent one can have.
+    if let Some(gap) = record.max_gap {
+        segments.push(format!(
+            "{} {}",
+            logfmt::c(DIM, "gap"),
+            logfmt::c(YELLOW, &logfmt::human_time(gap))
+        ));
+    }
     let mut line = format!(
         "{} {} -> {}{sep}{}",
         logfmt::c(BOLD, record.method.as_str()),
@@ -175,15 +184,16 @@ mod tests {
             upstream_encoding: upstream.into(),
             agent_encoding: agent.map(str::to_owned),
             download: None,
+            max_gap: None,
             complete: true,
             usage: None,
             flight: None,
         }
     }
 
-    /// The segment after `| down`: ANSI codes stripped, since a terminal may
-    /// have turned colour on.
-    fn down_segment(record: &RequestRecord) -> String {
+    /// The line's last segment — `down` unless a gap or the counts follow it —
+    /// with ANSI codes stripped, since a terminal may have turned colour on.
+    fn last_segment(record: &RequestRecord) -> String {
         let line = render(record);
         let mut plain = String::new();
         let mut chars = line.chars();
@@ -204,21 +214,32 @@ mod tests {
     #[test]
     fn the_down_segment_names_every_hop_that_saved_bytes() {
         assert_eq!(
-            down_segment(&record(100_000, "identity", None, 0)),
+            last_segment(&record(100_000, "identity", None, 0)),
             "down 98KB (identity)"
         );
         // Behind a receiver, an agent that asks for no coding: the tunnel's saving.
         assert_eq!(
-            down_segment(&record(12_000, "zstd", None, 0)),
+            last_segment(&record(12_000, "zstd", None, 0)),
             "down 98KB <- 12KB (zstd, -88%)"
         );
         assert_eq!(
-            down_segment(&record(100_000, "identity", Some("zstd"), 11_000)),
+            last_segment(&record(100_000, "identity", Some("zstd"), 11_000)),
             "down 98KB -> 11KB (identity -> zstd)"
         );
         assert_eq!(
-            down_segment(&record(12_000, "zstd", Some("zstd"), 11_000)),
+            last_segment(&record(12_000, "zstd", Some("zstd"), 11_000)),
             "down 98KB <- 12KB (zstd, -88%) -> 11KB (zstd)"
         );
+    }
+
+    /// The gap follows the download, and an answer with no first byte has
+    /// none to print.
+    #[test]
+    fn the_longest_silence_gets_its_own_segment() {
+        let mut streamed = record(100_000, "identity", None, 0);
+        streamed.download = Some(31.4);
+        streamed.max_gap = Some(21.25);
+        assert_eq!(last_segment(&streamed), "gap 21.25s");
+        assert!(!render(&record(100_000, "identity", None, 0)).contains("gap"));
     }
 }

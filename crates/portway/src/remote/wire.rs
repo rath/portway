@@ -236,6 +236,9 @@ struct RecordData {
     upstream_encoding: String,
     agent_encoding: Option<String>,
     download: Option<f64>,
+    // A console older than the field sends none: that answer was not measured.
+    #[serde(default)]
+    max_gap: Option<f64>,
     complete: bool,
     #[serde(default, deserialize_with = "optional_usage")]
     usage: Option<Usage>,

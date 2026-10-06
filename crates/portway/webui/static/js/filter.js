@@ -12,7 +12,7 @@
 //   is:cut is:trouble is:log is:request is:fresh is:reused is:coded
 //   is:catalog     model catalog fetches (GET …/models), which are otherwise
 //                  left out unless they failed (board::catalog)
-//   ttfb:>2s  size:>1MB  down:>10KB  tok:>50K   compare a number
+//   ttfb:>2s  gap:>20s  size:>1MB  down:>10KB  tok:>50K   compare a number
 
 import { lineText, requestLine, logLine, ALL_COLUMNS } from "./eventline.js";
 
@@ -130,6 +130,12 @@ function term({ text, phrase }) {
         const limit = seconds(value);
         if (limit === null) return `ttfb: wants a time like >2s or <300ms, not "${raw}"`;
         return request((event) => compare(op === "=" ? ">=" : op, event.ttfb, limit));
+      }
+      case "gap": {
+        const limit = seconds(value);
+        if (limit === null) return `gap: wants a time like >20s or <1s, not "${raw}"`;
+        return request((event) => event.max_gap != null &&
+          compare(op === "=" ? ">=" : op, event.max_gap, limit));
       }
       case "size": {
         const limit = bytes(value);

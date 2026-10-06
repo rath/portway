@@ -68,6 +68,7 @@ fn request(seq: u64, ts: f64, record: &RequestRecord) -> Value {
         "upstream_encoding": record.upstream_encoding,
         "agent_encoding": record.agent_encoding,
         "download": record.download,
+        "max_gap": record.max_gap,
         "complete": record.complete,
         "usage": record.usage.map(|usage| json!({
             "prompt": usage.prompt,

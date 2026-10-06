@@ -67,6 +67,13 @@ pub struct RequestRecord {
     pub agent_encoding: Option<String>,
     /// First response byte to the end of the relay.
     pub download: Option<f64>,
+    /// The longest the relay went, after the first response byte, without
+    /// handing the agent more of the answer: between two chunks, or from the
+    /// last one to the end of the relay (the body ending, a cut, or the agent
+    /// leaving). `None` when no byte arrived. A client that warns about a
+    /// stalled stream counts the same silence; the receiver's own record of
+    /// the request says whether the upstream was the quiet one.
+    pub max_gap: Option<f64>,
     /// False when the relay ended before the upstream body did: an agent
     /// abort, an upstream error or a read timeout.
     pub complete: bool,

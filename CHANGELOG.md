@@ -7,6 +7,18 @@ version may contain breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- Each request records its longest silence: how long, after the answer's
+  first byte, the relay went without passing the agent more of it, up to the
+  end of the relay. The log line ends its timings with `| gap 21.30s`, the
+  database keeps it as `max_gap_ms` (schema v6; rows recorded earlier read as
+  unmeasured), and both dashboards' request detail shows it as `longest gap`.
+  The browser console adds a `↓ gap` column, a `gap:>20s` search and a
+  `max_gap_s` export field. A client that warns about a stalled stream counts
+  the same silence, and the receiver logs its own, so the two lines say which
+  hop went quiet.
+
 ## [0.2.4] - 2026-10-05
 
 ### Changed

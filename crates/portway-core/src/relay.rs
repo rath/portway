@@ -65,6 +65,11 @@ pub struct RequestLog {
     received_wire: u64,
     agent_bytes: u64,
     first_byte: Option<Instant>,
+    /// When the agent was last handed a chunk; `None` before the first one
+    /// and once the relay is over for the agent.
+    last_chunk: Option<Instant>,
+    /// The longest wait for the next chunk so far (see `RequestRecord`).
+    max_gap: Option<Duration>,
     /// False until the upstream body ends on its own: an abort, an upstream
     /// error or a read timeout leaves it false.
     complete: bool,
@@ -116,6 +121,8 @@ impl RequestLog {
             received_wire: 0,
             agent_bytes: 0,
             first_byte: None,
+            last_chunk: None,
+            max_gap: None,
             complete: false,
             usage: None,
             stats,
@@ -147,6 +154,14 @@ impl RequestLog {
             upstream_encoding: self.upstream_encoding.clone(),
             agent_encoding: self.agent_coding.map(str::to_owned),
             download: self.first_byte.map(|at| at.elapsed().as_secs_f64()),
+            // A gap still open here belongs to a log that ended outside the
+            // relay; it lasted until now.
+            max_gap: self
+                .max_gap
+                .into_iter()
+                .chain(self.last_chunk.map(|last| last.elapsed()))
+                .max()
+                .map(|gap| gap.as_secs_f64()),
             complete: self.complete,
             usage: self.usage,
             flight: Some(self._in_flight.flight().id()),
@@ -166,6 +181,29 @@ impl RequestLog {
         self._in_flight
             .flight()
             .progress(self.received, self.received_wire, agent);
+    }
+
+    /// A chunk handed to the agent at `now`: the wait since the previous one
+    /// is a gap, and the first one opens the count at zero.
+    fn chunk(&mut self, now: Instant) {
+        let gap = self
+            .last_chunk
+            .map_or(Duration::ZERO, |last| now.saturating_duration_since(last));
+        self.widen(gap);
+        self.last_chunk = Some(now);
+    }
+
+    /// The relay is over for the agent at `now`, so the wait since its last
+    /// chunk is its last gap. Whatever is read after that, the agent never
+    /// waited for.
+    fn close_gap(&mut self, now: Instant) {
+        if let Some(last) = self.last_chunk.take() {
+            self.widen(now.saturating_duration_since(last));
+        }
+    }
+
+    fn widen(&mut self, gap: Duration) {
+        self.max_gap = Some(self.max_gap.map_or(gap, |max| max.max(gap)));
     }
 }
 
@@ -217,6 +255,9 @@ impl RelayBody {
     }
 
     fn finish(&mut self) {
+        if let Some(log) = self.log.as_mut() {
+            log.close_gap(Instant::now());
+        }
         // Only a body read to completion leaves the connection reusable.
         if self.log.as_ref().is_some_and(|log| log.complete)
             && let Some(lease) = self.lease.as_mut()
@@ -247,6 +288,9 @@ impl Drop for RelayBody {
         let Some(upstream) = self.upstream.take() else {
             return;
         };
+        if let Some(log) = self.log.as_mut() {
+            log.close_gap(Instant::now());
+        }
         let Ok(runtime) = tokio::runtime::Handle::try_current() else {
             return;
         };
@@ -360,9 +404,11 @@ impl Body for RelayBody {
                     // both are read before the hop re-encodes the bytes.
                     self.usage.push(&decoded);
                     if let Some(log) = self.log.as_mut() {
+                        let now = Instant::now();
                         if log.first_byte.is_none() {
-                            log.first_byte = Some(Instant::now());
+                            log.first_byte = Some(now);
                         }
+                        log.chunk(now);
                         log.received += decoded.len() as u64;
                         log.stats
                             .down_bytes

@@ -64,7 +64,7 @@ async fn the_request_log_reports_conn_phases_ratio_and_times() {
     assert!(
         Regex::new(concat!(
             r"^POST /v1/chat/completions -> 200 \| conn (reused|dns \S+ tcp \S+) \| ",
-            r"up \S+ -> \S+ \(zstd, -\d+%\) \S+ \| ttfb \S+ \| down \S+ \(identity\) \S+$",
+            r"up \S+ -> \S+ \(zstd, -\d+%\) \S+ \| ttfb \S+ \| down \S+ \(identity\) \S+ \| gap \S+$",
         ))
         .unwrap()
         .is_match(&post),
@@ -76,7 +76,7 @@ async fn the_request_log_reports_conn_phases_ratio_and_times() {
     assert!(
         Regex::new(concat!(
             r"^GET \S+ -> 200 \| conn (reused|dns \S+ tcp \S+) \| up 0B -> 0B \(identity\) \| ",
-            r"ttfb \S+ \| down \S+ \(identity\) \S+$",
+            r"ttfb \S+ \| down \S+ \(identity\) \S+ \| gap \S+$",
         ))
         .unwrap()
         .is_match(&get),

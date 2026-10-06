@@ -98,6 +98,10 @@ export const CELLS = [
     read: (e) => (e.download == null ? null : { text: humanTime(e.download), tone: null }),
   },
   {
+    key: "gap", column: "down", label: "↓ gap", numeric: true, note: "longest silence after the first byte",
+    read: (e) => (e.max_gap == null ? null : { text: humanTime(e.max_gap), tone: null }),
+  },
+  {
     key: "prompt", column: "tokens", label: "tok in", numeric: true, note: "prompt tokens the engine counted",
     read: (e) => (e.usage ? { text: humanCount(e.usage.prompt), tone: null, title: String(e.usage.prompt) } : null),
   },

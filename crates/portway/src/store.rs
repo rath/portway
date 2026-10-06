@@ -36,7 +36,7 @@ const QUEUE: usize = 4096;
 const POLL: Duration = Duration::from_millis(200);
 const PRUNE_EVERY: Duration = Duration::from_secs(24 * 60 * 60);
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
-const SCHEMA_VERSION: i64 = 5;
+const SCHEMA_VERSION: i64 = 6;
 
 /// `ts_unix` is the epoch second the row reached the store, not the request's
 /// own clock: the writer's clock is the one the window is measured against.
@@ -73,7 +73,8 @@ CREATE TABLE IF NOT EXISTS requests (
   reasoning_tokens INTEGER,
   received_agent INTEGER NOT NULL DEFAULT 0,
   upstream TEXT NOT NULL DEFAULT '',
-  tier TEXT
+  tier TEXT,
+  max_gap_ms REAL
 );
 CREATE INDEX IF NOT EXISTS requests_ts ON requests(ts_unix);
 CREATE TABLE IF NOT EXISTS logs (
@@ -120,12 +121,19 @@ const MIGRATE_V4: &str = "
 ALTER TABLE requests ADD COLUMN tier TEXT;
 ";
 
+/// v5 -> v6: the longest silence after the first byte, NULL where no byte
+/// arrived. Rows recorded before the upgrade were never measured, so they read
+/// as NULL too.
+const MIGRATE_V5: &str = "
+ALTER TABLE requests ADD COLUMN max_gap_ms REAL;
+";
+
 const INSERT_REQUEST: &str = "INSERT INTO requests (
   ts_unix, model, method, path, status, dns_ms, tcp_ms, tls_ms, body_len,
   wire_len, coding, upload_ms, ttfb_ms, received, received_wire,
   upstream_encoding, download_ms, complete, prompt_tokens, cached_tokens,
-  completion_tokens, reasoning_tokens, received_agent, upstream, tier
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+  completion_tokens, reasoning_tokens, received_agent, upstream, tier, max_gap_ms
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
 const INSERT_LOG: &str = "INSERT INTO logs (ts_unix, level, message) VALUES (?, ?, ?)";
 
@@ -272,10 +280,11 @@ fn open_create(db: &Path) -> Result<Connection, String> {
             .map_err(|err| format!("{}: {err}", db.display()))?;
         let steps = match version {
             0 => SCHEMA.to_string(),
-            1 => format!("{MIGRATE_V1}{MIGRATE_V2}{MIGRATE_V3}{MIGRATE_V4}"),
-            2 => format!("{MIGRATE_V2}{MIGRATE_V3}{MIGRATE_V4}"),
-            3 => format!("{MIGRATE_V3}{MIGRATE_V4}"),
-            _ => MIGRATE_V4.to_string(),
+            1 => format!("{MIGRATE_V1}{MIGRATE_V2}{MIGRATE_V3}{MIGRATE_V4}{MIGRATE_V5}"),
+            2 => format!("{MIGRATE_V2}{MIGRATE_V3}{MIGRATE_V4}{MIGRATE_V5}"),
+            3 => format!("{MIGRATE_V3}{MIGRATE_V4}{MIGRATE_V5}"),
+            4 => format!("{MIGRATE_V4}{MIGRATE_V5}"),
+            _ => MIGRATE_V5.to_string(),
         };
         tx.execute_batch(&steps)
             .map_err(|err| format!("{}: {err}", db.display()))?;
@@ -349,6 +358,13 @@ pub fn has_upstream_column(connection: &Connection) -> Result<bool, String> {
 pub fn has_tier_column(connection: &Connection) -> Result<bool, String> {
     const TIER_SINCE: i64 = 5;
     Ok(schema_version(connection)? >= TIER_SINCE)
+}
+
+/// Whether the file keeps the longest silence of each answer. A reader of an
+/// older file selects `NULL`: those rows were never measured.
+pub fn has_gap_column(connection: &Connection) -> Result<bool, String> {
+    const GAP_SINCE: i64 = 6;
+    Ok(schema_version(connection)? >= GAP_SINCE)
 }
 
 /// The writer thread. Nothing here is allowed to end the process: a disk that
@@ -445,6 +461,7 @@ fn insert(tx: &Transaction<'_>, batch: &[Event]) -> rusqlite::Result<()> {
                     record.received_agent as i64,
                     record.upstream,
                     record.tier,
+                    ms(record.max_gap),
                 ])?;
             }
             Event::Log { level, message, .. } => {
@@ -528,6 +545,7 @@ mod tests {
             upstream_encoding: "gzip".to_string(),
             agent_encoding: None,
             download: Some(0.018),
+            max_gap: Some(0.011),
             complete,
             usage: Some(Usage {
                 prompt: 18234,
@@ -548,6 +566,7 @@ mod tests {
         record.tls = None;
         record.upload = None;
         record.download = None;
+        record.max_gap = None;
         record.usage = None;
         record
     }
@@ -636,6 +655,7 @@ mod tests {
                         COALESCE(dns_ms IS NOT NULL OR tcp_ms IS NOT NULL
                                  OR tls_ms IS NOT NULL OR upload_ms IS NOT NULL
                                  OR download_ms IS NOT NULL
+                                 OR max_gap_ms IS NOT NULL
                                  OR prompt_tokens IS NOT NULL
                                  OR cached_tokens IS NOT NULL
                                  OR completion_tokens IS NOT NULL
@@ -847,6 +867,19 @@ mod tests {
             )
             .unwrap();
         assert_eq!(tier, (None, Some("tier-a".into())));
+
+        // And the v6 column: the old row was never measured, the new one
+        // keeps its longest silence in milliseconds.
+        let gap: (Option<f64>, Option<f64>) = db
+            .query_row(
+                "SELECT (SELECT max_gap_ms FROM requests WHERE model = 'model-zeta'),
+                        (SELECT max_gap_ms FROM requests WHERE model = 'model-alpha')",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(gap.0, None);
+        assert!((gap.1.unwrap() - 11.0).abs() < 1e-9, "{gap:?}");
     }
 
     #[test]

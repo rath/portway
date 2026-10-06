@@ -42,32 +42,37 @@ const POLL: Duration = Duration::from_millis(1000);
 const PROBE: Duration = Duration::from_millis(500);
 
 /// The recorded rows, most of them as the recorder wrote them. Token counts
-/// only came at schema v2 and the named tier at v5, so the older layouts read
-/// them back as NULL.
+/// only came at schema v2, the named tier at v5 and the longest gap at v6, so
+/// the older layouts read them back as NULL.
 const REQUEST_COLUMNS: &str = "id, ts_unix, model, method, path, status,
     dns_ms, tcp_ms, tls_ms, body_len, wire_len, coding, upload_ms, ttfb_ms,
     received, received_wire, upstream_encoding, download_ms, complete,
     prompt_tokens, cached_tokens, completion_tokens, reasoning_tokens,
-    received_agent, upstream, tier";
+    received_agent, upstream, tier, max_gap_ms";
+const REQUEST_COLUMNS_V5: &str = "id, ts_unix, model, method, path, status,
+    dns_ms, tcp_ms, tls_ms, body_len, wire_len, coding, upload_ms, ttfb_ms,
+    received, received_wire, upstream_encoding, download_ms, complete,
+    prompt_tokens, cached_tokens, completion_tokens, reasoning_tokens,
+    received_agent, upstream, tier, NULL";
 const REQUEST_COLUMNS_V4: &str = "id, ts_unix, model, method, path, status,
     dns_ms, tcp_ms, tls_ms, body_len, wire_len, coding, upload_ms, ttfb_ms,
     received, received_wire, upstream_encoding, download_ms, complete,
     prompt_tokens, cached_tokens, completion_tokens, reasoning_tokens,
-    received_agent, upstream, NULL";
+    received_agent, upstream, NULL, NULL";
 const REQUEST_COLUMNS_V3: &str = "id, ts_unix, model, method, path, status,
     dns_ms, tcp_ms, tls_ms, body_len, wire_len, coding, upload_ms, ttfb_ms,
     received, received_wire, upstream_encoding, download_ms, complete,
     prompt_tokens, cached_tokens, completion_tokens, reasoning_tokens,
-    received_agent, model, NULL";
+    received_agent, model, NULL, NULL";
 const REQUEST_COLUMNS_V2: &str = "id, ts_unix, model, method, path, status,
     dns_ms, tcp_ms, tls_ms, body_len, wire_len, coding, upload_ms, ttfb_ms,
     received, received_wire, upstream_encoding, download_ms, complete,
     prompt_tokens, cached_tokens, completion_tokens, reasoning_tokens, 0, model,
-    NULL";
+    NULL, NULL";
 const REQUEST_COLUMNS_V1: &str = "id, ts_unix, model, method, path, status,
     dns_ms, tcp_ms, tls_ms, body_len, wire_len, coding, upload_ms, ttfb_ms,
     received, received_wire, upstream_encoding, download_ms, complete,
-    NULL, NULL, NULL, NULL, 0, model, NULL";
+    NULL, NULL, NULL, NULL, 0, model, NULL, NULL";
 const LOG_COLUMNS: &str = "id, ts_unix, level, message";
 
 /// Bytes on the wire per second, which is the one shape only SQL can give: the
@@ -143,6 +148,7 @@ struct Reader {
     agent: bool,
     upstream: bool,
     tier: bool,
+    gap: bool,
 }
 
 /// What a row is read by: a window cutoff, or the id the last poll stopped at.
@@ -206,12 +212,14 @@ impl Reader {
         let agent = store::has_agent_column(&connection)?;
         let upstream = store::has_upstream_column(&connection)?;
         let tier = store::has_tier_column(&connection)?;
+        let gap = store::has_gap_column(&connection)?;
         Ok(Some(Reader {
             connection,
             tokens,
             agent,
             upstream,
             tier,
+            gap,
         }))
     }
 
@@ -232,11 +240,12 @@ impl Reader {
     }
 
     fn requests(&self, key: Key) -> Result<Vec<Stored>, String> {
-        let columns = match (self.tokens, self.agent, self.upstream, self.tier) {
-            (true, true, true, true) => REQUEST_COLUMNS,
-            (true, true, true, false) => REQUEST_COLUMNS_V4,
-            (true, true, false, _) => REQUEST_COLUMNS_V3,
-            (true, false, _, _) => REQUEST_COLUMNS_V2,
+        let columns = match (self.tokens, self.agent, self.upstream, self.tier, self.gap) {
+            (true, true, true, true, true) => REQUEST_COLUMNS,
+            (true, true, true, true, false) => REQUEST_COLUMNS_V5,
+            (true, true, true, false, _) => REQUEST_COLUMNS_V4,
+            (true, true, false, _, _) => REQUEST_COLUMNS_V3,
+            (true, false, _, _, _) => REQUEST_COLUMNS_V2,
             _ => REQUEST_COLUMNS_V1,
         };
         let sql = read("requests", columns, key);
@@ -276,6 +285,7 @@ impl Reader {
                         upstream_encoding: row.get(16)?,
                         agent_encoding: None,
                         download: seconds(row.get(17)?),
+                        max_gap: seconds(row.get(26)?),
                         complete: row.get::<_, i64>(18)? != 0,
                         // Both counts or neither, the same rule the scanner
                         // applies to what the engine reported.
@@ -589,6 +599,7 @@ mod tests {
             upstream_encoding: "gzip".to_string(),
             agent_encoding: None,
             download: Some(0.018),
+            max_gap: Some(0.011),
             complete: true,
             usage: Some(Usage {
                 prompt: 18_234,
@@ -638,6 +649,7 @@ mod tests {
         assert_eq!(record.received_wire, written.received_wire);
         assert_eq!(record.upstream_encoding, written.upstream_encoding);
         assert_eq!(record.download, written.download);
+        assert_eq!(record.max_gap, written.max_gap);
         assert_eq!(record.complete, written.complete);
         assert_eq!(record.usage, written.usage);
     }

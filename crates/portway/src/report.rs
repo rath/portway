@@ -630,6 +630,7 @@ mod tests {
             upstream_encoding: "gzip".to_string(),
             agent_encoding: None,
             download: Some(0.020),
+            max_gap: None,
             complete,
             usage: None,
             flight: None,

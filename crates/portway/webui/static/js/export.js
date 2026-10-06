@@ -18,6 +18,7 @@ const FIELDS = [
   ["received_wire", (e) => e.received_wire ?? ""],
   ["received_agent", (e) => e.received_agent ?? ""],
   ["download_s", (e) => e.download ?? ""],
+  ["max_gap_s", (e) => e.max_gap ?? ""],
   ["complete", (e) => (e.kind === "request" ? e.complete : "")],
   ["handshake_s", (e) => e.handshake ?? ""],
   ["prompt_tokens", (e) => e.usage?.prompt ?? ""],

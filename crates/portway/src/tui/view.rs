@@ -1927,6 +1927,7 @@ fn detail_lines(t: &Theme, record: &RequestRecord) -> Vec<Line<'static>> {
             ),
         ),
         field(t, "download took", optional(record.download)),
+        field(t, "longest gap", optional(record.max_gap)),
         field(
             t,
             "tokens",
@@ -2022,6 +2023,7 @@ mod tests {
             upstream_encoding: "gzip".to_string(),
             agent_encoding: None,
             download: Some(0.018),
+            max_gap: None,
             complete: true,
             usage: None,
             flight: None,
