@@ -523,3 +523,38 @@ async fn receiver_reload_applies_origin_compression_without_restarting_decoder()
     assert!(!calls[3].has("content-encoding"));
     assert_eq!(origin.probes(), 0);
 }
+
+/// A daemon told to stop while it is still negotiating with an upstream that
+/// does not answer stops the orderly way, at once: the probe is abandoned,
+/// not waited out, and the signal is handled rather than killing the process
+/// before it can flush its recorder and say so in its log.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_daemon_stopped_while_negotiating_stops_the_orderly_way() {
+    // Takes connections and never answers them: the /health probe hangs.
+    let silent = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let upstreams = format!("model-zeta=http://{}", silent.local_addr().unwrap());
+    let dir = data_dir("negotiating");
+    let port = free_port();
+
+    let launched = launch(&dir, port, &upstreams);
+    assert!(
+        launched.status.success(),
+        "launcher: {} / {}",
+        stdout(&launched),
+        stderr(&launched)
+    );
+    let pid = launched_pid(&launched);
+    let _cleanup = Cleanup(dir.clone());
+
+    let started = std::time::Instant::now();
+    let stop = oneshot(&dir, "--stop");
+    assert!(stop.status.success(), "{}", stderr(&stop));
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "the stop waited {:?} for the probe",
+        started.elapsed()
+    );
+    assert!(!running(pid), "pid {pid} is still running");
+    wait_for_log(&dir, "stopping").await;
+    drop(silent);
+}

@@ -304,12 +304,11 @@ async fn run(
             #[cfg(not(feature = "web"))]
             None => {}
         }
-        router.negotiate_all().await;
         // A foreground console has no log to reopen: a hangup is the terminal
         // going away, and ends the process the orderly way.
         let hangup = ready.is_some() && daemon.is_none();
         tokio::select! {
-            () = serving(listener, router_state, decoder) => {}
+            () = negotiated_serving(&router, listener, router_state, decoder) => {}
             () = terminate() => {
                 logfmt::info("stopping");
             }
@@ -351,9 +350,8 @@ async fn run(
         )?;
 
         logfmt::info(&banner);
-        router.negotiate_all().await;
         tokio::select! {
-            () = serving(listener, router_state, decoder) => {}
+            () = negotiated_serving(&router, listener, router_state, decoder) => {}
             _ = quit => {}
             () = terminate_tui() => {}
         }
@@ -605,6 +603,22 @@ async fn hung_up() {
         }
         Err(_) => std::future::pending::<()>().await,
     }
+}
+
+/// Negotiate every upstream, then serve: one future, raced against the ways
+/// out. A stop or a signal that arrives while an upstream is slow to answer
+/// its probe abandons the probe and ends the process the orderly way. Run
+/// before the race, the probe was waited out first, and a signal sent in the
+/// meantime, with no handler installed yet, killed the process outright:
+/// no recorder flush, no pid file removed, no console told.
+async fn negotiated_serving(
+    router: &portway::router::Router,
+    listener: tokio::net::TcpListener,
+    cell: RouterCell,
+    receiver: Option<Arc<portway_core::Receiver>>,
+) {
+    router.negotiate_all().await;
+    serving(listener, cell, receiver).await;
 }
 
 async fn serving(

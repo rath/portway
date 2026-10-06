@@ -19,6 +19,15 @@ version may contain breaking changes.
   the same silence, and the receiver logs its own, so the two lines say which
   hop went quiet.
 
+### Fixed
+
+- A forwarder told to stop while it is still probing its upstreams at start
+  now stops at once and the orderly way. The probes ran before portway
+  listened for a way out, so a console stop waited for a slow upstream's probe
+  to time out, and a SIGTERM, SIGINT or `--stop` in that window found no
+  handler installed and killed the process outright: no recorder flush, no
+  `stopping` line, and a dashboard's terminal left as it was.
+
 ## [0.2.4] - 2026-10-05
 
 ### Changed
