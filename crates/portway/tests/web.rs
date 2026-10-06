@@ -237,6 +237,11 @@ async fn eventually<F: AsyncFnMut() -> bool>(what: &str, mut check: F) {
     }
 }
 
+/// Blocks the calling thread while it waits. The upstream mock runs on the
+/// test's runtime, and portway acts on a stop only once its startup
+/// negotiation with that mock is done, so a test that calls this on a
+/// current-thread runtime can starve the mock and hold the stop until the
+/// negotiation times out. Such tests run on a multi-thread runtime.
 fn exited(child: &mut Reap, within: Duration) -> Option<std::process::ExitStatus> {
     let deadline = std::time::Instant::now() + within;
     loop {
@@ -694,7 +699,7 @@ async fn a_reload_reprices_the_running_console() {
 /// `--web-base-path`: served under a prefix a proxy strips, the console must
 /// keep the browser inside that prefix for its assets and API calls, while a
 /// request that is not under the prefix is refused rather than served.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn a_base_path_keeps_the_console_inside_its_prefix() {
     let upstream = upstream(Health::Json(vec!["zstd"]), Reply::Ok).await;
     let dir = data_dir("base-path");
@@ -797,7 +802,7 @@ async fn a_base_path_keeps_the_console_inside_its_prefix() {
 #[path = "common/remote.rs"]
 mod remote_tests;
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn persistent_console_access_survives_restart_and_can_be_reset() {
     let upstream = upstream(Health::Json(vec!["zstd"]), Reply::UsageJson).await;
     let dir = data_dir("persistent-auth");
