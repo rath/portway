@@ -26,6 +26,8 @@ const EVENTS_MIN: u16 = 4;
 /// sparklines, and enough for the bars to show a difference in height rather
 /// than just presence.
 const CHART_HEIGHT: u16 = 6;
+/// Short terminals prioritize event history over either chart.
+const CHARTS_MIN_HEIGHT: u16 = 24;
 /// Gutter in front of each sparkline: `↓ down` plus a right-aligned peak.
 const LABEL: u16 = 14;
 /// Below this the charts stack instead of sitting side by side.
@@ -76,7 +78,9 @@ pub fn panes(area: Rect, models: usize) -> Option<Panes> {
         spare -= table_height;
     }
 
-    let charts = if area.width >= WIDE && spare >= CHART_HEIGHT {
+    let charts = if area.height < CHARTS_MIN_HEIGHT {
+        None
+    } else if area.width >= WIDE && spare >= CHART_HEIGHT {
         Some(Charts::SideBySide)
     } else if spare >= CHART_HEIGHT * 2 {
         Some(Charts::Stacked)
@@ -2831,9 +2835,37 @@ mod tests {
     }
 
     #[test]
+    fn short_terminals_give_chart_space_to_events() {
+        for width in [78, 140] {
+            for height in [22, 23] {
+                let out = screen(width, height, &populated());
+                assert!(!out.contains("request body / turn"), "{out}");
+                assert!(!out.contains("socket bytes/s"), "{out}");
+                assert!(out.contains("events"), "{out}");
+                for models in [0, 1, 3] {
+                    let area = Rect::new(0, 0, width, height);
+                    let layout = panes(area, models).unwrap();
+                    assert!(layout.charts.is_none());
+                    let table_height = layout.models.map_or(0, |table| table.height);
+                    assert_eq!(layout.events.height, height - 6 - table_height);
+                    assert_eq!(
+                        events_height(area, models),
+                        (height - 8 - table_height) as usize
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn the_last_chart_standing_is_the_one_that_moves() {
         // Narrow enough to stack, with room for exactly one of the two.
-        let out = screen(78, 16, &populated());
+        let mut state = populated();
+        state.models.push(crate::tui::state::ModelRow {
+            name: "model-alpha".into(),
+            view: StatsView::default(),
+        });
+        let out = screen(78, 24, &state);
         assert!(out.contains("socket bytes/s"), "{out}");
         assert!(!out.contains("request body / turn"), "{out}");
     }
