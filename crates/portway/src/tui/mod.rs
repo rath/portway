@@ -410,10 +410,14 @@ fn apply(event: TermEvent, state: &mut State, settings: &Settings) -> bool {
     match event {
         TermEvent::Key(key) => return key_press(key, state, settings),
         TermEvent::Mouse(mouse) => {
-            // The wheel scrolls the event pane, which the usage screen covers:
-            // moving a cursor nobody can see leaves the pane somewhere else
-            // when the dashboard comes back.
             if state.usage_open {
+                if !state.usage_rates {
+                    match mouse.kind {
+                        MouseEventKind::ScrollUp => state.scroll_usage(-3),
+                        MouseEventKind::ScrollDown => state.scroll_usage(3),
+                        _ => {}
+                    }
+                }
                 return false;
             }
             match mouse.kind {
@@ -519,6 +523,14 @@ fn key_press(key: KeyEvent, state: &mut State, settings: &Settings) -> bool {
             KeyCode::Left | KeyCode::Char('h') => state.step_usage_range(-1),
             KeyCode::Right | KeyCode::Char('l') => state.step_usage_range(1),
             KeyCode::Char('p') => state.usage_rates = true,
+            KeyCode::Down | KeyCode::Char('j') => state.scroll_usage(1),
+            KeyCode::Up | KeyCode::Char('k') => state.scroll_usage(-1),
+            KeyCode::PageDown | KeyCode::Char(' ') => state.page_usage(1),
+            KeyCode::PageUp => state.page_usage(-1),
+            KeyCode::Home | KeyCode::Char('g') => state.usage_scroll.set(0),
+            KeyCode::End | KeyCode::Char('G') => {
+                state.usage_scroll.set(state.usage_scroll_max.get());
+            }
             _ => {}
         }
         return false;
@@ -694,6 +706,46 @@ mod tests {
         assert!(state.flights_open);
         let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
         assert!(key_press(ctrl_c, &mut state, &Settings::default()));
+    }
+
+    #[test]
+    fn usage_scroll_keys_and_wheel_leave_the_dashboard_alone() {
+        let mut state = noisy();
+        state.usage_open = true;
+        state.usage_scroll_max.set(30);
+        state.usage_page_height.set(8);
+        for code in [KeyCode::Down, KeyCode::Char('j'), KeyCode::PageDown] {
+            key(code, &mut state);
+        }
+        assert_eq!(state.usage_scroll.get(), 10);
+        key(KeyCode::PageUp, &mut state);
+        key(KeyCode::Char('k'), &mut state);
+        key(KeyCode::Up, &mut state);
+        assert_eq!(state.usage_scroll.get(), 0);
+        key(KeyCode::End, &mut state);
+        key(KeyCode::Down, &mut state);
+        assert_eq!(state.usage_scroll.get(), 30);
+        key(KeyCode::Home, &mut state);
+        let wheel = TermEvent::Mouse(ratatui::crossterm::event::MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        });
+        apply(wheel.clone(), &mut state, &Settings::default());
+        assert_eq!(state.usage_scroll.get(), 3);
+        state.usage_rates = true;
+        apply(wheel, &mut state, &Settings::default());
+        key(KeyCode::Down, &mut state);
+        assert_eq!(state.usage_scroll.get(), 3);
+        assert!(state.follow);
+        state.usage_rates = false;
+        key(KeyCode::Right, &mut state);
+        assert_eq!(state.usage_scroll.get(), 0);
+        state.usage_scroll.set(10);
+        state.close_usage();
+        state.open_usage();
+        assert_eq!(state.usage_scroll.get(), 0);
     }
 
     #[test]

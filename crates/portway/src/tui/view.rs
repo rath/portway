@@ -4,9 +4,11 @@
 use std::time::Duration;
 
 use ratatui::Frame;
+use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
+use ratatui::widgets::Widget;
 use ratatui::widgets::{Block, BorderType, Cell, Clear, Padding, Paragraph, Row, Sparkline, Table};
 
 use crate::board::{self, compression_status};
@@ -1019,31 +1021,63 @@ fn usage_screen(frame: &mut Frame, state: &State, area: Rect) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    // The selector, then a header row, one row per model and the total. What is
-    // left under them is the room the notes get, so they sit against the
-    // numbers they qualify rather than at the bottom of a tall terminal.
-    let height = table.rows.len() as u16 + 2;
-    let rows = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Length(height),
-        Constraint::Length(1),
-        Constraint::Length(notes.len() as u16),
-        Constraint::Min(0),
-    ])
-    .split(inner);
-    frame.render_widget(Paragraph::new(usage_ranges(state)), rows[0]);
+    // Keep the range selector visible; scroll the table, total and notes as
+    // one document so every line remains reachable in a short terminal.
+    let selector = Rect::new(inner.x, inner.y, inner.width, 1);
+    let viewport = Rect::new(inner.x, inner.y + 1, inner.width, inner.height - 1);
+    frame.render_widget(Paragraph::new(usage_ranges(state)), selector);
+    let table_height = (table.rows.len() + 2).min(u16::MAX as usize / 2) as u16;
+    let content_height = table_height + 1 + notes.len() as u16;
+    let max_scroll = content_height.saturating_sub(viewport.height) as usize;
+    let offset = state.usage_scroll.get().min(max_scroll);
+    state.usage_scroll.set(offset);
+    state.usage_scroll_max.set(max_scroll);
+    state.usage_page_height.set(viewport.height as usize);
+
+    let mut content = Buffer::empty(Rect::new(0, 0, viewport.width, content_height));
+    content.set_style(content.area, Style::default().fg(t.text).bg(t.surface));
+    let table_area = Rect::new(0, 0, viewport.width, table_height);
     if table.is_empty() {
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                " no usage recorded in this window",
-                Style::default().fg(t.dim),
-            ))),
-            rows[1],
-        );
+        Paragraph::new(Line::from(Span::styled(
+            " no usage recorded in this window",
+            Style::default().fg(t.dim),
+        )))
+        .render(table_area, &mut content);
     } else {
-        frame.render_widget(usage_table(t, table, area.width, rows[1].width), rows[1]);
+        Widget::render(
+            usage_table(t, table, area.width, viewport.width),
+            table_area,
+            &mut content,
+        );
     }
-    frame.render_widget(Paragraph::new(notes), rows[3]);
+    Paragraph::new(notes).render(
+        Rect::new(
+            0,
+            table_height + 1,
+            viewport.width,
+            content_height - table_height - 1,
+        ),
+        &mut content,
+    );
+    for y in 0..viewport.height.min(content_height) {
+        for x in 0..viewport.width {
+            frame.buffer_mut()[(viewport.x + x, viewport.y + y)] =
+                content[(x, y + offset as u16)].clone();
+        }
+    }
+    if max_scroll > 0 {
+        let hint = format!(
+            " ↑↓/jk scroll · PgUp/PgDn · Home/End · {}/{} ",
+            offset + 1,
+            max_scroll + 1
+        );
+        frame.render_widget(
+            Paragraph::new(hint)
+                .style(Style::default().fg(t.dim))
+                .alignment(Alignment::Right),
+            Rect::new(area.x + 1, area.bottom() - 1, area.width - 2, 1),
+        );
+    }
 
     if state.usage_rates {
         popup(t, frame, area, "costs", cost_lines(t, table));
@@ -3005,6 +3039,48 @@ mod tests {
             cut: 94,
         });
         state
+    }
+
+    #[test]
+    fn long_usage_scrolls_through_models_total_and_notes_and_clamps_on_resize() {
+        let mut state = usage_state();
+        let table = state.usage.as_mut().unwrap();
+        let model = table.rows[0].clone();
+        table.rows = (0..40)
+            .map(|i| {
+                let mut row = model.clone();
+                row.model = format!("scroll-model-{i:02}");
+                row
+            })
+            .collect();
+
+        let top = screen(120, 12, &state);
+        assert!(top.contains("scroll-model-00"), "{top}");
+        assert!(!top.contains("scroll-model-39"), "{top}");
+        assert!(top.contains("PgUp/PgDn"), "{top}");
+        assert!(state.usage_scroll_max.get() > 0);
+
+        state.scroll_usage(isize::MAX);
+        let bottom = screen(120, 12, &state);
+        assert!(bottom.contains("scroll-model-39"), "{bottom}");
+        assert!(bottom.contains("total"), "{bottom}");
+        assert!(bottom.contains("back to the dashboard"), "{bottom}");
+        assert!(bottom.contains("←→ window"), "{bottom}");
+        assert!(!bottom.contains("scroll-model-00"), "{bottom}");
+
+        state.page_usage(-1);
+        let middle = screen(120, 12, &state);
+        assert!(!middle.contains("back to the dashboard"), "{middle}");
+
+        let expanded = screen(120, 60, &state);
+        assert_eq!(state.usage_scroll.get(), 0);
+        assert_eq!(state.usage_scroll_max.get(), 0);
+        assert!(expanded.contains("scroll-model-00"), "{expanded}");
+        assert!(expanded.contains("scroll-model-39"), "{expanded}");
+
+        state.usage.as_mut().unwrap().rows.truncate(1);
+        screen(120, 12, &state);
+        assert_eq!(state.usage_scroll.get(), 0);
     }
 
     #[test]

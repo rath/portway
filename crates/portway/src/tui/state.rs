@@ -8,6 +8,7 @@
 //! window has no counters but the events it replayed, and adds those up
 //! instead.
 
+use std::cell::Cell;
 use std::collections::{BTreeMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -277,6 +278,10 @@ pub struct State {
     /// The usage screen: up or down, what it is measuring, what the last read
     /// found, and when it happened.
     pub usage_open: bool,
+    /// Viewport measurements are updated by the renderer, including on resize.
+    pub usage_scroll: Cell<usize>,
+    pub usage_scroll_max: Cell<usize>,
+    pub usage_page_height: Cell<usize>,
     pub usage_range: spend::Range,
     /// The rates popup, over the usage screen: what each upstream charges per
     /// million tokens, which is the one thing a per-row column has no room
@@ -318,6 +323,9 @@ impl State {
             flights_open: false,
             db: None,
             usage_open: false,
+            usage_scroll: Cell::new(0),
+            usage_scroll_max: Cell::new(0),
+            usage_page_height: Cell::new(1),
             usage_range: spend::Range::Today,
             usage_rates: false,
             usage: None,
@@ -582,7 +590,21 @@ impl State {
     /// Put the usage screen up, reading the day in on the way.
     pub fn open_usage(&mut self) {
         self.usage_open = true;
+        self.usage_scroll.set(0);
         self.read_usage();
+    }
+
+    pub fn scroll_usage(&self, delta: isize) {
+        self.usage_scroll.set(
+            self.usage_scroll
+                .get()
+                .saturating_add_signed(delta)
+                .min(self.usage_scroll_max.get()),
+        );
+    }
+
+    pub fn page_usage(&self, delta: isize) {
+        self.scroll_usage(delta * self.usage_page_height.get().max(1) as isize);
     }
 
     /// Put the dashboard back. What was read stays, so the next `u` draws a
@@ -613,6 +635,7 @@ impl State {
     /// range is a question, and the answer should not wait for the next refresh.
     pub fn step_usage_range(&mut self, delta: isize) {
         self.usage_range = self.usage_range.step(delta);
+        self.usage_scroll.set(0);
         self.read_usage();
     }
 

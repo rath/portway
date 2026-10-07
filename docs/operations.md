@@ -235,6 +235,8 @@ adds `--config` automatically must omit it for remote attach.
 | `t` | Throughput bucket width |
 | `u` | Usage and cost view |
 | `←` / `→` in usage | Change the date window |
+| `↑` / `↓`, `k` / `j`, mouse wheel in usage | Scroll the table and notes |
+| `PgUp` / `PgDn`, `Home` / `End` in usage | Page, top, or bottom |
 | `p` in usage | Cost breakdown |
 | `c` | Event column picker |
 | `T` | Color theme picker |
