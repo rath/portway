@@ -102,9 +102,9 @@ version may contain breaking changes.
   tokens at those rates for all of its tokens, as OpenAI does past 272K input
   tokens. The usage screens note how many requests passed the line.
 - `docs/prices.md`: OpenAI's and Anthropic's published list prices as
-  `[prices]` tables to copy, OpenAI's long-context rates included, with the
-  tier each client sends and what the estimates leave out, such as cache
-  writes.
+  `[prices]` tables to copy, OpenAI's and Claude Haiku 5.5's long-context
+  rates included, with the tier each client sends and what the estimates
+  leave out, such as cache writes.
 - Color themes for the terminal dashboard. `T` lists the web console's
   themes under the same names (Portway Dark, Catppuccin Mocha and Latte,
   Tokyo Night, Nord, Dracula and Gruvbox) beside `terminal`, the sixteen

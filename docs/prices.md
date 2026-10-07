@@ -1,12 +1,13 @@
 # Vendor prices
 
 The vendors' published list prices, written as Portway `[prices]` tables to
-copy into `portway.toml`. Checked on 2026-10-02 against
-[OpenAI's API pricing](https://developers.openai.com/api/docs/pricing) and
-[Anthropic's pricing](https://platform.claude.com/docs/en/about-claude/pricing).
-Prices change, so check those pages before relying on a figure. Portway's costs
-are estimates, not a bill; behind a ChatGPT or Claude subscription they are
-what the same tokens would cost on the API.
+copy into `portway.toml`. Checked against
+[OpenAI's API pricing](https://developers.openai.com/api/docs/pricing) on
+2026-10-02 and
+[Anthropic's pricing](https://platform.claude.com/docs/en/about-claude/pricing)
+on 2026-10-07. Prices change, so check those pages before relying on a
+figure. Portway's costs are estimates, not a bill; behind a ChatGPT or Claude
+subscription they are what the same tokens would cost on the API.
 
 Rates are USD per million tokens. Each table is keyed by the model name the
 client sends, and each tier by the value its request names; see
@@ -229,12 +230,19 @@ cache_read = 0.35```
 
 ## Anthropic
 
-Anthropic draws no long-context line for these models: "Claude 4.6 and later
-models … include the full 1M token context window at standard pricing", and
-fast mode's rates apply across the whole window too. Fast mode is a research
-preview for Opus models. Its cache reads use the
-model's cache multiplier on the fast input rate (0.05 times on Opus 5.5, 0.1
-times on Opus 5). The other models on Anthropic's page take the same shape.
+Anthropic draws no long-context line for most of these models: "Claude 4.6 and
+later models (except Claude Haiku 5.5) … include the full 1M token context
+window at standard pricing", and fast mode's rates apply across the whole
+window too. Claude Haiku 5.5 is the exception: a prompt of over 100,000 tokens
+pays five times the rates on every line, so its table carries
+`above = 100000`. Fast mode is a research preview for Opus models. Its cache
+reads use the model's cache multiplier on the fast input rate (0.05 times on
+Opus 5.5, 0.1 times on Opus 5). The other models on Anthropic's page take the
+same shape.
+
+Anthropic's page disagrees with itself on Sonnet 5.5's cache reads: the model
+table lists $0.20, while the caching section gives 0.05 times input ($0.10).
+The table below keeps the model table's $0.20.
 
 ```toml
 [prices."claude-fable-5-1"]
@@ -266,6 +274,12 @@ cache_read = 1.0
 input = 2.0
 output = 10.0
 cache_read = 0.2
+
+[prices."claude-haiku-5-5"]
+input = 0.1
+output = 0.5
+cache_read = 0.01
+long_context = { above = 100000, input = 0.5, output = 2.5, cache_read = 0.05 }
 
 [prices."claude-haiku-4-5-20251001"]
 input = 1.0
