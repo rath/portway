@@ -16,9 +16,13 @@ pub enum Mode {
 #[command(
     name = "portway",
     version = crate::VERSION,
-    about = "A compression-first HTTP forwarder"
+    about = "A compression-first HTTP forwarder",
+    args_conflicts_with_subcommands = true,
+    subcommand_negates_reqs = true
 )]
 pub struct Args {
+    #[command(subcommand)]
+    pub command: Option<crate::setup::Command>,
     /// Forward requests, or receive compressed requests in front of an HTTP service.
     #[arg(value_enum, default_value = "forward")]
     pub mode: Mode,

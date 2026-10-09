@@ -55,6 +55,13 @@ fn purge_in_background() {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = Args::parse();
+    if let Some(command) = &args.command {
+        if let Err(message) = portway::setup::run(command) {
+            eprintln!("portway: {message}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
 
     // One-shot commands: no runtime, no listener, no recorder thread.
     if args.stop || args.reload || args.status {

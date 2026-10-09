@@ -1,0 +1,14 @@
+{
+  "name": "portway",
+  "owner": {
+    "name": "Jang-Ho Hwang"
+  },
+  "plugins": [
+    {
+      "name": "portway",
+      "source": "./plugins/portway",
+      "description": "Configure and diagnose Portway connections for your coding CLI."
+    }
+  ],
+  "description": "Configure and diagnose Portway connections for Codex and Claude Code."
+}

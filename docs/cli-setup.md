@@ -5,6 +5,10 @@ connects to a named path, called a **mount**: `/anthropic` for Claude Code and
 `/codex` for Codex. Portway forwards the client's credentials and model name;
 you do not need a Portway API key or a list of vendor models in its config.
 
+Prefer guided setup? The [Portway plugin](plugins.md) can create these client
+settings and diagnose the connection. Its setup commands currently require a
+source build; the manual steps below also work with existing releases.
+
 ## Before you start
 
 Install the CLI you want to use and confirm it works directly with your
@@ -156,7 +160,8 @@ Check the Portway listener:
 curl --fail-with-body http://127.0.0.1:8787/__portway/health
 ```
 
-Expect `{"status":"ok","mode":"forward"}`. This only checks the listener;
+With named mounts, expect `{"status":"ok","mode":"router"}` (`forward` for
+a single upstream). This only checks the listener;
 it does not verify provider credentials or model access.
 
 Send a short message in the CLI you connected and confirm both that it answers

@@ -36,6 +36,7 @@ bash scripts/check.sh
 | `examples/` | Annotated TOML files referenced by the documentation |
 | `docs/` | User documentation; `docs/protocol.md` is the wire contract |
 | `scripts/` | `check.sh` for CI checks, `bench.py` for the compression benchmark |
+| `plugins/portway/` | Shared setup and diagnostic skills, with Codex and Claude Code plugin manifests; see [plugin maintenance](docs/plugins.md#plugin-maintenance) |
 | `site/` | The project page at portway.told.me in English, Korean, Simplified Chinese and Japanese; static files with no build step, published by `.github/workflows/pages.yml` |
 
 ## Checks

@@ -9,6 +9,13 @@ version may contain breaking changes.
 
 ### Added
 
+- `portway setup` previews and applies Codex/Claude Code connection settings
+  with private backups, preserving unrelated preferences and existing logins.
+  It can prepare a local forwarder or connect clients to an existing server.
+  `portway doctor` checks client settings and the listener without sending
+  credentials or model requests. Codex and Claude Code plugins distribute
+  shared setup and diagnostic skills through repository marketplaces.
+
 - Each request records its longest silence: how long, after the answer's
   first byte, the relay went without passing the agent more of it, up to the
   end of the relay. The log line ends its timings with `| gap 21.30s`, the

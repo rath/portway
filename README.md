@@ -60,7 +60,9 @@ turn 2  ─ 262 KiB ─▶  dcz, 1 KiB, names turn 1 by hash  ──▶  restore
   times, and application errors are never retried. See
   [errors and replay](docs/protocol.md#errors-and-replay).
 
-No provider, model endpoint, credential, or price is built in. The workspace
+Forwarding destinations come from your configuration; credentials and prices
+are never supplied by Portway. The optional `setup --local` command writes
+Claude Code and Codex upstreams into a config file you can inspect. The workspace
 contains `portway-core`, an embeddable Rust library, and `portway`, a CLI with
 recording, daemon control, reports, and an optional terminal dashboard.
 
@@ -145,6 +147,31 @@ numbers stay flat.
 | Run in the background, use the dashboard, or diagnose errors | [Operations](docs/operations.md) |
 | Implement a compatible receiver | [Request compression protocol](docs/protocol.md) |
 | Understand what Portway stores and how to report a vulnerability | [Security](SECURITY.md) |
+
+## Guided setup
+
+The [Portway plugin](docs/plugins.md) walks you through connecting Codex or
+Claude Code and checking the result. It uses `portway setup` to preview and
+apply client settings with backups, and `portway doctor` to diagnose the
+connection. These commands are currently available in source builds; plugin
+installation alone does not install or upgrade Portway.
+
+From a checkout with the setup commands built, install the plugin for your CLI:
+
+```sh
+# Codex
+codex plugin marketplace add .
+codex plugin add portway@portway
+
+# Claude Code
+claude plugin marketplace add .
+claude plugin install portway@portway
+```
+
+Start a new session, then ask Codex to use the Portway plugin for setup, or run
+`/portway:setup` in Claude Code. See [guided setup](docs/plugins.md) for binary
+installation, existing-server and local options, and how to disconnect.
+The manual quick start below also works with existing releases.
 
 ## Quick start
 

@@ -1,0 +1,20 @@
+{
+  "name": "portway",
+  "interface": {
+    "displayName": "Portway"
+  },
+  "plugins": [
+    {
+      "name": "portway",
+      "source": {
+        "source": "local",
+        "path": "./plugins/portway"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    }
+  ]
+}

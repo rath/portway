@@ -22,6 +22,7 @@ pub mod logfmt;
 pub mod remote;
 pub mod report;
 pub mod request_log;
+pub mod setup;
 #[cfg(any(feature = "tui", feature = "web"))]
 pub mod spend;
 pub mod store;

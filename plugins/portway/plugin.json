@@ -1,0 +1,25 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "portway",
+  "version": "0.1.0",
+  "description": "Set up and diagnose Portway connections for Codex and Claude Code using your existing login.",
+  "author": { "name": "Jang-Ho Hwang" },
+  "homepage": "https://portway.told.me",
+  "repository": "https://github.com/rath/portway",
+  "license": "MIT",
+  "extensions": {
+    "com.openai": {
+      "onboardingSkill": "./skills/setup/SKILL.md",
+      "interface": {
+        "displayName": "Portway",
+        "shortDescription": "Connect your coding CLI to Portway",
+        "longDescription": "Configure an existing Portway server or prepare a local forwarder. Keep your current login, preview configuration changes, and check the connection.",
+        "developerName": "Jang-Ho Hwang",
+        "category": "Developer Tools",
+        "capabilities": ["Read", "Write"],
+        "websiteURL": "https://portway.told.me",
+        "defaultPrompt": ["Set up Portway for my coding CLI.", "Check my Portway connection."]
+      }
+    }
+  }
+}
