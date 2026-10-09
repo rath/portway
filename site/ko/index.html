@@ -170,7 +170,7 @@
   <h2 id="try-title"><span>설치하고 에이전트를</span> <span>연결하세요</span></h2>
   <p>Homebrew 패키지에는 터미널 대시보드와 브라우저 콘솔까지 들어 있어 Rust 툴체인이 필요 없습니다.</p>
 
-  <p>설정을 도와주는 안내가 필요하다면 <a href="https://github.com/rath/portway/blob/main/docs/plugins.md">Codex·Claude Code용 Portway 플러그인</a>을 사용할 수 있습니다. 클라이언트 설정과 연결 확인을 도와줍니다. Homebrew나 릴리스 다운로드로 Portway 0.2.5 이상을 설치하거나 업데이트하면 되며, 소스 빌드는 필요 없습니다.</p>
+  <p>설정을 도와주는 안내가 필요하다면 <a href="https://github.com/rath/portway/blob/main/docs/plugins.md">Codex·Claude Code용 Portway 플러그인</a>을 사용할 수 있습니다. 클라이언트 설정과 연결 확인을 도와줍니다. Homebrew나 릴리스 다운로드로 Portway 0.2.5 이상을 설치하거나 업데이트하면 되며, 소스 빌드는 필요 없습니다. 플러그인은 setup과 doctor 스킬만 추가할 뿐, 트래픽 경로를 바꾸지 않습니다. 설정을 마친 뒤 Codex는 <code>codex -p portway</code>로 실행할 때만 Portway를 거치고, Claude Code는 setup이 사용자 설정에 기록하므로 새로 여는 모든 세션이 Portway를 거칩니다.</p>
 
   <ol class="steps">
     <li>

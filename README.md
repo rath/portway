@@ -174,6 +174,11 @@ installation, existing-server and local options, and how to disconnect.
 Plugin installation does not install or upgrade the Portway binary. The manual
 quick start below is also available.
 
+The plugin only adds the setup and doctor skills; it does not route traffic.
+After setup, Codex goes through Portway only when started with
+`codex -p portway`, while Claude Code goes through it in every new session,
+because setup writes its user settings.
+
 ## Quick start
 
 Install with [Homebrew](https://github.com/rath/homebrew-tap) on macOS Apple

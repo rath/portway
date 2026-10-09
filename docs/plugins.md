@@ -61,9 +61,13 @@ local forwarder or an existing server; for an existing server, supply its API
 listener URL, such as `http://localhost:8787`, not its web-console URL.
 
 The skill previews the files and fields to change before applying them. It
-uses the same deterministic commands described below. After setup, start
-Codex with `codex -p portway`, or start a new `claude` session. A plugin cannot
-switch the API connection of an already-running client reliably.
+uses the same deterministic commands described below. A plugin cannot switch
+the API connection of an already-running client reliably.
+
+The plugin only adds the setup and doctor skills; it does not route traffic.
+After setup, Codex goes through Portway only when started with
+`codex -p portway`, while Claude Code goes through it in every new session,
+because setup writes its user settings.
 
 ## Use the commands without a plugin
 

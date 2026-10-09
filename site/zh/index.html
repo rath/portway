@@ -150,7 +150,7 @@
   <h2 id="try-title">安装，然后连接你的智能体</h2>
   <p>Homebrew 安装包已包含终端面板和浏览器控制台，无需 Rust 工具链。</p>
 
-  <p>想要引导式设置？<a href="https://github.com/rath/portway/blob/main/docs/plugins.md">适用于 Codex 和 Claude Code 的 Portway 插件</a>可以配置客户端并检查连接。通过 Homebrew 或发布版二进制安装或升级到 Portway 0.2.5 及以上即可，无需从源码构建。</p>
+  <p>想要引导式设置？<a href="https://github.com/rath/portway/blob/main/docs/plugins.md">适用于 Codex 和 Claude Code 的 Portway 插件</a>可以配置客户端并检查连接。通过 Homebrew 或发布版二进制安装或升级到 Portway 0.2.5 及以上即可，无需从源码构建。插件只添加 setup 和 doctor 两个技能，不会改变流量路径。设置完成后，Codex 只有在用 <code>codex -p portway</code> 启动时才经过 Portway；而 Claude Code 因为 setup 写入了其用户设置，之后每个新会话都会经过 Portway。</p>
 
   <ol class="steps">
     <li>
