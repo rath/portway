@@ -40,6 +40,8 @@ pub struct Snapshot {
     pub instance: String,
     pub listen: SocketAddr,
     pub total: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_aliases: Option<crate::aliases::ModelAliases>,
     /// In flight per route.
     pub upstreams: BTreeMap<String, u64>,
     #[serde(with = "flight_list")]
@@ -217,6 +219,7 @@ impl Server {
         dir: &Path,
         listen: SocketAddr,
         telemetry: Arc<crate::telemetry::Telemetry>,
+        aliases: crate::aliases::Shared,
     ) -> io::Result<Self> {
         let mut random = [0u8; 16];
         File::open("/dev/urandom")?.read_exact(&mut random)?;
@@ -240,8 +243,9 @@ impl Server {
                         }
                         let telemetry = Arc::clone(&telemetry);
                         let instance = instance.clone();
+                        let aliases = aliases.clone();
                         clients.spawn(async move {
-                            let _ = tokio::time::timeout(TIMEOUT, send(stream, listen, instance, telemetry.flights())).await;
+                            let _ = tokio::time::timeout(TIMEOUT, send(stream, listen, instance, telemetry.flights(), &aliases)).await;
                         });
                     }
                     _ = clients.join_next(), if !clients.is_empty() => {}
@@ -283,6 +287,7 @@ async fn send(
     listen: SocketAddr,
     instance: String,
     flights: &Flights,
+    aliases: &crate::aliases::Shared,
 ) -> io::Result<()> {
     let snapshot = flights.snapshot(MAX_FLIGHTS);
     let snapshot = Snapshot {
@@ -290,6 +295,7 @@ async fn send(
         instance,
         listen,
         total: snapshot.total,
+        model_aliases: Some((*aliases.get()).clone()),
         upstreams: snapshot.upstreams,
         flights: snapshot.flights,
     };
@@ -466,7 +472,13 @@ mod tests {
         // A dead server can leave a socket behind without holding the lock.
         drop(UnixListener::bind(dir.0.join(SOCKET_FILE)).unwrap());
         let telemetry = Arc::new(Telemetry::default());
-        let server = Server::start(&dir.0, address(), Arc::clone(&telemetry)).unwrap();
+        let server = Server::start(
+            &dir.0,
+            address(),
+            Arc::clone(&telemetry),
+            Default::default(),
+        )
+        .unwrap();
         let inode = fs::metadata(dir.0.join(LOCK_FILE)).unwrap().ino();
         for file in [SOCKET_FILE, LOCK_FILE] {
             assert_eq!(
@@ -474,13 +486,21 @@ mod tests {
                 0o600
             );
         }
-        assert!(Server::start(&dir.0, address(), Arc::clone(&telemetry)).is_err());
+        assert!(
+            Server::start(
+                &dir.0,
+                address(),
+                Arc::clone(&telemetry),
+                Default::default()
+            )
+            .is_err()
+        );
         let first = fetch(&dir.0, &target()).await.unwrap();
         assert_eq!(first.total, 0);
         drop(server);
         assert!(!dir.0.join(SOCKET_FILE).exists());
         assert!(dir.0.join(LOCK_FILE).exists());
-        let _server = Server::start(&dir.0, address(), telemetry).unwrap();
+        let _server = Server::start(&dir.0, address(), telemetry, Default::default()).unwrap();
         assert_eq!(fs::metadata(dir.0.join(LOCK_FILE)).unwrap().ino(), inode);
         assert_ne!(
             first.instance,
@@ -494,11 +514,19 @@ mod tests {
         let path = dir.0.join(SOCKET_FILE);
         fs::write(&path, "keep").unwrap();
         let telemetry = Arc::new(Telemetry::default());
-        assert!(Server::start(&dir.0, address(), Arc::clone(&telemetry)).is_err());
+        assert!(
+            Server::start(
+                &dir.0,
+                address(),
+                Arc::clone(&telemetry),
+                Default::default()
+            )
+            .is_err()
+        );
         assert_eq!(fs::read_to_string(&path).unwrap(), "keep");
         fs::remove_file(&path).unwrap();
         std::os::unix::fs::symlink(dir.0.join(LOCK_FILE), &path).unwrap();
-        assert!(Server::start(&dir.0, address(), telemetry).is_err());
+        assert!(Server::start(&dir.0, address(), telemetry, Default::default()).is_err());
         assert!(fs::symlink_metadata(path).unwrap().file_type().is_symlink());
     }
 
@@ -517,7 +545,13 @@ mod tests {
         for _ in 0..204 {
             registry.begin("beta", "", &Method::GET, "/v1/models", 0);
         }
-        let _server = Server::start(&dir.0, address(), Arc::clone(&telemetry)).unwrap();
+        let _server = Server::start(
+            &dir.0,
+            address(),
+            Arc::clone(&telemetry),
+            Default::default(),
+        )
+        .unwrap();
         let read = fetch(&dir.0, &target()).await.unwrap();
         assert_eq!(read.total, 205);
         assert_eq!(
@@ -623,7 +657,13 @@ mod tests {
         telemetry
             .flights()
             .begin("old", "", &Method::GET, "/old", 0);
-        let server = Server::start(&dir.0, address(), Arc::clone(&telemetry)).unwrap();
+        let server = Server::start(
+            &dir.0,
+            address(),
+            Arc::clone(&telemetry),
+            Default::default(),
+        )
+        .unwrap();
         let client = Client::start(dir.0.clone(), "127.0.0.1".into(), address().port());
         let mut receiver = client.snapshots();
         let first = changed(&mut receiver).await.unwrap();
@@ -632,7 +672,8 @@ mod tests {
         assert!(changed(&mut receiver).await.is_none());
         let next = Arc::new(Telemetry::default());
         next.flights().begin("new", "", &Method::GET, "/new", 0);
-        let _server = Server::start(&dir.0, address(), Arc::clone(&next)).unwrap();
+        let _server =
+            Server::start(&dir.0, address(), Arc::clone(&next), Default::default()).unwrap();
         let second = changed(&mut receiver).await.unwrap();
         assert_ne!(first.instance, second.instance);
         assert_eq!(second.flights[0].upstream, "new");
@@ -649,7 +690,13 @@ mod tests {
         let flight = telemetry
             .flights()
             .begin("alpha", "", &Method::GET, &"/".repeat(800_000), 0);
-        let _server = Server::start(&dir.0, address(), Arc::clone(&telemetry)).unwrap();
+        let _server = Server::start(
+            &dir.0,
+            address(),
+            Arc::clone(&telemetry),
+            Default::default(),
+        )
+        .unwrap();
         let mut readers = Vec::new();
         for _ in 0..MAX_CLIENTS {
             readers.push(UnixStream::connect(dir.0.join(SOCKET_FILE)).await.unwrap());
@@ -669,5 +716,49 @@ mod tests {
             .flights()
             .begin("huge", "", &Method::GET, &"/".repeat(MAX_RESPONSE + 1), 0);
         assert!(fetch(&dir.0, &target()).await.is_err());
+    }
+    #[tokio::test]
+    async fn aliases_follow_runtime_changes_and_legacy_snapshots_still_decode() {
+        let dir = Dir::new("aliases");
+        let aliases =
+            crate::aliases::Shared::new(BTreeMap::from([("vendor/model".into(), "short".into())]));
+        let _server = Server::start(
+            &dir.0,
+            address(),
+            Arc::new(Telemetry::default()),
+            aliases.clone(),
+        )
+        .unwrap();
+        let first = fetch(&dir.0, &target()).await.unwrap();
+        assert_eq!(
+            first.model_aliases.as_ref().unwrap()["vendor/model"],
+            "short"
+        );
+        let mut legacy = serde_json::to_value(&first).unwrap();
+        legacy.as_object_mut().unwrap().remove("model_aliases");
+        assert!(
+            serde_json::from_value::<Snapshot>(legacy)
+                .unwrap()
+                .model_aliases
+                .is_none()
+        );
+        aliases.set(BTreeMap::from([("vendor/model".into(), "renamed".into())]));
+        assert_eq!(
+            fetch(&dir.0, &target())
+                .await
+                .unwrap()
+                .model_aliases
+                .unwrap()["vendor/model"],
+            "renamed"
+        );
+        aliases.set(BTreeMap::new());
+        assert!(
+            fetch(&dir.0, &target())
+                .await
+                .unwrap()
+                .model_aliases
+                .unwrap()
+                .is_empty()
+        );
     }
 }

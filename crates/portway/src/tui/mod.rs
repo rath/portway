@@ -93,6 +93,7 @@ pub const SETTINGS_FILE: &str = "portway.tui";
 /// decision.
 pub struct Settings {
     pub prices: crate::config::Prices,
+    pub aliases: crate::aliases::Shared,
     pub columns: Columns,
     pub theme: &'static Theme,
     file: Option<PathBuf>,
@@ -102,6 +103,7 @@ impl Default for Settings {
     fn default() -> Settings {
         Settings {
             prices: Default::default(),
+            aliases: Default::default(),
             columns: Columns::ALL,
             theme: &theme::TERMINAL,
             file: None,
@@ -138,6 +140,7 @@ impl Settings {
             .unwrap_or_else(|| theme::fallback(std::env::var("COLORTERM").ok().as_deref()));
         Settings {
             prices: Default::default(),
+            aliases: Default::default(),
             columns,
             theme,
             file: Some(file),
@@ -330,6 +333,9 @@ fn run(
     for event in events.try_iter() {
         state.push(event);
     }
+    if state.remote.is_none() {
+        state.aliases = settings.aliases.get();
+    }
     tick(&mut state, feed);
     let mut last_tick = Instant::now();
     let mut dirty = true;
@@ -340,6 +346,9 @@ fn run(
             dirty = true;
         }
         if last_tick.elapsed() >= TICK {
+            if state.remote.is_none() {
+                state.aliases = settings.aliases.get();
+            }
             tick(&mut state, feed);
             last_tick = Instant::now();
             dirty = true;

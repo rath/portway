@@ -63,7 +63,11 @@ impl Server {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         // Pin configuration so the user's own config cannot affect this test.
-        std::fs::write(dir.join("config.toml"), "").unwrap();
+        std::fs::write(
+            dir.join("config.toml"),
+            "[model_aliases]\nupstream = \"local-friendly\"\n",
+        )
+        .unwrap();
         if block_socket {
             std::fs::write(dir.join(live::SOCKET_FILE), "keep").unwrap();
         }
@@ -276,10 +280,11 @@ async fn attached_q_leaves_server_and_request_running() {
         unsafe { libc::fcntl(master.as_raw_fd(), libc::F_SETFL, libc::O_NONBLOCK) },
         -1
     );
+    std::fs::write(server.dir.join("viewer.toml"), "").unwrap();
     let mut command = Command::new(BIN);
     command
         .args(["--config"])
-        .arg(server.dir.join("config.toml"))
+        .arg(server.dir.join("viewer.toml"))
         .args(["--data-dir"])
         .arg(&server.dir)
         .args([
@@ -311,6 +316,7 @@ async fn attached_q_leaves_server_and_request_running() {
     drawn(&mut master, &mut viewer, &mut screen, "events").await;
     std::io::Write::write_all(&mut master, b"f").unwrap();
     drawn(&mut master, &mut viewer, &mut screen, "prefill").await;
+    drawn(&mut master, &mut viewer, &mut screen, "local-friendly").await;
     std::io::Write::write_all(&mut master, b"f").unwrap();
     std::io::Write::write_all(&mut master, b"q").unwrap();
     let status = within(async {

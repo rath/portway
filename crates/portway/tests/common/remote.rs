@@ -243,6 +243,12 @@ async fn remote_terminal_authenticates_reuses_sessions_and_leaves_the_server_run
     // This malformed config must never be loaded by a remote viewer.
     std::fs::write(viewer_dir.join("portway.toml"), "not valid toml [[[").unwrap();
     let config = config(&dir, &upstream.base);
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(&config)
+        .unwrap()
+        .write_all(b"\n[model_aliases]\nmodel-web = \"remote-friendly\"\n")
+        .unwrap();
     let port = free_port();
     let web_port = free_port().to_string();
     let args = [
@@ -261,7 +267,7 @@ async fn remote_terminal_authenticates_reuses_sessions_and_leaves_the_server_run
     viewer.drawn("Console token").await;
     viewer.keys(&format!("{}\r", launched.token));
     viewer.drawn("events").await;
-    viewer.drawn("model-web").await;
+    viewer.drawn("remote-friendly").await;
     assert!(!String::from_utf8_lossy(&viewer.screen).contains(&launched.token));
     viewer.keys("f");
     viewer.drawn("nothing in flight").await;

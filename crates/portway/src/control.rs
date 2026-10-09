@@ -43,7 +43,12 @@ pub async fn current_prices(cell: &PricesCell) -> Arc<Prices> {
 /// Rebuild the router from the configuration and publish it, returning the
 /// number of routes. On an error the running router is left untouched.
 /// Reloads are serialized, so two that overlap cannot publish out of order.
-pub async fn reload(args: &Args, cell: &RouterCell, prices: &PricesCell) -> Result<usize, String> {
+pub async fn reload(
+    args: &Args,
+    cell: &RouterCell,
+    prices: &PricesCell,
+    aliases: &crate::aliases::Shared,
+) -> Result<usize, String> {
     static RELOADING: Mutex<()> = Mutex::const_new(());
     let _one_at_a_time = RELOADING.lock().await;
     let config = Config::load(args)?;
@@ -53,5 +58,6 @@ pub async fn reload(args: &Args, cell: &RouterCell, prices: &PricesCell) -> Resu
     let routes = next.routes().len();
     *cell.write().await = next;
     *prices.write().await = Arc::new(config.prices);
+    aliases.set(config.model_aliases);
     Ok(routes)
 }

@@ -43,6 +43,8 @@ pub struct Header {
 }
 #[derive(Deserialize)]
 pub struct Snapshot {
+    #[serde(default)]
+    pub model_aliases: crate::aliases::ModelAliases,
     pub header: Header,
     pub seq: u64,
     pub oldest: u64,
@@ -57,6 +59,8 @@ pub struct Snapshot {
 }
 #[derive(Deserialize)]
 pub struct Tick {
+    #[serde(default)]
+    pub model_aliases: crate::aliases::ModelAliases,
     pub generation: u64,
     pub uptime_s: f64,
     #[serde(flatten)]

@@ -121,6 +121,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(feature = "tui")]
     {
         settings.prices = config.prices.clone();
+        settings.aliases = portway::aliases::Shared::new(config.model_aliases.clone());
     }
     #[cfg(not(feature = "tui"))]
     let settings = ();
@@ -178,6 +179,13 @@ async fn run(
     let router = config.router(args.mode)?;
     let router_state = control::cell(&router);
     let prices_state = control::prices(&config.prices);
+    let aliases_state = portway::aliases::Shared::new(config.model_aliases.clone());
+    #[cfg(feature = "tui")]
+    let _settings = {
+        let mut settings = _settings;
+        settings.aliases = aliases_state.clone();
+        settings
+    };
     let decoder = (args.mode == Mode::Receive)
         .then(|| portway_core::Receiver::new(config.receiver.clone()))
         .transpose()?;
@@ -205,14 +213,18 @@ async fn run(
     );
     // Available in every CLI build, without starting the web console. A local
     // observer failure must never stop forwarding.
-    let _live =
-        match live::Server::start(_dir, listener.local_addr()?, Arc::clone(router.telemetry())) {
-            Ok(server) => Some(server),
-            Err(error) => {
-                logfmt::warn(&format!("live snapshots unavailable: {error}"));
-                None
-            }
-        };
+    let _live = match live::Server::start(
+        _dir,
+        listener.local_addr()?,
+        Arc::clone(router.telemetry()),
+        aliases_state.clone(),
+    ) {
+        Ok(server) => Some(server),
+        Err(error) => {
+            logfmt::warn(&format!("live snapshots unavailable: {error}"));
+            None
+        }
+    };
 
     if !args.tui {
         #[cfg(feature = "web")]
@@ -260,6 +272,7 @@ async fn run(
                         prices: Arc::clone(&prices_state),
                         stop: Arc::clone(&stop),
                     },
+                    aliases: aliases_state.clone(),
                     db: Some(_dir.join(store::DB_FILE)),
                     prices: Arc::clone(&prices_state),
                     dir: _dir.to_path_buf(),
@@ -292,6 +305,7 @@ async fn run(
                     args.clone(),
                     Arc::clone(&router_state),
                     Arc::clone(&prices_state),
+                    aliases_state.clone(),
                     log,
                 ));
             }
@@ -469,6 +483,26 @@ fn web_watching(
         .enable_all()
         .build()?;
     runtime.block_on(async {
+        let aliases = portway::aliases::Shared::new(config.model_aliases.clone());
+        let live = live::Client::start(dir.to_path_buf(), config.host.clone(), config.port);
+        let mut snapshots = live.snapshots();
+        let alias_updates = tokio::spawn({
+            let aliases = aliases.clone();
+            async move {
+                loop {
+                    if let Some(map) = snapshots
+                        .borrow_and_update()
+                        .as_ref()
+                        .and_then(|s| s.model_aliases.as_ref())
+                    {
+                        aliases.set(map.clone());
+                    }
+                    if snapshots.changed().await.is_err() {
+                        break;
+                    }
+                }
+            }
+        });
         let console = web::Console::start(web::Options {
             host: args.web_host.clone(),
             port: args.web_port,
@@ -490,6 +524,7 @@ fn web_watching(
             // reloads one itself, so the file it read at start is the one it
             // keeps. The daemon it signals republishes its own.
             prices: control::prices(&config.prices),
+            aliases,
             dir: dir.to_path_buf(),
         })
         .await?;
@@ -505,6 +540,7 @@ fn web_watching(
             () = hung_up() => {}
         }
         console.shutdown().await;
+        alias_updates.abort();
         Ok::<(), String>(())
     })?;
     watch.shutdown();
@@ -528,7 +564,13 @@ fn daemon_message(outcome: Result<String, String>) -> ! {
 /// SIGHUP in daemon mode: reopen the log, rebuild the router and the price
 /// table from the current TOML and CLI overrides, then negotiate the new
 /// upstreams before publishing either.
-async fn reload_on_hangup(args: Args, router: RouterCell, prices: PricesCell, log: PathBuf) {
+async fn reload_on_hangup(
+    args: Args,
+    router: RouterCell,
+    prices: PricesCell,
+    aliases: portway::aliases::Shared,
+    log: PathBuf,
+) {
     use tokio::signal::unix::{SignalKind, signal};
 
     let Ok(mut stream) = signal(SignalKind::hangup()) else {
@@ -539,7 +581,7 @@ async fn reload_on_hangup(args: Args, router: RouterCell, prices: PricesCell, lo
             Ok(()) => logfmt::info("SIGHUP: log reopened; reloading configuration"),
             Err(err) => logfmt::error(&format!("SIGHUP: could not reopen the log: {err}")),
         }
-        match control::reload(&args, &router, &prices).await {
+        match control::reload(&args, &router, &prices, &aliases).await {
             Ok(routes) => {
                 logfmt::info(&format!(
                     "SIGHUP: configuration reloaded ({routes} route(s))"

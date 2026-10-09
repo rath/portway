@@ -70,6 +70,7 @@ pub struct Shared {
     frames: broadcast::Sender<Frame>,
     stop: AtomicBool,
     recorded: bool,
+    aliases: crate::aliases::Shared,
 }
 
 impl Shared {
@@ -121,6 +122,7 @@ impl Shared {
                 .map(|router| api::flights(logfmt::epoch(), &router.telemetry().flights().views()));
             let body = json!({
                 "header": header,
+                "model_aliases": &*self.aliases.get(),
                 "seq": inner.ring.newest(),
                 "oldest": inner.ring.oldest(),
                 "generation": inner.generation,
@@ -177,7 +179,11 @@ impl Handle {
     }
 }
 
-pub fn spawn(feed: Feed, events: Receiver<Event>) -> std::io::Result<Handle> {
+pub fn spawn(
+    feed: Feed,
+    events: Receiver<Event>,
+    aliases: crate::aliases::Shared,
+) -> std::io::Result<Handle> {
     let recorded = matches!(feed, Feed::Recorded(_));
     let mut board = Board::new();
     board.recorded = recorded;
@@ -192,6 +198,7 @@ pub fn spawn(feed: Feed, events: Receiver<Event>) -> std::io::Result<Handle> {
         frames,
         stop: AtomicBool::new(false),
         recorded,
+        aliases,
     });
     // Whatever is already queued — an attached console starts with an hour of
     // it — and a first sample are in place before the first page asks.
@@ -371,6 +378,7 @@ fn send_tick(shared: &Shared, bars_sent: &mut u64) {
             "bars_total": board.bars_pushed,
             "traffic_tail": api::traffic(board, TRAFFIC_TAIL),
             "generation": inner.generation,
+            "model_aliases": &*shared.aliases.get(),
         })
     };
     let _ = shared

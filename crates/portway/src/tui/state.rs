@@ -232,6 +232,7 @@ impl Filter {
 pub struct State {
     pub remote: Option<crate::remote::wire::RemoteState>,
     pub prices: crate::config::Prices,
+    pub aliases: Arc<crate::aliases::ModelAliases>,
     entries: VecDeque<Row>,
     /// Sequence numbers of the entries the current filter admits, in order.
     filtered: VecDeque<u64>,
@@ -297,6 +298,7 @@ impl State {
         State {
             remote: None,
             prices: Default::default(),
+            aliases: Default::default(),
             entries: VecDeque::new(),
             filtered: VecDeque::new(),
             next_seq: 0,
@@ -377,6 +379,7 @@ impl State {
         use crate::remote::{Update, wire};
         match update {
             Update::Snapshot(snapshot) => {
+                self.aliases = Arc::new(snapshot.model_aliases.clone());
                 self.entries.clear();
                 self.filtered.clear();
                 self.next_seq = 0;
@@ -412,6 +415,7 @@ impl State {
                 self.apply_remote(Update::Flights(snapshot.flights));
             }
             Update::Tick(tick) => {
+                self.aliases = Arc::new(tick.model_aliases.clone());
                 let remote = self.remote.as_mut().expect("remote feed");
                 remote.uptime = tick.uptime_s;
                 remote.sampled = Instant::now();
@@ -548,6 +552,9 @@ impl State {
     /// DB records have no flight IDs. Replace the live list as a whole, also
     /// across server restarts, and leave every historical counter untouched.
     pub fn apply_live(&mut self, snapshot: Option<&crate::live::Snapshot>) {
+        if let Some(aliases) = snapshot.and_then(|s| s.model_aliases.as_ref()) {
+            self.aliases = Arc::new(aliases.clone());
+        }
         self.flights_available = snapshot.is_some();
         self.flights = snapshot.map_or_else(Vec::new, |snapshot| snapshot.flights.clone());
         self.totals.in_flight = snapshot.map_or(0, |snapshot| snapshot.total);

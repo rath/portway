@@ -10,6 +10,7 @@ pub use portway_core::{
 /// the console's `/status` payload both read this rather than
 /// `CARGO_PKG_VERSION`, which never moves between commits.
 pub const VERSION: &str = env!("PORTWAY_VERSION");
+pub mod aliases;
 #[cfg(any(feature = "tui", feature = "web"))]
 pub mod board;
 pub mod cli;

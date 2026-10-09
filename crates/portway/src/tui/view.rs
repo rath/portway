@@ -1,6 +1,7 @@
 //! Laying the dashboard out and drawing it. Pure: a `State` and a `Rect` in,
 //! cells out, so `TestBackend` can assert on whole screens.
 
+use crate::aliases::{ModelAliases, display};
 use std::time::Duration;
 
 use ratatui::Frame;
@@ -198,7 +199,13 @@ pub fn draw(frame: &mut Frame, state: &State, header: &Header) {
     } else if state.detail
         && let Some(record) = state.selected()
     {
-        popup(t, frame, area, "request", detail_lines(t, record));
+        popup(
+            t,
+            frame,
+            area,
+            "request",
+            detail_lines(t, record, &state.aliases),
+        );
     }
 }
 
@@ -314,6 +321,7 @@ fn flights_dialog(frame: &mut Frame, state: &State, area: Rect) {
     let columns = FlightColumns::fit(
         &flights[..shown],
         area.width.saturating_sub(2 * FLIGHTS_GUTTER),
+        &state.aliases,
     );
     let width = columns.width().min(area.width);
     // Placed as though it held `FLIGHTS_SETTLED` rows, so up to there a
@@ -378,7 +386,7 @@ fn flights_dialog(frame: &mut Frame, state: &State, area: Rect) {
     match message {
         Some(message) => frame.render_widget(Paragraph::new(message).block(block), box_area),
         None => frame.render_widget(
-            flights_table(t, &flights[..shown], &columns).block(block),
+            flights_table(t, &flights[..shown], &columns, &state.aliases).block(block),
             box_area,
         ),
     }
@@ -411,7 +419,7 @@ impl FlightColumns {
     /// columns are chosen at the narrowest names, so a long one arriving
     /// widens the dialog into the spare room rather than trading a column
     /// for it.
-    fn fit(flights: &[FlightView], room: u16) -> Self {
+    fn fit(flights: &[FlightView], room: u16, aliases: &ModelAliases) -> Self {
         let (model, route) = (FLIGHTS_MODEL.0, Some(FLIGHTS_ROUTE.0));
         let mut columns = [
             Self {
@@ -441,7 +449,11 @@ impl FlightColumns {
                 .unwrap_or(0) as u16
         };
         let mut spare = room.saturating_sub(columns.width());
-        let grow = longest(|flight| flight_name(flight).to_string())
+        let grow = (flights
+            .iter()
+            .map(|flight| display(aliases, flight_name(flight)).chars().count())
+            .max()
+            .unwrap_or(0) as u16)
             .min(FLIGHTS_MODEL.1)
             .saturating_sub(columns.model)
             .min(spare);
@@ -475,7 +487,12 @@ impl FlightColumns {
 }
 
 /// The rows of the dialog, in the columns it has room for.
-fn flights_table(t: &Theme, flights: &[FlightView], columns: &FlightColumns) -> Table<'static> {
+fn flights_table(
+    t: &Theme,
+    flights: &[FlightView],
+    columns: &FlightColumns,
+    aliases: &ModelAliases,
+) -> Table<'static> {
     let roomy = columns.roomy;
     let mut headers = vec![
         Cell::from("model"),
@@ -503,7 +520,7 @@ fn flights_table(t: &Theme, flights: &[FlightView], columns: &FlightColumns) -> 
         let (phase, shade) = flight_phase(t, flight);
         let mut cells = vec![
             Cell::from(Span::styled(
-                clipped(flight_name(flight), columns.model),
+                clipped(display(aliases, flight_name(flight)), columns.model),
                 Style::default().fg(t.model),
             )),
             Cell::from(Span::styled(phase, Style::default().fg(shade))),
@@ -860,7 +877,10 @@ fn models_table(state: &State, width: u16) -> Table<'_> {
         let errors = view.upstream_errors;
         let saved = view.saved_bytes().max(0) as u64;
         let mut cells = vec![
-            Cell::from(Span::styled(row.name.clone(), Style::default().fg(t.model))),
+            Cell::from(Span::styled(
+                display(&state.aliases, &row.name).to_owned(),
+                Style::default().fg(t.model),
+            )),
             Cell::from(coding_span(t, view.coding, view.dict)),
             Cell::from(view.requests.to_string()),
             Cell::from(Span::styled(
@@ -998,7 +1018,7 @@ fn usage_screen(frame: &mut Frame, state: &State, area: Rect) {
         return;
     }
 
-    let notes = usage_notes(t, table);
+    let notes = usage_notes(t, table, &state.aliases);
     // Both ends carry their date: a window that is over ends at a midnight,
     // and `00:00:00` alone would not say which one. Today begins at its first
     // request rather than at midnight.
@@ -1045,7 +1065,7 @@ fn usage_screen(frame: &mut Frame, state: &State, area: Rect) {
         .render(table_area, &mut content);
     } else {
         Widget::render(
-            usage_table(t, table, area.width, viewport.width),
+            usage_table(t, table, area.width, viewport.width, &state.aliases),
             table_area,
             &mut content,
         );
@@ -1080,7 +1100,13 @@ fn usage_screen(frame: &mut Frame, state: &State, area: Rect) {
     }
 
     if state.usage_rates {
-        popup(t, frame, area, "costs", cost_lines(t, table));
+        popup(
+            t,
+            frame,
+            area,
+            "costs",
+            cost_lines(t, table, &state.aliases),
+        );
     }
 }
 
@@ -1106,11 +1132,17 @@ const USAGE_LABEL: u16 = 20;
 /// The label column of the usage tables: as wide as the longest label shown
 /// — a model and its tier can outgrow `USAGE_LABEL` — but never narrower than
 /// `USAGE_LABEL`, and never wider than `most` unless that is narrower still.
-fn label_width(table: &spend::Table, most: u16) -> u16 {
+fn label_width(table: &spend::Table, most: u16, aliases: &ModelAliases) -> u16 {
     let longest = table
         .rows
         .iter()
-        .map(|row| Span::raw(row.label()).width())
+        .map(|row| {
+            Span::raw(spend::label(
+                display(aliases, &row.model),
+                row.tier.as_deref(),
+            ))
+            .width()
+        })
         .max()
         .unwrap_or(0);
     (longest as u16).clamp(USAGE_LABEL, most.max(USAGE_LABEL))
@@ -1118,7 +1150,13 @@ fn label_width(table: &spend::Table, most: u16) -> u16 {
 
 /// `room` is the width the table is drawn in; the numbers keep their columns
 /// and the label takes what they leave, up to what it needs.
-fn usage_table(t: &Theme, table: &spend::Table, width: u16, room: u16) -> Table<'static> {
+fn usage_table(
+    t: &Theme,
+    table: &spend::Table,
+    width: u16,
+    room: u16,
+    aliases: &ModelAliases,
+) -> Table<'static> {
     let roomy = width >= USAGE_ROOMY;
     let mut names = vec!["model", "reqs", "prompt", "cached", "hit", "output"];
     if roomy {
@@ -1134,9 +1172,9 @@ fn usage_table(t: &Theme, table: &spend::Table, width: u16, room: u16) -> Table<
     let mut rows: Vec<Row> = table
         .rows
         .iter()
-        .map(|model| usage_row(t, model, roomy, false))
+        .map(|model| usage_row(t, model, roomy, false, aliases))
         .collect();
-    rows.push(usage_row(t, &table.total, roomy, true));
+    rows.push(usage_row(t, &table.total, roomy, true, aliases));
 
     let mut numbers: Vec<u16> = vec![5, 9, 9, 6, 9];
     if roomy {
@@ -1145,7 +1183,7 @@ fn usage_table(t: &Theme, table: &spend::Table, width: u16, room: u16) -> Table<
     numbers.push(9);
     // One space between every pair of columns, the label's included.
     let taken: u16 = numbers.iter().sum::<u16>() + numbers.len() as u16;
-    let label = label_width(table, room.saturating_sub(taken));
+    let label = label_width(table, room.saturating_sub(taken), aliases);
     let widths = std::iter::once(label)
         .chain(numbers)
         .map(Constraint::Length)
@@ -1189,8 +1227,8 @@ fn usage_ranges(state: &State) -> Line<'static> {
 /// line, less the margin and the four money columns.
 const COST_LABEL_MAX: u16 = 70 - 1 - 41;
 
-fn cost_lines(t: &Theme, table: &spend::Table) -> Vec<Line<'static>> {
-    let width = label_width(table, COST_LABEL_MAX) as usize;
+fn cost_lines(t: &Theme, table: &spend::Table, aliases: &ModelAliases) -> Vec<Line<'static>> {
+    let width = label_width(table, COST_LABEL_MAX, aliases) as usize;
     let mut lines = vec![Line::from(Span::styled(
         " cost by source",
         Style::default().fg(t.accent),
@@ -1206,7 +1244,7 @@ fn cost_lines(t: &Theme, table: &spend::Table) -> Vec<Line<'static>> {
         ),
     ]));
     for row in &table.rows {
-        let label = row.label();
+        let label = spend::label(display(aliases, &row.model), row.tier.as_deref());
         let (prompt, cached, output, total) = match row.charge {
             Some(c) => (
                 dollars(c.input),
@@ -1262,11 +1300,21 @@ fn cost_lines(t: &Theme, table: &spend::Table) -> Vec<Line<'static>> {
 
 /// One line of the usage table. `total` is the same row with the day's pooled
 /// counts in it, drawn bold — the columns are identical on purpose.
-fn usage_row(t: &Theme, model: &spend::Row, roomy: bool, total: bool) -> Row<'static> {
+fn usage_row(
+    t: &Theme,
+    model: &spend::Row,
+    roomy: bool,
+    total: bool,
+    aliases: &ModelAliases,
+) -> Row<'static> {
     let charge = model.charge;
     let mut cells = vec![
         Cell::from(Span::styled(
-            model.label(),
+            if total {
+                model.label()
+            } else {
+                spend::label(display(aliases, &model.model), model.tier.as_deref())
+            },
             Style::default().fg(if total { t.good } else { t.model }),
         )),
         number(model.requests.to_string()),
@@ -1333,11 +1381,13 @@ fn part(amount: Option<f64>) -> String {
 /// What the numbers above are not: written under them, in the order a reader
 /// would ask. A screen full of money has to say whose money, and which part of
 /// it is a floor.
-fn usage_notes(t: &Theme, table: &spend::Table) -> Vec<Line<'static>> {
-    let mut notes: Vec<Line<'static>> = spend::notes(table)
-        .into_iter()
-        .map(|text| note(t, text))
-        .collect();
+fn usage_notes(t: &Theme, table: &spend::Table, aliases: &ModelAliases) -> Vec<Line<'static>> {
+    let mut notes: Vec<Line<'static>> = spend::notes_named(table, |row| {
+        spend::label(display(aliases, &row.model), row.tier.as_deref())
+    })
+    .into_iter()
+    .map(|text| note(t, text))
+    .collect();
     notes.push(Line::from(vec![
         Span::styled(" u / esc", Style::default().fg(t.accent)),
         Span::styled(
@@ -1522,7 +1572,12 @@ impl Fields {
     }
 }
 
-fn request_line(t: &Theme, record: &RequestRecord, columns: Columns) -> Line<'static> {
+fn request_line(
+    t: &Theme,
+    record: &RequestRecord,
+    columns: Columns,
+    aliases: &ModelAliases,
+) -> Line<'static> {
     let status_shade = match record.status {
         status if status < 300 => t.good,
         status if status < 400 => t.wire,
@@ -1553,7 +1608,7 @@ fn request_line(t: &Theme, record: &RequestRecord, columns: Columns) -> Line<'st
             }
             Column::Model => {
                 line.word(Span::styled(
-                    shown_model(&record.model).to_string(),
+                    shown_model(display(aliases, &record.model)).to_string(),
                     Style::default().fg(t.model),
                 ));
             }
@@ -1696,7 +1751,7 @@ fn events(state: &State, width: u16) -> Paragraph<'static> {
         .into_iter()
         .map(|(entry, selected)| {
             let line = match entry {
-                Entry::Request(record) => request_line(t, record, state.columns),
+                Entry::Request(record) => request_line(t, record, state.columns, &state.aliases),
                 Entry::Log {
                     stamp,
                     level,
@@ -1729,7 +1784,10 @@ fn events(state: &State, width: u16) -> Paragraph<'static> {
             format!(
                 " · {} lines · filter {} ",
                 state.len(),
-                state.filter.label()
+                match &state.filter {
+                    crate::tui::state::Filter::Upstream(id) => display(&state.aliases, id),
+                    _ => state.filter.label(),
+                }
             ),
             Style::default().fg(t.dim),
         ),
@@ -1894,19 +1952,22 @@ fn field(t: &Theme, name: &str, value: String) -> Line<'static> {
     ])
 }
 
-fn detail_lines(t: &Theme, record: &RequestRecord) -> Vec<Line<'static>> {
+fn detail_lines(t: &Theme, record: &RequestRecord, aliases: &ModelAliases) -> Vec<Line<'static>> {
     let optional = |value: Option<f64>| {
         value
             .map(human_time)
             .unwrap_or_else(|| "not measured".to_string())
     };
-    vec![
+    let mut lines = vec![
         field(t, "when", record.stamp.clone()),
         field(t, "upstream", record.upstream.clone()),
         field(
             t,
             "model",
-            spend::label(shown_model(&record.model), record.tier.as_deref()),
+            spend::label(
+                shown_model(display(aliases, &record.model)),
+                record.tier.as_deref(),
+            ),
         ),
         field(
             t,
@@ -1995,7 +2056,11 @@ fn detail_lines(t: &Theme, record: &RequestRecord) -> Vec<Line<'static>> {
                 "cut short (agent abort, error or read timeout)".to_string()
             },
         ),
-    ]
+    ];
+    if display(aliases, &record.model) != record.model {
+        lines.insert(3, field(t, "model ID", record.model.clone()));
+    }
+    lines
 }
 
 fn help_lines(t: &Theme) -> Vec<Line<'static>> {
@@ -2412,6 +2477,7 @@ mod tests {
         }
         let bounded = registry.snapshot(crate::live::MAX_FLIGHTS);
         let mut snapshot = crate::live::Snapshot {
+            model_aliases: None,
             version: crate::live::VERSION,
             instance: "a".repeat(32),
             listen: "127.0.0.1:8789".parse().unwrap(),
@@ -2521,7 +2587,7 @@ mod tests {
 
     /// One popup field's value, whatever the column padding came out as.
     fn field_text(record: &RequestRecord, name: &str) -> String {
-        detail_lines(&TERMINAL, record)
+        detail_lines(&TERMINAL, record, &ModelAliases::new())
             .iter()
             .map(text)
             .find_map(|line| {
@@ -2537,7 +2603,15 @@ mod tests {
     #[test]
     fn the_counts_the_engine_reported_ride_the_line_and_the_popup() {
         let quiet = record("model-zeta", 200);
-        assert!(!text(&request_line(&TERMINAL, &quiet, Columns::ALL)).contains("tok"));
+        assert!(
+            !text(&request_line(
+                &TERMINAL,
+                &quiet,
+                Columns::ALL,
+                &ModelAliases::new()
+            ))
+            .contains("tok")
+        );
         assert!(
             field_text(&quiet, "tokens") == "not reported",
             "the popup still says what happened"
@@ -2550,7 +2624,12 @@ mod tests {
             completion: 891,
             reasoning: Some(742),
         });
-        let line = text(&request_line(&TERMINAL, &counted, Columns::ALL));
+        let line = text(&request_line(
+            &TERMINAL,
+            &counted,
+            Columns::ALL,
+            &ModelAliases::new(),
+        ));
         assert!(line.ends_with(" tok 18.2K(99% cached)→891"), "{line}");
         assert_eq!(
             field_text(&counted, "tokens"),
@@ -2566,7 +2645,12 @@ mod tests {
             completion: 891,
             reasoning: None,
         });
-        let line = text(&request_line(&TERMINAL, &bare, Columns::ALL));
+        let line = text(&request_line(
+            &TERMINAL,
+            &bare,
+            Columns::ALL,
+            &ModelAliases::new(),
+        ));
         assert!(line.ends_with(" tok 18.2K→891"), "{line}");
     }
 
@@ -3167,10 +3251,14 @@ mod tests {
         let out = screen(120, 20, &state);
         assert!(out.contains(label), "{out}");
 
-        let lines: Vec<String> = cost_lines(&TERMINAL, state.usage.as_ref().unwrap())
-            .iter()
-            .map(text)
-            .collect();
+        let lines: Vec<String> = cost_lines(
+            &TERMINAL,
+            state.usage.as_ref().unwrap(),
+            &ModelAliases::new(),
+        )
+        .iter()
+        .map(text)
+        .collect();
         let column = |needle: &str| {
             let line = lines.iter().find(|line| line.contains(needle)).unwrap();
             line.chars().count()
@@ -3197,10 +3285,14 @@ mod tests {
         );
         // The three sources of a row that is in play, beside what that upstream
         // cost in this window.
-        let lines: Vec<String> = cost_lines(&TERMINAL, state.usage.as_ref().unwrap())
-            .iter()
-            .map(text)
-            .collect();
+        let lines: Vec<String> = cost_lines(
+            &TERMINAL,
+            state.usage.as_ref().unwrap(),
+            &ModelAliases::new(),
+        )
+        .iter()
+        .map(text)
+        .collect();
         let priced_model = lines
             .iter()
             .find(|line| line.contains("model-epsilon"))
@@ -3346,19 +3438,30 @@ mod tests {
             text(&request_line(
                 &TERMINAL,
                 &record,
-                Columns::parse("time,tokens").unwrap()
+                Columns::parse("time,tokens").unwrap(),
+                &ModelAliases::new()
             )),
             "23:41:02 tok 18.2K(99% cached)→891"
         );
 
         let narrowed = Columns::parse("status,cut,route").unwrap();
         assert_eq!(
-            text(&request_line(&TERMINAL, &record, narrowed)),
+            text(&request_line(
+                &TERMINAL,
+                &record,
+                narrowed,
+                &ModelAliases::new()
+            )),
             "200 POST ../completions"
         );
         record.complete = false;
         assert_eq!(
-            text(&request_line(&TERMINAL, &record, narrowed)),
+            text(&request_line(
+                &TERMINAL,
+                &record,
+                narrowed,
+                &ModelAliases::new()
+            )),
             "200✂POST ../completions",
             "the mark is one cell, so a cut line is no wider than a whole one"
         );
@@ -3370,7 +3473,12 @@ mod tests {
         fresh.tcp = Some(0.028);
         fresh.tls = Some(0.061);
         assert_eq!(
-            text(&request_line(&TERMINAL, &fresh, narrowed)),
+            text(&request_line(
+                &TERMINAL,
+                &fresh,
+                narrowed,
+                &ModelAliases::new()
+            )),
             "200 POST ../completions."
         );
 
@@ -3379,7 +3487,8 @@ mod tests {
             text(&request_line(
                 &TERMINAL,
                 &fresh,
-                Columns::parse("").unwrap()
+                Columns::parse("").unwrap(),
+                &ModelAliases::new()
             )),
             ""
         );
@@ -3574,5 +3683,58 @@ mod tests {
                 }
             }
         }
+    }
+    #[test]
+    fn aliases_render_existing_events_without_changing_identity() {
+        let id = "vendor/a-long-model-name";
+        let mut state = State::new();
+        state.viewport = 10;
+        state.push(Event::Request(Arc::new(record(id, 200))));
+        state.push(Event::Request(Arc::new(record(
+            "vendor/another-model",
+            200,
+        ))));
+        assert!(screen(200, 30, &state).contains(id));
+        state.aliases = Arc::new(ModelAliases::from([
+            (id.into(), "friendly".into()),
+            ("vendor/another-model".into(), "friendly".into()),
+            ("all".into(), "not-the-filter".into()),
+        ]));
+        let shown = screen(200, 30, &state);
+        assert!(shown.contains("friendly"));
+        assert!(shown.contains("filter all"));
+        assert!(!shown.contains("not-the-filter"));
+        assert!(!shown.contains(id));
+        assert_eq!(state.len(), 2);
+        state.set_filter(crate::tui::state::Filter::Upstream(id.into()));
+        assert_eq!(
+            state.len(),
+            1,
+            "shared labels must not merge filter identities"
+        );
+        let raw = record(id, 200);
+        let details = detail_lines(&TERMINAL, &raw, &state.aliases)
+            .iter()
+            .map(text)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(details.contains("friendly") && details.contains(id));
+        assert_eq!(raw.model, id);
+        state.aliases = Arc::new(ModelAliases::new());
+        assert!(screen(200, 30, &state).contains(id));
+    }
+    #[test]
+    fn usage_aliases_preserve_tiers_totals_and_costs() {
+        let mut state = usage_state();
+        let table = state.usage.as_ref().unwrap();
+        let id = table.rows[0].model.clone();
+        let cost = table.cost();
+        state.aliases = Arc::new(ModelAliases::from([(id.clone(), "friendly-usage".into())]));
+        let rendered = screen(160, 50, &state);
+        assert!(rendered.contains("friendly-usage"), "{rendered}");
+        state.usage_rates = true;
+        assert!(screen(160, 50, &state).contains("friendly-usage"));
+        assert_eq!(state.usage.as_ref().unwrap().cost(), cost);
+        assert_eq!(state.usage.as_ref().unwrap().rows[0].model, id);
     }
 }

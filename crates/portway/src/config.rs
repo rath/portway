@@ -83,6 +83,8 @@ pub struct Config {
     pub compression: ForwarderConfig,
     pub receiver: ReceiverConfig,
     pub prices: Prices,
+    #[serde(default, deserialize_with = "crate::aliases::deserialize")]
+    pub model_aliases: crate::aliases::ModelAliases,
 }
 impl Default for Config {
     fn default() -> Self {
@@ -95,6 +97,7 @@ impl Default for Config {
             compression: ForwarderConfig::default(),
             receiver: ReceiverConfig::default(),
             prices: Prices::new(),
+            model_aliases: Default::default(),
         }
     }
 }

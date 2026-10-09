@@ -70,6 +70,7 @@ pub struct App {
     /// Republished by a reload: `/api/usage` reads it per request, so the
     /// rates a page shows are the ones the forwarder is running on now.
     pub prices: PricesCell,
+    pub aliases: crate::aliases::Shared,
     pub streams: AtomicUsize,
     pub closing: watch::Receiver<bool>,
     /// The URL prefix the console is published under, `/` at the root.
@@ -417,7 +418,7 @@ async fn reload(app: &App) -> Response<WebBody> {
     match &app.control {
         Control::Live {
             args, cell, prices, ..
-        } => match control::reload(args, cell, prices).await {
+        } => match control::reload(args, cell, prices, &app.aliases).await {
             Ok(routes) => {
                 let message = format!("configuration reloaded ({routes} route(s))");
                 crate::logfmt::info(&format!("console: {message}"));

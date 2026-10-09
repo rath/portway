@@ -263,6 +263,11 @@ impl Table {
 /// and which part of it is a floor. Every screen that shows a `Table` writes
 /// these under it, word for word.
 pub fn notes(table: &Table) -> Vec<String> {
+    notes_named(table, Row::label)
+}
+
+/// Render names without changing the rows used for accounting.
+pub fn notes_named(table: &Table, label: impl Fn(&Row) -> String) -> Vec<String> {
     let mut notes = Vec::new();
     if table.blind > 0 {
         notes.push(format!(
@@ -274,7 +279,7 @@ pub fn notes(table: &Table) -> Vec<String> {
         if row.requests > 0 && row.unreported == row.requests {
             notes.push(format!(
                 "{}: no cache detail reported, so its prompt is charged at the input rate — an upper bound",
-                row.label()
+                label(row)
             ));
         }
     }

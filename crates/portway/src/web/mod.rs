@@ -103,6 +103,7 @@ pub struct Options {
     /// a reload replaces it under the console, so the rates on screen are
     /// always the ones the running forwarder is pricing.
     pub prices: PricesCell,
+    pub aliases: crate::aliases::Shared,
     /// Where `portway.web` goes.
     pub dir: PathBuf,
 }
@@ -141,6 +142,7 @@ impl Console {
             control,
             db,
             prices,
+            aliases,
             dir,
         } = options;
         let listener = TcpListener::bind((host.as_str(), port))
@@ -175,7 +177,8 @@ impl Console {
             ));
         }
 
-        let board = aggregate::spawn(feed, events).map_err(|err| format!("web board: {err}"))?;
+        let board = aggregate::spawn(feed, events, aliases.clone())
+            .map_err(|err| format!("web board: {err}"))?;
         let started_unix = logfmt::epoch();
         let header = json!({
             "listen": header.listen,
@@ -197,6 +200,7 @@ impl Console {
             control,
             db,
             prices,
+            aliases,
             streams: AtomicUsize::new(0),
             closing: closed.clone(),
             base,

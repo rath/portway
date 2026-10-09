@@ -886,3 +886,137 @@ async fn persistent_console_access_survives_restart_and_can_be_reset() {
         assert_eq!(login.status, expected);
     }
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn aliases_reload_without_rewriting_requests_records_or_prices() {
+    let upstream = upstream(Health::Json(vec!["zstd"]), Reply::UsageJson).await;
+    let dir = data_dir("model-aliases");
+    let port = free_port();
+    let config = dir.join("test.toml");
+    let write = |name: Option<&str>| {
+        let names = name
+            .map(|name| format!("[model_aliases]\n\"model-web\" = {name:?}\n"))
+            .unwrap_or_default();
+        std::fs::write(&config, format!(
+            "[models]\n\"model-web\" = {:?}\n[prices.\"model-web\"]\ninput = 3\noutput = 15\ncache_read = 0.3\n{names}", upstream.base
+        )).unwrap();
+    };
+    write(Some("friendly"));
+    let (_server, console) = spawn_console(
+        &dir,
+        &[
+            "--config",
+            config.to_str().unwrap(),
+            "--port",
+            &port.to_string(),
+        ],
+    );
+    let mut page = Page::new(console.port);
+    page.sign_in(&console.token).await;
+    let (_watcher, attached) = spawn_console(
+        &dir,
+        &[
+            "--config",
+            config.to_str().unwrap(),
+            "--port",
+            &port.to_string(),
+        ],
+    );
+    let mut attached_page = Page::new(attached.port);
+    attached_page.sign_in(&attached.token).await;
+    record_one(port, r#"{"model":"model-web"}"#).await;
+    let calls = upstream.calls();
+    let call = calls.iter().find(|call| call.method == "POST").unwrap();
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&call.body).unwrap()["model"],
+        "model-web"
+    );
+    eventually("usage recorded", async || {
+        page.get("/api/usage").await.json()["rows"][0]["charge"]["total"]
+            .as_f64()
+            .is_some_and(|cost| cost > 0.0)
+    })
+    .await;
+    let before = page.get("/api/usage").await.json();
+    let target = portway::live::Target::resolve("127.0.0.1", port)
+        .await
+        .unwrap();
+    for name in [Some("friendly"), Some("renamed"), None] {
+        write(name);
+        assert_eq!(page.post("/api/reload").await.status, StatusCode::OK);
+        let snapshot = page.get("/api/snapshot").await.json();
+        assert_eq!(snapshot["model_aliases"]["model-web"].as_str(), name);
+        let event = snapshot["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["kind"] == "request")
+            .unwrap();
+        assert_eq!(event["model"], "model-web");
+        assert_eq!(page.get("/api/usage").await.json()["rows"], before["rows"]);
+        eventually("local aliases follow reload", async || {
+            portway::live::fetch(&dir, &target)
+                .await
+                .is_ok_and(|local| {
+                    local
+                        .model_aliases
+                        .as_ref()
+                        .is_some_and(|aliases| aliases.get("model-web").map(String::as_str) == name)
+                })
+        })
+        .await;
+        eventually("attached console follows daemon aliases", async || {
+            attached_page.get("/api/snapshot").await.json()["model_aliases"]["model-web"].as_str()
+                == name
+        })
+        .await;
+        #[cfg(feature = "tui")]
+        {
+            let mut state = portway::tui::state::State::new();
+            state.remote = Some(Default::default());
+            state.apply_remote(portway::remote::Update::Snapshot(Box::new(
+                serde_json::from_value(snapshot.clone()).unwrap(),
+            )));
+            assert_eq!(state.aliases.get("model-web").map(String::as_str), name);
+            let mut legacy = snapshot;
+            legacy.as_object_mut().unwrap().remove("model_aliases");
+            let old: portway::remote::wire::Snapshot = serde_json::from_value(legacy).unwrap();
+            assert!(old.model_aliases.is_empty());
+        }
+    }
+    write(Some("kept"));
+    assert_eq!(page.post("/api/reload").await.status, StatusCode::OK);
+    write(Some("  "));
+    assert_ne!(page.post("/api/reload").await.status, StatusCode::OK);
+    assert_eq!(
+        page.get("/api/snapshot").await.json()["model_aliases"]["model-web"],
+        "kept"
+    );
+    // A connected subscriber receives current metadata without a reconnect.
+    let seq = page.get("/api/snapshot").await.json()["seq"]
+        .as_u64()
+        .unwrap();
+    let frames = page.stream(seq, 2500).await;
+    let tick = frames
+        .lines()
+        .filter_map(|line| line.strip_prefix("data: "))
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .find(|frame| frame.get("model_aliases").is_some())
+        .unwrap();
+    assert_eq!(tick["model_aliases"]["model-web"], "kept");
+    #[cfg(feature = "tui")]
+    {
+        let mut state = portway::tui::state::State::new();
+        state.remote = Some(Default::default());
+        state.apply_remote(portway::remote::Update::Tick(
+            serde_json::from_value(tick).unwrap(),
+        ));
+        assert_eq!(state.aliases["model-web"], "kept");
+    }
+    // The on-disk identity is also unchanged; metadata is never stored in rows.
+    let db = rusqlite::Connection::open(dir.join(DB_FILE)).unwrap();
+    let model: String = db
+        .query_row("SELECT model FROM requests LIMIT 1", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(model, "model-web");
+}
