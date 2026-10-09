@@ -2,6 +2,7 @@
 // here; views render from it when the scheduler flushes what changed, once
 // per animation frame (once a second while the tab is hidden).
 
+import { displayModel, setModelAliases } from "./modelnames.js";
 import { ApiError, api, signIn } from "./api.js";
 import { Connection } from "./connection.js";
 import { $, download, fill, h } from "./dom.js";
@@ -238,13 +239,22 @@ function renderModes() {
     type: "button",
     "aria-pressed": state.filterMode === mode ? "true" : "false",
     onclick: () => ctx.setMode(mode),
-    text: mode,
+    title: mode,
+    text: mode === "all" || mode === "trouble" ? mode : displayModel(mode),
   })));
 }
 
 // ----------------------------------------------------------------- snapshot
 
 function applyTotals(frame) {
+  if (setModelAliases(frame.model_aliases ?? {})) {
+    applyFilter();
+    renderAll();
+    if (state.view === "usage") views.usage.render();
+    if (state.view === "history") views.history.render();
+    const costs = $("#costs");
+    if (costs?.open) views.usage.costs();
+  }
   state.totals = frame.totals;
   state.counts = frame.counts;
   state.latency = frame.latency;
@@ -516,7 +526,7 @@ function paletteCommands() {
     ...VIEWS.map((view) => ({ name: `Go to ${view}`, hint: "view", run: () => go(view) })),
     { name: "Filter: all", hint: "e / m", run: () => ctx.setMode("all") },
     { name: "Filter: trouble", hint: "e", run: () => ctx.setMode("trouble") },
-    ...inUse(state.models).map((model) => ({ name: `Filter: ${model.name}`, hint: "upstream", run: () => ctx.setMode(model.name) })),
+    ...inUse(state.models).map((model) => ({ name: `Filter: ${displayModel(model.name)}`, hint: model.name, run: () => ctx.setMode(model.name) })),
     { name: "Search events", hint: "/", run: () => focusSearch() },
     { name: "Clear the search", hint: "search", run: () => ctx.setQuery("") },
     ...COLUMNS.map((column) => ({

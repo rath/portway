@@ -60,6 +60,7 @@ assets! {
     "js/export.js" => "text/javascript; charset=utf-8",
     "js/filter.js" => "text/javascript; charset=utf-8",
     "js/flights.js" => "text/javascript; charset=utf-8",
+    "js/modelnames.js" => "text/javascript; charset=utf-8",
     "js/format.js" => "text/javascript; charset=utf-8",
     "js/prefs.js" => "text/javascript; charset=utf-8",
     "js/ring.js" => "text/javascript; charset=utf-8",

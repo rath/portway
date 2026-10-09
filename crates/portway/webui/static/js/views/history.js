@@ -1,6 +1,7 @@
 // `--report` in the browser: any window the recorder still holds, per model,
 // with the trouble lines, as tables and as the exact text.
 
+import { displayModel } from "../modelnames.js";
 import { $, copy, download, fill, h } from "../dom.js";
 import { tableCsv } from "../export.js";
 import { human, maybeTime } from "../format.js";
@@ -56,7 +57,7 @@ export class HistoryView {
       this.model = event.target.value;
       this.load();
     } }, h("option", { value: "", text: "all models" }), [...models].sort().map((name) =>
-      h("option", { value: name, selected: name === this.model, text: name })));
+      h("option", { value: name, selected: name === this.model, title: name, text: displayModel(name) })));
     const apply = () => {
       const value = custom.value.trim();
       if (!SPAN.test(value)) {
@@ -120,8 +121,8 @@ export class HistoryView {
       h("div", { class: "table-wrap" }, h("table", { class: "data" },
         h("thead", {}, h("tr", {}, head.map((name) => h("th", { scope: "col", text: name })))),
         h("tbody", {}, body.map((cells, at) => h("tr", { class: at === body.length - 1 ? "total" : "" },
-          cells.map((text, column) => h("td", { class: column === 0 ? (at === body.length - 1 ? "t-good" : "t-model") : "", text }))))))));
-    const scope = report.model ?? "all models";
+          cells.map((text, column) => h("td", { class: column === 0 ? (at === body.length - 1 ? "t-good" : "t-model") : "", title: column === 0 ? text : undefined, text: column === 0 && at < report.rows.length ? displayModel(text) : text }))))))));
+    const scope = displayModel(report.model) ?? "all models";
     fill(this.root,
       h("section", { class: "panel" },
         this.controls(),
@@ -129,13 +130,14 @@ export class HistoryView {
         h("p", { class: "window-title", text: `window  ${report.window}  (${report.span}, ${scope})` })),
       rows.length
         ? [table("Volume", volumeHead, volume, "portway-volume.csv"), table("Timing", timingHead, timing, "portway-timing.csv")]
-        : h("section", { class: "panel" }, h("p", { class: "note", text: report.model ? `no requests for model ${report.model} in this window` : "no requests recorded in this window" })),
+        : h("section", { class: "panel" }, h("p", { class: "note", text: report.model ? `no requests for model ${displayModel(report.model)} in this window` : "no requests recorded in this window" })),
       h("section", { class: "panel" },
         h("h2", { class: "panel-head", text: "Trouble, last 20 in the window" }),
         report.trouble.length
           ? h("pre", { class: "trouble-list" }, report.trouble.map((line) => h("div", {
             class: line.kind === "log" ? (line.level === "ERROR" ? "t-bad" : "t-time") : line.status >= 500 ? "t-bad" : "t-time",
-            text: line.text,
+            title: line.kind === "request" ? line.model : undefined,
+            text: line.kind === "request" && line.model ? line.text.replace(`  ${line.status}  ${line.model}`, () => `  ${line.status}  ${displayModel(line.model)}`) : line.text,
           })))
           : h("p", { class: "note", text: "none" })));
   }

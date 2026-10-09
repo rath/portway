@@ -2,6 +2,7 @@
 // the same marks glued in the same places, as a list of toned segments the
 // view turns into spans. Pure, so the line can be tested without a page.
 
+import { displayModel } from "./modelnames.js";
 import { human, humanCount, humanTime, label, ratio, share } from "./format.js";
 
 /**
@@ -100,7 +101,7 @@ export function requestLine(event, columns) {
         if (!event.complete) line.glue("✂", "time");
         break;
       case "model":
-        line.word(event.model || "-", "model");
+        line.word(displayModel(event.model) || "-", "model");
         break;
       case "route":
         line.word(event.route, event.route_known ? "dim" : "bold");
@@ -174,7 +175,8 @@ export function detailFields(event) {
   return [
     ["when", event.stamp],
     ["upstream", event.upstream],
-    ["model", label(event.model || "-", event.tier)],
+    ["model", label(displayModel(event.model) || "-", event.tier)],
+    ...(displayModel(event.model) !== event.model ? [["model ID", event.model]] : []),
     ["request", `${event.method} ${event.path} -> ${event.status}`],
     ["connection", event.handshake == null
       ? "reused from the pool"

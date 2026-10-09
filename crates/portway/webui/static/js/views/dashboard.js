@@ -2,6 +2,7 @@
 // event list, the in-flight rail and the two charts. Each part renders from
 // `ctx.state` when the scheduler says it is dirty.
 
+import { displayModel, aliasRevision } from "../modelnames.js";
 import { $, fill, h } from "../dom.js";
 import { drawBars, drawTraffic } from "../charts.js";
 import { Widths, handWidth, parseHand, rowCells, shown, template } from "../eventtable.js";
@@ -139,7 +140,7 @@ export function renderModels(ctx) {
   const head = h("thead", {}, h("tr", {}, MODEL_COLUMNS.map((column) => h("th", { class: columnClass(column), scope: "col", text: column.name }))));
   const rows = used.map((model) => {
     const cells = [
-      [model.name, "model"],
+      [displayModel(model.name), "model"],
       [model.coding_label, model.coding ? "good" : "dim"],
       [String(model.requests)],
       [String(model.in_flight), model.in_flight > 0 ? "good" : "dim"],
@@ -162,6 +163,7 @@ export function renderModels(ctx) {
     }, cells.map(([text, tone], at) => h("td", {
       class: [columnClass(MODEL_COLUMNS[at]), tone ? `t-${tone}` : ""].filter(Boolean).join(" "),
       "data-label": MODEL_COLUMNS[at].name,
+      title: at === 0 ? model.name : undefined,
       text,
     })));
   });
@@ -337,7 +339,8 @@ export class EventList {
    */
   measure() {
     const items = this.store.items;
-    if (this.store.epoch !== this.epoch) {
+    if (this.store.epoch !== this.epoch || this.aliasRevision !== aliasRevision()) {
+      this.aliasRevision = aliasRevision();
       this.epoch = this.store.epoch;
       this.widths = new Widths();
       this.measured = { low: Infinity, high: -Infinity };
@@ -488,7 +491,7 @@ export class EventList {
     fill(position, state.follow
       ? h("span", { class: "follow", text: "Following" })
       : h("span", { class: "paused", text: below > 0 ? `Paused · ${below} below` : "Paused" }));
-    const mode = state.filterMode === "all" ? "" : ` · ${state.filterMode}`;
+    const mode = state.filterMode === "all" ? "" : ` · ${state.filterMode === "trouble" ? "trouble" : displayModel(state.filterMode)}`;
     $("#counts").textContent = `${length} lines${mode}${state.query ? ` · “${state.query}”` : ""}`;
   }
 }
@@ -548,7 +551,7 @@ export function renderFlights(ctx) {
         if (event.key === "Enter") ctx.openDetail({ type: "flight", id: flight.id });
       },
     },
-    h("span", { class: "flight-model", text: flight.model }),
+    h("span", { class: "flight-model", title: flight.model || flight.upstream, text: displayModel(flight.model || flight.upstream) }),
     h("span", { class: `phase phase-${flight.phase}`, text: flight.phase }),
     h("span", { class: `flight-path${flight.route_known ? "" : " t-bold"}`, title: `${flight.method} ${flight.path}`, text: `${flight.method} ${flight.path}` }),
     h("span", { class: "flight-meta" }, flightMeta(flight, times, described)));

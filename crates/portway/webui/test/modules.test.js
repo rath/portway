@@ -1,3 +1,4 @@
+import { displayModel, setModelAliases, displayNotes } from "../static/js/modelnames.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -339,4 +340,37 @@ test("system follows the OS between the two Portway themes", () => {
   assert.equal(resolve("system", false), "portway-light");
   assert.equal(resolve("nord", false), "nord");
   assert.equal(resolve("gone", true), "portway-dark");
+});
+
+
+test("aliases rename old events, search both identities, and leave exports and filters raw", () => {
+  const event = request({ model: "vendor/long-name", upstream: "vendor/long-name" });
+  const original = structuredClone(event);
+  const store = new EventStore();
+  store.push(event);
+  // Populate the search cache before changing names.
+  assert.equal(compile("friendly").test(event), false);
+  try {
+    assert.equal(setModelAliases({ "vendor/long-name": "friendly", "vendor/other": "friendly", friendly: "not-recursive" }), true);
+    assert.equal(displayModel(event.model), "friendly");
+    assert.equal(displayModel("toString"), "toString");
+    assert.equal(lineText(eventLine(event, new Set(["model"]))), "friendly");
+    const cell = CELLS.find((c) => c.key === "model").read(event);
+    assert.deepEqual(cell, { text: "friendly", tone: "model", title: "vendor/long-name" });
+    assert.equal(Object.fromEntries(detailFields(event))["model ID"], event.model);
+    for (const query of ["friendly", "vendor/long-name", "model:friendly", "model:vendor/long-name"]) {
+      assert.equal(compile(query).test(event), true, query);
+    }
+    assert.equal(modeAccepts("vendor/other", event), false);
+    assert.ok(toCsv([event]).includes("vendor/long-name"));
+    assert.deepEqual(event, original);
+    assert.deepEqual(displayNotes({ rows: [{ model: event.model }], notes: [`${event.model}: no cache detail reported`] }), ["friendly: no cache detail reported"]);
+    setModelAliases({ "vendor/long-name": "changed" });
+    assert.equal(compile("friendly").test(event), false);
+    assert.equal(compile("changed").test(event), true);
+  } finally {
+    setModelAliases({});
+  }
+  assert.equal(lineText(eventLine(event, new Set(["model"]))), event.model);
+  assert.equal(compile("changed").test(event), false);
 });

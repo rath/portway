@@ -1,6 +1,7 @@
 // The popups: request detail (a drawer that follows a flight into its record),
 // keys, columns, stop, costs, and the command palette.
 
+import { displayModel } from "../modelnames.js";
 import { $, copy, dialogFrame, fill, h, segments } from "../dom.js";
 import { COLUMNS, detailFields, eventLine, lineText } from "../eventline.js";
 import { cellsOf } from "../eventtable.js";
@@ -32,7 +33,8 @@ export function renderDetail(ctx) {
     const described = describe(flight, times);
     const fields = [
       ["flight", `#${flight.id}`],
-      ["model", flight.model],
+      ["model", displayModel(flight.model)],
+      ...(displayModel(flight.model) !== flight.model ? [["model ID", flight.model]] : []),
       ["request", `${flight.method} ${flight.path}`],
       ["phase", described.text],
       ["warning", described.warn ?? "none"],
@@ -158,7 +160,7 @@ export function openStop(ctx) {
       body.push(h("p", { class: "t-bad", text: `${live} request(s) in flight will be cut off:` }));
       if (flights.available) {
         body.push(h("ul", {}, flights.list.slice(0, 12).map((flight) =>
-          h("li", {}, h("span", { class: "t-model", text: flight.model || flight.upstream }), ` ${flight.route} · `,
+          h("li", {}, h("span", { class: "t-model", title: flight.model || flight.upstream, text: displayModel(flight.model || flight.upstream) }), ` ${flight.route} · `,
             describe(flight, flights.times(flight, ctx.now())).text))));
       }
     }
@@ -194,7 +196,7 @@ export function openCosts(table) {
   const dialog = $("#costs");
   const money = (charge, part) => (charge ? dollars(charge[part]) : "-");
   const rows = table.rows.map((row) => h("tr", {},
-    h("td", { class: row.charge ? "t-model" : "t-dim", text: label(row.model, row.tier) }),
+    h("td", { class: row.charge ? "t-model" : "t-dim", title: row.model, text: label(displayModel(row.model), row.tier) }),
     ["input", "cache_read", "output", "total"].map((part) => h("td", { class: row.charge ? "t-good" : "t-dim", text: money(row.charge, part) }))));
   if (table.total.charge) {
     rows.push(h("tr", { class: "total" },

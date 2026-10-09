@@ -1,6 +1,7 @@
 // The `u` screen: tokens and cost per model over a local-day window, read
 // from the recorder's database and re-read every 5s while it is up.
 
+import { displayModel, displayNotes } from "../modelnames.js";
 import { $, fill, h } from "../dom.js";
 import { dollars, humanCount, label, percent } from "../format.js";
 import { openCosts } from "./dialogs.js";
@@ -96,7 +97,7 @@ export class UsageView {
         body),
       h("section", { class: "panel" },
         h("h2", { class: "panel-head", text: "What these numbers are not" }),
-        h("ul", { class: "notes" }, table.notes.map((note) => h("li", { text: note }))),
+        h("ul", { class: "notes" }, displayNotes(table).map((note) => h("li", { text: note }))),
         h("p", { class: "note", text: `re-read every ${REFRESH_MS / 1000}s while this view is open` })));
   }
 }
@@ -106,7 +107,7 @@ function usageRow(row, total) {
   const hit = row.hit_rate;
   const part = (name) => (row.charge ? dollars(row.charge[name]) : "-");
   const cells = [
-    [label(row.model, row.tier), total ? "good" : "model"],
+    [label(total ? row.model : displayModel(row.model), row.tier), total ? "good" : "model"],
     [String(row.requests)],
     [humanCount(row.prompt)],
     [unreported ? "-" : humanCount(row.cached), unreported ? "dim" : null],
@@ -117,8 +118,9 @@ function usageRow(row, total) {
     [part("output"), null, "roomy"],
     [row.cost == null ? "unpriced" : dollars(row.cost), "good t-bold"],
   ];
-  return h("tr", { class: total ? "total" : "" }, cells.map(([text, tone, extra]) => h("td", {
+  return h("tr", { class: total ? "total" : "" }, cells.map(([text, tone, extra], at) => h("td", {
     class: [tone ? tone.split(" ").map((name) => (name.startsWith("t-") ? name : `t-${name}`)).join(" ") : "", extra || ""].filter(Boolean).join(" "),
+    title: at === 0 && !total ? row.model : undefined,
     text,
   })));
 }

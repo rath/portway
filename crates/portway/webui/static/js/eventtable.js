@@ -3,6 +3,7 @@
 // out (method and full path) where the terminal shortens it to fit. Pure, so
 // it can be tested without a page.
 
+import { displayModel } from "./modelnames.js";
 import { statusTone } from "./eventline.js";
 import { human, humanCount, humanTime, ratio, share } from "./format.js";
 
@@ -33,11 +34,11 @@ export const CELLS = [
   },
   {
     key: "model", always: true, column: "model", label: "model", cap: 48, note: "the model the turn named; - when it named none",
-    read: (e) => ({ text: e.model || "-", tone: "model", title: e.model || "no model named" }),
+    read: (e) => ({ text: displayModel(e.model) || "-", tone: "model", title: e.model || "no model named" }),
   },
   {
     key: "upstream", column: "model", label: "upstream", cap: 32, note: "the upstream the turn went to, when it is not the model",
-    read: (e) => (e.upstream === e.model ? null : { text: e.upstream, tone: "dim", title: e.upstream }),
+    read: (e) => (e.upstream === e.model ? null : { text: displayModel(e.upstream), tone: "dim", title: e.upstream }),
   },
   {
     key: "method", always: true, column: "route", label: "method", note: "the request method",

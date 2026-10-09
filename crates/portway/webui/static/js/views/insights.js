@@ -1,6 +1,7 @@
 // What the HUD's numbers did over the time this page has been open: latency
 // percentiles and the upload saving per tick, and each model's share.
 
+import { displayModel } from "../modelnames.js";
 import { $, fill, h, token } from "../dom.js";
 import { drawLines } from "../charts.js";
 import { clock, human, humanTime } from "../format.js";
@@ -144,8 +145,8 @@ export class InsightsView {
       const fill_ = h("div", { class: "fill" });
       fill_.style.transform = `scaleX(${value / total})`;
       return h("div", { class: "bar" },
-        h("span", { class: "t-model", text: model.name }),
-        h("div", { class: "track", role: "img", "aria-label": `${model.name}: ${((value / total) * 100).toFixed(1)} percent` }, fill_),
+        h("span", { class: "t-model", title: model.name, text: displayModel(model.name) }),
+        h("div", { class: "track", role: "img", "aria-label": `${displayModel(model.name)}: ${((value / total) * 100).toFixed(1)} percent` }, fill_),
         h("span", { class: "mono", text: `${metric[3](value)} · ${((value / total) * 100).toFixed(0)}%` }));
     }));
   }

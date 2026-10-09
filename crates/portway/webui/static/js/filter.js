@@ -14,6 +14,7 @@
 //                  left out unless they failed (board::catalog)
 //   ttfb:>2s  gap:>20s  size:>1MB  down:>10KB  tok:>50K   compare a number
 
+import { displayModel, aliasRevision } from "./modelnames.js";
 import { lineText, requestLine, logLine, ALL_COLUMNS } from "./eventline.js";
 
 const EVERY_COLUMN = new Set(ALL_COLUMNS);
@@ -99,11 +100,11 @@ function term({ text, phrase }) {
       }
       case "model": {
         const needle = value.toLowerCase();
-        return request((event) => event.model.toLowerCase().includes(needle));
+        return request((event) => [event.model, displayModel(event.model)].some((name) => name.toLowerCase().includes(needle)));
       }
       case "upstream": {
         const needle = value.toLowerCase();
-        return request((event) => event.upstream.toLowerCase().includes(needle));
+        return request((event) => [event.upstream, displayModel(event.upstream)].some((name) => name.toLowerCase().includes(needle)));
       }
       case "route": {
         const needle = value.toLowerCase();
@@ -165,11 +166,12 @@ const TEXT = new WeakMap();
 
 /** The line as printed with every column, plus the full path: what words match. */
 export function searchText(event) {
-  let text = TEXT.get(event);
-  if (text === undefined) {
+  const cached = TEXT.get(event);
+  let text = cached?.text;
+  if (cached?.revision !== aliasRevision()) {
     const line = event.kind === "request" ? requestLine(event, EVERY_COLUMN) : logLine(event);
-    text = `${lineText(line)} ${event.kind === "request" ? event.path : ""}`.toLowerCase();
-    TEXT.set(event, text);
+    text = `${lineText(line)} ${event.kind === "request" ? `${event.model} ${event.upstream} ${event.path}` : ""}`.toLowerCase();
+    TEXT.set(event, { text, revision: aliasRevision() });
   }
   return text;
 }
