@@ -7,6 +7,8 @@ version may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-10-09
+
 ### Added
 
 - `portway setup` previews and applies Codex/Claude Code connection settings
@@ -27,6 +29,9 @@ version may contain breaking changes.
   hop went quiet.
 
 ### Fixed
+
+- The terminal usage screen scrolls when its contents exceed the available
+  height, and charts are hidden in short terminals so request rows stay usable.
 
 - CLI setup documentation now uses separate Codex profile files and includes
   complete Claude Code and Codex connection steps in the README and all four
@@ -221,7 +226,7 @@ version may contain breaking changes.
   else to set. Mounts combine with `[models]` on one listener and work in
   `receive` mode too, so one receiver can front several providers. The stats
   endpoint now keys its per-route counters under `upstreams` rather than
-  `models`. `docs/agents.md` walks through Claude Code and Codex, and the
+  `models`. `docs/cli-setup.md` walks through Claude Code and Codex, and the
   README, getting-started guide and project page start from them.
 - Each release publishes prebuilt binaries for macOS on Apple silicon and Linux
   on x86-64 and arm64, with the terminal dashboard and the browser console
@@ -329,7 +334,8 @@ The first public release.
   FAQ; the request compression protocol; a security policy; and contribution
   guidelines.
 
-[Unreleased]: https://github.com/rath/portway/compare/v0.2.4...HEAD
+[Unreleased]: https://github.com/rath/portway/compare/v0.2.5...HEAD
+[0.2.5]: https://github.com/rath/portway/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/rath/portway/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/rath/portway/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/rath/portway/compare/v0.2.1...v0.2.2

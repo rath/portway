@@ -12,15 +12,19 @@ contains no proxy, login credentials, MCP server, or startup hooks.
    server, get its reachable **API listener** URL, not its web-console URL.
    Do not invent a remote server. A direct local forwarder records traffic;
    delta compression additionally needs a receiver on the remote hop.
-2. Run `portway --version` and `portway setup --help`. If the executable is
-   missing, use the project's documented installation method (`brew install
-   rath/tap/portway` where Homebrew is available). Installing the plugin alone
-   does not install the binary. If the installed version lacks `setup`, stop
-   before editing any client files and explain that a build containing the
-   setup feature is required. For a user working in a Portway source checkout,
-   build with `cargo build --locked -p portway` and use the absolute path to
-   `target/debug/portway` throughout instead. Do not substitute an unrelated
-   binary on PATH or fetch an unrequested development build.
+2. Run `portway --version` and `portway setup --help`. These commands require
+   Portway 0.2.5 or later. If the executable is missing, use the project's
+   documented installation method (`brew install rath/tap/portway` where
+   Homebrew is available). If it is older, update with `brew update` and
+   `brew upgrade portway`, then verify again. Installing the plugin alone does
+   not install or upgrade the binary. An older Cargo/manual binary may shadow
+   Homebrew: compare with `"$(brew --prefix portway)/bin/portway" --version`
+   and use that verified absolute executable throughout when needed. Without
+   Homebrew, use the platform's archive from the project's GitHub Releases.
+   Source builds are optional. For a user already developing in a Portway
+   checkout, `cargo build --locked -p portway` produces `target/debug/portway`.
+   If no suitable binary is available, stop before editing client files and
+   report what installation step remains; do not improvise file edits instead.
 3. Preview the selected operation:
    - Existing server: `portway setup --client <client> --url <listener-url>`.
    - Local: `portway setup --client <client> --local`. Use `--port <port>` and

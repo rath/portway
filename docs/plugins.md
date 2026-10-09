@@ -5,38 +5,55 @@ configuration files yourself. It asks which client and server to use, runs
 Portway's setup command, and checks the connection. Your existing login and
 model preferences are kept.
 
-**Availability:** `portway setup` and `portway doctor` are unreleased. Use a
-source build containing these commands until a release includes them. Plugin
-installation does not install or upgrade the Portway binary. Check with
-`portway setup --help`; an older binary will reject the command.
+## Install Portway and the plugin
 
-## Install from this checkout
-
-With Rust and the [source-build prerequisites](../CONTRIBUTING.md#development-setup),
-run from the Portway repository root:
+`portway setup` and `portway doctor` are included in **Portway 0.2.5 and later**.
+Install with Homebrew on macOS Apple silicon or Linux x86_64/ARM64:
 
 ```sh
-cargo install --path crates/portway --locked --features tui,web
+brew install rath/tap/portway
+```
+
+If Portway is already installed, update it:
+
+```sh
+brew update
+brew upgrade portway
+```
+
+Confirm that your shell finds the updated binary:
+
+```sh
+portway --version
 portway setup --help
 ```
 
-If an older binary comes first on PATH, use the binary Cargo just installed
-(normally `~/.cargo/bin/portway`). Register this repository as a marketplace
-and install the plugin for the CLI you use:
+If an older Cargo or manually installed binary comes first on PATH, use the
+Homebrew binary explicitly and adjust your PATH before continuing:
 
 ```sh
-# Codex, from the Portway repository root:
-codex plugin marketplace add .
+"$(brew --prefix portway)/bin/portway" --version
+```
+
+Without Homebrew, [download a release binary](getting-started.md#install).
+Source builds are optional. Plugin installation does not install or upgrade
+the Portway binary, and upgrading it does not restart an existing daemon.
+
+Register the public repository as a marketplace and install the plugin for
+the CLI you use. You can run these commands from any directory:
+
+```sh
+# Codex:
+codex plugin marketplace add rath/portway
 codex plugin add portway@portway
 
-# Claude Code, from the Portway repository root:
-claude plugin marketplace add .
+# Claude Code:
+claude plugin marketplace add rath/portway
 claude plugin install portway@portway
 ```
 
-Once these marketplace files are published on GitHub, the same commands work
-with `rath/portway` in place of `.`. No public plugin-directory listing is
-required. This setup was checked with Codex 0.162.0 and Claude Code 2.1.295.
+No repository checkout or public plugin-directory listing is required. This
+setup was checked with Codex 0.162.0 and Claude Code 2.1.295.
 
 Start a new CLI session. In Codex, ask **“Use the Portway plugin to set up my
 connection.”** In Claude Code, run **`/portway:setup`**. Choose either a new
@@ -136,6 +153,11 @@ Uninstalling the plugin removes the skills, **not the settings it created**:
   Stopping a locally running forwarder is a separate operation.
 
 ## Plugin maintenance
+
+When developing from a checkout, build with
+`cargo install --path crates/portway --locked --features tui,web`, and use `.`
+in place of `rath/portway` in the marketplace-add command from the repository
+root. This loads the local marketplace for testing.
 
 Both clients use the same `plugins/portway/skills/` directory. The portable
 manifest carries Codex's onboarding metadata, while the Claude manifest and

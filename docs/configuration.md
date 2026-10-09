@@ -168,7 +168,7 @@ The choice is made from the path alone. The body is not read, so a request
 without one (a model catalog, a health check) routes like any other, and a
 model name the table has never heard of needs no entry: the client sends
 whatever its vendor ships next. An already encoded body goes through a mount
-as it came. For the client side, see [Claude Code and Codex](agents.md).
+as it came. For the client side, see [Claude Code and Codex](cli-setup.md).
 
 Names are one path segment: letters, digits, `-`, `.`, `_` and `~`. The
 segment `__portway` is reserved for management paths, and with a `[models]`

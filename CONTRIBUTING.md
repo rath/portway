@@ -124,8 +124,9 @@ Releases are tagged `v<version>` on `main`, and `portway --version` reports the
 tag it was built from: a tagged commit prints `0.1.0`, a commit five past it
 `0.1.0+5.g1a2b3c4`.
 
-1. Set `version` in the root `Cargo.toml` and run `cargo check` so that
-   `Cargo.lock` follows. The build warns when a tag and the manifest disagree.
+1. Set `version` in the root `Cargo.toml` and the `portway-core` dependency
+   in `crates/portway/Cargo.toml`, then run `cargo check` so that `Cargo.lock`
+   follows. The build warns when a tag and the manifest disagree.
 2. In [CHANGELOG.md](CHANGELOG.md), rename `## [Unreleased]` to
    `## [X.Y.Z] - YYYY-MM-DD`, add an empty `## [Unreleased]` above it, and
    update the comparison links at the bottom.

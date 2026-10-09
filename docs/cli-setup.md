@@ -6,8 +6,8 @@ connects to a named path, called a **mount**: `/anthropic` for Claude Code and
 you do not need a Portway API key or a list of vendor models in its config.
 
 Prefer guided setup? The [Portway plugin](plugins.md) can create these client
-settings and diagnose the connection. Its setup commands currently require a
-source build; the manual steps below also work with existing releases.
+settings and diagnose the connection with Portway 0.2.5 or later, available
+through Homebrew and release downloads. The manual steps below are also available.
 
 ## Before you start
 

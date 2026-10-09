@@ -13,7 +13,7 @@ tui = ["dep:ratatui", "dep:bytes", "dep:hyper"]
 web = ["dep:bytes", "dep:http-body", "dep:hyper", "dep:hyper-util"]
 
 [dependencies]
-portway-core = { path = "../portway-core", version = "0.2.4" }
+portway-core = { path = "../portway-core", version = "0.2.5" }
 serde = { version = "1", features = ["derive"] }
 toml = "1.1"
 clap = { version = "4.6.7", features = ["derive"] }

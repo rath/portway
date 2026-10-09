@@ -8,7 +8,7 @@ shows measured savings; the pages below cover setting it up and running it.
 ## Set up
 
 - [Guided CLI setup](plugins.md): install the Codex or Claude Code plugin, or
-  use `portway setup` and `portway doctor` directly (source builds).
+  use `portway setup` and `portway doctor` directly (Portway 0.2.5 or later).
 
 - [Claude Code and Codex](cli-setup.md): mount each vendor's API under a name,
   connect Claude Code with an environment variable or Codex with a separate

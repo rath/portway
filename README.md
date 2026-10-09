@@ -153,25 +153,26 @@ numbers stay flat.
 The [Portway plugin](docs/plugins.md) walks you through connecting Codex or
 Claude Code and checking the result. It uses `portway setup` to preview and
 apply client settings with backups, and `portway doctor` to diagnose the
-connection. These commands are currently available in source builds; plugin
-installation alone does not install or upgrade Portway.
-
-From a checkout with the setup commands built, install the plugin for your CLI:
+connection. Install Portway 0.2.5 or later, then add the plugin for your CLI:
 
 ```sh
+brew install rath/tap/portway
+# Already installed? Run: brew update && brew upgrade portway
+
 # Codex
-codex plugin marketplace add .
+codex plugin marketplace add rath/portway
 codex plugin add portway@portway
 
 # Claude Code
-claude plugin marketplace add .
+claude plugin marketplace add rath/portway
 claude plugin install portway@portway
 ```
 
 Start a new session, then ask Codex to use the Portway plugin for setup, or run
 `/portway:setup` in Claude Code. See [guided setup](docs/plugins.md) for binary
 installation, existing-server and local options, and how to disconnect.
-The manual quick start below also works with existing releases.
+Plugin installation does not install or upgrade the Portway binary. The manual
+quick start below is also available.
 
 ## Quick start
 
