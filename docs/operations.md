@@ -152,7 +152,7 @@ changing the database schema.
 Every CLI build serves `<data-dir>/portway.live.sock`, with mode `0600` and
 same-UID peer checks. Each connection returns one versioned JSON snapshot with
 a process instance ID, the actual listening address, total and per-model counts,
-and at most the oldest 200 requests. The table's additional count includes
+the current model display aliases, and at most the oldest 200 requests. The table's additional count includes
 requests beyond that limit. No bodies, headers or query strings are sent.
 Attach checks the server address/port and replaces the entire snapshot, including
 after a server restart; it never matches live IDs to historical DB records.

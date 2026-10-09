@@ -251,6 +251,36 @@ automatic failover between model destinations.
 Keys are sent by the client, not registered in the routing table. See
 [authentication](authentication.md) for services with different credentials.
 
+## Model display aliases
+
+`[model_aliases]` gives long model IDs shorter names in the TUI and web
+console, including events, in-flight requests, usage, history and model filters:
+
+```toml
+[model_aliases]
+"vendor/model-a-long-name" = "model-a"
+```
+
+Keys match the original model ID exactly, including case. A matching route
+label uses the same display name. Missing entries show the original ID; names
+are substituted once, without alias chaining. Keys and names must be nonempty
+and contain no control characters. Models do not have to appear in `[models]`:
+aliases also work for mounted providers and historical records. Two IDs may
+share a display name, but remain separate rows and filter selections.
+
+This is presentation only. Requests still send the original ID, and routing,
+`/v1/models`, stored records, pricing keys, CLI reports and CSV/JSON exports
+keep it. Request details show both names when an alias applies; web model
+labels expose the ID on hover. Web searches match either name.
+
+A daemon's `--reload`, or the owning web console's Reload action, updates
+aliases for existing as well as new events. Removing an entry restores the
+original ID. Invalid configuration keeps the previous aliases and routes.
+Attached local dashboards and remote TUIs receive the serving process's
+aliases automatically; no duplicate client configuration is needed. Local
+viewers fall back to their startup configuration if the server predates this
+metadata; remote viewers of older servers show original IDs.
+
 ## Root settings and prices
 
 | Root setting | Default | Meaning |
@@ -260,6 +290,7 @@ Keys are sent by the client, not registered in the routing table. See
 | `upstream` | unset | Single upstream HTTP(S) URL; exclusive with both tables |
 | `[upstreams]` | empty | Name → upstream URL, mounted at `/<name>/` |
 | `[models]` | empty | Model name → upstream URL, chosen by the JSON `model` field |
+| `[model_aliases]` | empty | Original model ID → display name in dashboards |
 | `[prices.NAME]` | absent | Optional `input`, `output`, `cache_read` rates in USD per million tokens |
 | `[prices.NAME.tiers.TIER]` | absent | The same three rates for requests whose tier is `TIER` (their `speed`, else their `service_tier`) |
 | `long_context = { above, input, output, cache_read }` | absent | In either table: the rates for a request whose prompt passes `above` tokens |

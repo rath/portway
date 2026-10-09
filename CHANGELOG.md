@@ -7,6 +7,14 @@ version may contain breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- `[model_aliases]` gives model IDs shorter display names throughout the TUI
+  and web console. Local and remote viewers receive aliases from the server,
+  and reload updates existing events as well as new ones. Details preserve the
+  original ID, and web search accepts either name. Requests, recorded IDs,
+  pricing and exports remain unchanged.
+
 ## [0.2.5] - 2026-10-09
 
 ### Added
