@@ -510,9 +510,9 @@ handed to the transport, not a guarantee that the peer received them.
 The receiver's request log reports the final upload coding (`gzip`, `zstd`, or
 `identity`). Its upload byte count includes a rejected attempt before identity
 fallback; the failed trial can therefore produce negative savings. The warning
-`origin 415: retrying identity once` explains the retry. A preceding rejection
-warning names the attempted coding and the 600-second suspension. A 400 produces
-only the suspension warning and returns the original error.
+`origin 400: retrying identity once` (or `origin 415: retrying identity once`)
+explains the retry. A preceding rejection warning names the attempted coding
+and the 600-second suspension. The client receives the identity retry's response.
 
 Every request line with an answer ends its timings with `gap`: the longest the
 relay went, after the answer's first byte, without passing the agent more of

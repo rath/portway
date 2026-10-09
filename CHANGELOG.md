@@ -7,6 +7,11 @@ version may contain breaking changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- Receiver origin compression now retries HTTP 400 refusals once with the
+  original, uncompressed body, retaining the temporary compression backoff.
+
 ### Added
 
 - `[model_aliases]` gives model IDs shorter display names throughout the TUI

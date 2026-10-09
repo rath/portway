@@ -524,13 +524,14 @@ requests carrying content digest or HTTP signature headers are not recompressed.
 Portway dictionaries and their headers are confined to the sender-to-receiver leg.
 `[compression] coding` and `dict` do not control this separate origin policy.
 
-If a request Portway compressed receives **415**, the receiver remembers the
-refusal and retries once with its original body. An explicit response advertisement
-excluding identity prevents that retry. A compressed request receiving **400**
-also suspends compression, but its error is returned without replay. Authentication
-errors, rate limits, 5xx responses, and transport failures do not cause an identity
-retry. This policy assumes the origin uses 415 to reject a request before executing
-it; it does not infer replay safety from arbitrary error text.
+If a request Portway compressed receives **400 or 415**, the receiver remembers
+the refusal and retries once with its original, uncompressed body. The client
+receives the retry's response, including any error it returns. An explicit
+response advertisement excluding identity prevents that retry. Uncompressed
+requests, authentication errors, rate limits, 5xx responses, and transport
+failures do not cause an identity retry. This policy treats 400 and 415 on
+compressed uploads as possible encoding refusals; the retry is bounded to one
+attempt, even if the origin rejects the original body too.
 
 Refusals suspend compression for 600 seconds. After expiry, one request trials
 gzip while concurrent requests use identity. The same single-trial rule applies

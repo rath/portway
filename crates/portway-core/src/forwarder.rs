@@ -951,12 +951,14 @@ impl Forwarder {
                 ));
             }
             if coding != Coding::None
-                && response.status() == StatusCode::UNSUPPORTED_MEDIA_TYPE
+                && matches!(response.status().as_u16(), 400 | 415)
                 && crate::origin::identity_allowed(response.headers())
             {
                 // Close the unread refusal connection before dialing the identity retry.
+                let status = response.status().as_u16();
                 drop(sent);
-                self.telemetry.warn("origin 415: retrying identity once");
+                self.telemetry
+                    .warn(&format!("origin {status}: retrying identity once"));
                 self.stats.retried_identity.fetch_add(1, Ordering::Relaxed);
                 meter.as_ref().expect("origin meter").retry();
                 coding = Coding::None;

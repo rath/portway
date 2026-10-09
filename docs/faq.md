@@ -111,11 +111,11 @@ layer rejected it before the application ran, which it marks with `X-Dict-Miss` 
 responses, so an application cannot trigger a replay. Application errors and
 network errors after sending are returned as they are.
 
-The optional receiver-to-origin `auto` policy has a separate rule: an origin 415
+The optional receiver-to-origin `auto` policy has a separate rule: an origin 400 or 415
 on a request Portway compressed permits one identity retry, unless identity is
 explicitly excluded. This relies on the origin rejecting the request before
-execution; it does not require a Portway marker. General 400, 5xx, and transport
-errors are never replayed by this policy. A 400 or 415 suspends origin compression
+execution; it does not require a Portway marker. Uncompressed requests, 5xx,
+and transport errors are never replayed by this policy. A 400 or 415 suspends origin compression
 for ten minutes. See [errors and replay](protocol.md#errors-and-replay).
 
 ### Is DCZ a standard?

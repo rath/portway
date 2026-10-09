@@ -100,10 +100,10 @@ including on 2xx responses; it is distinct from the client's response preference
 See [RFC 9110 §12.5.3](https://www.rfc-editor.org/rfc/rfc9110.html#section-12.5.3).
 
 Unknown support permits one optimistic gzip trial. A compressed origin request
-receiving 415 is resent as identity at most once unless identity was explicitly
-excluded. This opt-in rule relies on the origin using 415 for rejection before
-execution. It does not change the sender's marker requirement. A generic 400
-suspends compression without replay; network failures and 5xx do not trigger a
+receiving 400 or 415 is resent as identity at most once unless identity was explicitly
+excluded. This opt-in rule treats either status on a compressed upload as a possible
+encoding refusal before execution. It does not change the sender's marker
+requirement. Uncompressed requests, network failures, and 5xx do not trigger a
 replay or prove that compression is unsupported. The receiver continues stripping
 origin-supplied decoder markers before returning the final response to its sender.
 

@@ -315,8 +315,8 @@ changes can use `portway --reload --data-dir ./receiver-data` in daemon mode.
 No sender change is needed to enable compression on the receiver's origin leg.
 
 The receiver first tries gzip and learns supported codings from origin responses.
-A 415 triggers one identity retry and a ten-minute suspension; a 400 suspends
-compression without replaying that request. Enabling `auto` does not guarantee
+A 400 or 415 on a compressed upload triggers one identity retry and a ten-minute
+suspension. The client receives the retry's response. Enabling `auto` does not guarantee
 that any particular provider accepts compressed uploads. See the complete
 [origin policy](configuration.md#receiver-to-origin-upload-compression) and
 [diagnostics](operations.md#check-receiver-to-origin-compression).

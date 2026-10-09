@@ -180,38 +180,43 @@ async fn decoded_sender_body_is_recompressed_for_origin_and_responses_survive() 
 }
 
 #[tokio::test]
-async fn bare_415_retries_identity_once_and_remembers_refusal_across_reload() {
-    let origin = origin(vec![Reply {
-        status: 415,
-        accept: None,
-    }])
-    .await;
-    let configuration = config(&origin.url, true);
-    let (client, router, task) = receiver(&configuration).await;
-    assert_eq!(client.post("/v1/messages", payload()).await.status, 200);
-    assert_eq!(client.post("/v1/messages", payload()).await.status, 200);
-    assert_eq!(encodings(&origin), ["gzip", "identity", "identity"]);
-    let expected_wire: usize = origin
-        .calls
-        .lock()
-        .unwrap()
-        .iter()
-        .map(|c| c.body.len())
-        .sum();
-    let stats = router.routes()[0].1.snapshot();
-    assert_eq!(stats["wire_bytes"], expected_wire);
-    assert_eq!(stats["retried_identity"], 1);
-    assert_eq!(stats["origin_compression"]["wire_bytes"], expected_wire);
-    assert_eq!(stats["origin_compression"]["backoff_entries"], 1);
-    let next = configuration.router(Mode::Receive).unwrap();
-    next.inherit_origin_state(&router);
-    let response = next.routes()[0]
-        .1
-        .forward(http::Request::post("/v1/messages").body(payload()).unwrap())
+async fn bare_refusal_retries_identity_once_and_remembers_refusal_across_reload() {
+    for status in [400, 415] {
+        let origin = origin(vec![Reply {
+            status,
+            accept: None,
+        }])
         .await;
-    response.into_body().collect().await.unwrap();
-    assert_eq!(encodings(&origin).last().unwrap(), "identity");
-    task.abort();
+        let configuration = config(&origin.url, true);
+        let (client, router, task) = receiver(&configuration).await;
+        assert_eq!(client.post("/v1/messages", payload()).await.status, 200);
+        assert_eq!(client.post("/v1/messages", payload()).await.status, 200);
+        assert_eq!(encodings(&origin), ["gzip", "identity", "identity"]);
+        for call in origin.calls.lock().unwrap().iter() {
+            assert_eq!(call.plain(), payload());
+        }
+        let expected_wire: usize = origin
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|c| c.body.len())
+            .sum();
+        let stats = router.routes()[0].1.snapshot();
+        assert_eq!(stats["wire_bytes"], expected_wire);
+        assert_eq!(stats["retried_identity"], 1);
+        assert_eq!(stats["origin_compression"]["wire_bytes"], expected_wire);
+        assert_eq!(stats["origin_compression"]["backoff_entries"], 1);
+        let next = configuration.router(Mode::Receive).unwrap();
+        next.inherit_origin_state(&router);
+        let response = next.routes()[0]
+            .1
+            .forward(http::Request::post("/v1/messages").body(payload()).unwrap())
+            .await;
+        response.into_body().collect().await.unwrap();
+        assert_eq!(encodings(&origin).last().unwrap(), "identity");
+        task.abort();
+    }
 }
 
 #[tokio::test]
@@ -237,8 +242,8 @@ async fn unencoded_success_advertises_weighted_request_codings_and_q_zero_is_hon
 }
 
 #[tokio::test]
-async fn application_errors_are_not_replayed_and_only_400_suspends_compression() {
-    for status in [400, 401, 403, 429, 500, 502, 503, 504] {
+async fn other_application_errors_are_not_replayed() {
+    for status in [401, 403, 429, 500, 502, 503, 504] {
         let origin = origin(vec![Reply {
             status,
             accept: None,
@@ -248,10 +253,23 @@ async fn application_errors_are_not_replayed_and_only_400_suspends_compression()
         assert_eq!(client.post("/v1/messages", payload()).await.status, status);
         assert_eq!(origin.calls.lock().unwrap().len(), 1);
         client.post("/v1/messages", payload()).await;
-        assert_eq!(
-            encodings(&origin),
-            ["gzip", if status == 400 { "identity" } else { "gzip" }]
-        );
+        assert_eq!(encodings(&origin), ["gzip", "gzip"]);
+        task.abort();
+    }
+}
+
+#[tokio::test]
+async fn uncompressed_bad_requests_are_not_retried() {
+    for (enabled, body) in [(false, payload()), (true, Bytes::from_static(b"{}"))] {
+        let origin = origin(vec![Reply {
+            status: 400,
+            accept: None,
+        }])
+        .await;
+        let (client, router, task) = receiver(&config(&origin.url, enabled)).await;
+        assert_eq!(client.post("/v1/messages", body).await.status, 400);
+        assert_eq!(encodings(&origin), ["identity"]);
+        assert_eq!(router.routes()[0].1.snapshot()["retried_identity"], 0);
         task.abort();
     }
 }
@@ -290,22 +308,24 @@ async fn refusal_is_isolated_by_target_method_and_credentials() {
 
 #[tokio::test]
 async fn explicit_identity_refusal_prevents_fallback_and_identity_retry_is_never_repeated() {
-    for (advertisement, expected_calls) in [(Some("identity;q=0"), 1), (None, 2)] {
-        let origin = origin(vec![
-            Reply {
-                status: 415,
-                accept: advertisement,
-            },
-            Reply {
-                status: 415,
-                accept: None,
-            },
-        ])
-        .await;
-        let (client, _, task) = receiver(&config(&origin.url, true)).await;
-        assert_eq!(client.post("/v1/messages", payload()).await.status, 415);
-        assert_eq!(origin.calls.lock().unwrap().len(), expected_calls);
-        task.abort();
+    for status in [400, 415] {
+        for (advertisement, expected_calls) in [(Some("identity;q=0"), 1), (None, 2)] {
+            let origin = origin(vec![
+                Reply {
+                    status,
+                    accept: advertisement,
+                },
+                Reply {
+                    status,
+                    accept: None,
+                },
+            ])
+            .await;
+            let (client, _, task) = receiver(&config(&origin.url, true)).await;
+            assert_eq!(client.post("/v1/messages", payload()).await.status, status);
+            assert_eq!(origin.calls.lock().unwrap().len(), expected_calls);
+            task.abort();
+        }
     }
 }
 
