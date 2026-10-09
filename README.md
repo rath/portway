@@ -136,7 +136,7 @@ numbers stay flat.
 
 | You want to… | Read |
 | --- | --- |
-| Put Claude Code or Codex behind Portway | [Claude Code and Codex](docs/agents.md) |
+| Put Claude Code or Codex behind Portway | [Claude Code and Codex](docs/cli-setup.md) |
 | Install Portway, create a TOML file, and send a first request | [Getting started](docs/getting-started.md) |
 | Put a compression receiver in front of a service you run | [Receiver setup](docs/getting-started.md#add-a-compression-receiver) |
 | Know whether Portway fits your setup | [FAQ](docs/faq.md) |
@@ -195,14 +195,45 @@ Start Portway in that directory:
 portway --config ./portway.toml
 ```
 
-Then point each client at its mount and change nothing else: Claude Code with
-`ANTHROPIC_BASE_URL=http://127.0.0.1:8787/anthropic`, Codex with
-`base_url = "http://127.0.0.1:8787/codex"` in its provider entry. Each keeps
-its own login and model names; Portway forwards the request's credentials and
-has no key of its own. The name is removed and the rest of the path reaches the
-vendor unchanged, so `/anthropic/v1/messages` arrives as `/v1/messages`. See
-[Claude Code and Codex](docs/agents.md) for both clients' settings and the
-two-hop layout.
+Leave Portway running and open a second terminal. Use a CLI you have already
+installed and signed in to. This setup forwards directly to the providers;
+[add a receiver](docs/cli-setup.md#across-the-network) to enable delta compression.
+
+**Claude Code:** set the base URL for one invocation (bash, zsh, or fish):
+
+```sh
+env ANTHROPIC_BASE_URL=http://127.0.0.1:8787/anthropic claude
+```
+
+**Codex:** save this as `~/.codex/portway.config.toml` (or in `CODEX_HOME` if
+you set it), using your existing ChatGPT login from `codex login`:
+
+```toml
+model_provider = "portway"
+
+[model_providers.portway]
+name = "portway"
+base_url = "http://127.0.0.1:8787/codex"
+requires_openai_auth = true
+wire_api = "responses"
+```
+
+Then run from your project directory:
+
+```sh
+codex -p portway
+```
+
+The profile inherits your usual model and preferences. Plain `codex` uses
+your usual provider. Each client keeps its credentials; Portway needs no key
+of its own and no vendor model entries. End the base URLs at `/anthropic` or
+`/codex`, without adding `/v1`. If Portway runs on another machine, replace
+`127.0.0.1:8787` with that server's reachable address.
+
+Send a short message and confirm the request appears in Portway's log or
+browser console. A health response alone does not verify authentication.
+[Claude Code and Codex](docs/cli-setup.md) covers persistent shell settings,
+older Codex profile migration, API-key authentication, and troubleshooting.
 
 For an OpenAI-compatible service, a single `upstream = "https://api.example.com"`
 sends everything to it: set the client's API base URL to

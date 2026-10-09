@@ -16,7 +16,9 @@ codex = "https://chat.example.com/backend-api/codex"
 # Connect a client by its base URL alone, keeping its own key and model:
 #   ANTHROPIC_BASE_URL=http://127.0.0.1:8787/anthropic
 #   base_url = "http://127.0.0.1:8787/codex"   (Codex model_providers entry)
-# See docs/agents.md for Claude Code and Codex.
+# For Codex, save the complete provider profile from docs/cli-setup.md as
+# ~/.codex/portway.config.toml and run: codex -p portway
+# No Portway API key or vendor model registration is needed.
 
 # Optional: a [models] table on the same listener routes requests outside
 # every mount by their JSON "model" field. See examples/models.toml.

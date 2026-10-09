@@ -193,7 +193,25 @@ codex = "https://chatgpt.com/backend-api/codex"</code></pre>
 <pre class="shell" tabindex="0"><code>portway --config ./portway.toml --web</code></pre>
     </li>
     <li>
-      <p><strong>エージェントを自分のマウントに向けます。</strong>変えるのはそれだけです。Claude Code は <code>ANTHROPIC_BASE_URL=http://127.0.0.1:8787/anthropic</code>、Codex はプロバイダー項目の <code>base_url = "http://127.0.0.1:8787/codex"</code> です。ログインもモデル名もそれぞれそのまま使い、Portway はリクエストに載った認証情報をそのまま通して、自前のキーは持ちません。OpenAI 互換のサービスなら <code>upstream</code> ひとつと base URL <code>http://127.0.0.1:8787/v1</code> で済みます。</p>
+      <p><strong>別のターミナルで Claude Code を接続します。</strong> まず Claude Code をインストールし、通常どおりログインします。Portway を起動したまま、次のコマンドで今回の起動に適用します：</p>
+<pre class="shell" tabindex="0"><code>env ANTHROPIC_BASE_URL=http://127.0.0.1:8787/anthropic claude</code></pre>
+    </li>
+    <li>
+      <p><strong>専用のプロファイルで Codex を接続します。</strong> まず Codex をインストールし、<code>codex login</code> で ChatGPT にログインします。次の内容を <code>~/.codex/portway.config.toml</code> に保存します。<code>CODEX_HOME</code> を設定している場合は、そのディレクトリに保存します：</p>
+<pre class="shell" tabindex="0"><code>model_provider = "portway"
+
+[model_providers.portway]
+name = "portway"
+base_url = "http://127.0.0.1:8787/codex"
+requires_openai_auth = true
+wire_api = "responses"</code></pre>
+      <p>次に、プロジェクトのディレクトリで実行します：</p>
+<pre class="shell" tabindex="0"><code>codex -p portway</code></pre>
+      <p>プロファイルは普段のモデルと設定を引き継ぎます。通常のプロバイダーを使うには <code>codex</code> だけを実行します。両 CLI とも既存の認証情報を使い、Portway 専用の API キーは不要です。どちらのマウント URL にも <code>/v1</code> を付けないでください。</p>
+    </li>
+    <li>
+      <p><strong>最初のリクエストを確認します。</strong> CLI で短いメッセージを送り、応答が返り、Portway のログまたはブラウザーコンソールにリクエストが表示されることを確認します。このプロバイダーへの直接接続ではデルタ圧縮は行われません。すでにリモートの Portway サーバーを使っている場合は、クライアント設定の <code>127.0.0.1:8787</code> を接続可能なサーバーのアドレスに置き換えてください。</p>
+      <p><a href="https://github.com/rath/portway/blob/main/docs/cli-setup.md">永続設定・API キーの利用・トラブルシューティング</a></p>
     </li>
     <li>
       <p><strong>デルタ圧縮を使うにはレシーバーを追加します。</strong>サービスの手前にあるゲートウェイの後ろで <code>portway receive</code> を動かし、センダーをそのゲートウェイに向けます。<a href="https://github.com/rath/portway/blob/main/docs/getting-started.md#add-a-compression-receiver">レシーバーの設定</a>に手順があります。</p>
@@ -203,7 +221,7 @@ codex = "https://chatgpt.com/backend-api/codex"</code></pre>
   <p>同じリポジトリには、埋め込み可能な Rust ライブラリ <code>portway-core</code> と、デーモンモード、レポート、ターミナルダッシュボード、ブラウザーコンソールを備えた CLI が入っています。リクエストのメタデータだけを SQLite に記録し、ボディ、認証情報、辞書の中身は決して記録しません。</p>
 
   <ul class="docs">
-    <li><a href="https://github.com/rath/portway/blob/main/docs/agents.md">Claude Code と Codex</a></li>
+    <li><a href="https://github.com/rath/portway/blob/main/docs/cli-setup.md">Claude Code と Codex</a></li>
     <li><a href="https://github.com/rath/portway/blob/main/docs/getting-started.md">はじめに</a></li>
     <li><a href="https://github.com/rath/portway/blob/main/docs/faq.md">よくある質問</a></li>
     <li><a href="https://github.com/rath/portway/blob/main/docs/configuration.md">設定</a></li>

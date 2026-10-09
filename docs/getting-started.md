@@ -158,18 +158,25 @@ anthropic = "https://api.anthropic.com"
 codex = "https://chatgpt.com/backend-api/codex"
 ```
 
-Restart Portway, then:
+Restart a foreground Portway process with the new config, or reload a daemon.
+Keep it running, then open another terminal. If Claude Code is already
+installed and signed in, connect it for one invocation:
 
-| Client | Setting |
-| --- | --- |
-| Claude Code | `ANTHROPIC_BASE_URL=http://127.0.0.1:8787/anthropic` |
-| Codex | `base_url = "http://127.0.0.1:8787/codex"` in its provider entry, with `wire_api = "responses"` and `requires_openai_auth = true` |
+```sh
+env ANTHROPIC_BASE_URL=http://127.0.0.1:8787/anthropic claude
+```
 
-Portway removes the name and forwards the rest of the path to the URL, so
-`/anthropic/v1/messages` reaches `https://api.anthropic.com/v1/messages`. The
-client keeps its own login and model names; nothing in the file lists them.
-[Claude Code and Codex](agents.md) has both clients' settings in full, the
-API-key variant for Codex, and the two-hop layout.
+For Codex, create the separate `~/.codex/portway.config.toml` file shown in
+[the Codex setup](cli-setup.md#codex), then run `codex -p portway` using your
+existing ChatGPT login. The profile changes the provider and inherits your
+usual model and preferences. Its base URL ends at `/codex`, without `/v1`.
+
+Portway passes each client's credentials through and needs no key of its own
+or vendor model registration. Send a short CLI message and confirm it appears
+in Portway's log or console; the health endpoint alone does not test the vendor.
+This direct connection does not enable delta compression.
+[Claude Code and Codex](cli-setup.md) has the complete setup, persistent shell
+settings, the API-key variant, troubleshooting, and the two-hop layout.
 
 ## Add a second model destination
 

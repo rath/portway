@@ -196,12 +196,25 @@ codex = "https://chatgpt.com/backend-api/codex"</code></pre>
 <pre class="shell" tabindex="0"><code>portway --config ./portway.toml --web</code></pre>
     </li>
     <li>
-      <p><strong>Point your agent at its mount and change nothing else.</strong> Claude Code:
-      <code>ANTHROPIC_BASE_URL=http://127.0.0.1:8787/anthropic</code>. Codex:
-      <code>base_url = "http://127.0.0.1:8787/codex"</code> in its provider entry. Each keeps its
-      own login and model names; Portway passes the request's credentials through and has no key
-      of its own. An OpenAI-compatible service takes a single <code>upstream</code> and the base
-      URL <code>http://127.0.0.1:8787/v1</code>.</p>
+      <p><strong>Connect Claude Code in a second terminal.</strong> First install Claude Code and sign in normally. Leave Portway running, then use this command for one invocation:</p>
+<pre class="shell" tabindex="0"><code>env ANTHROPIC_BASE_URL=http://127.0.0.1:8787/anthropic claude</code></pre>
+    </li>
+    <li>
+      <p><strong>Connect Codex with a separate profile.</strong> First install Codex and sign in with ChatGPT using <code>codex login</code>. Save the following as <code>~/.codex/portway.config.toml</code> (inside <code>CODEX_HOME</code> if you set it):</p>
+<pre class="shell" tabindex="0"><code>model_provider = "portway"
+
+[model_providers.portway]
+name = "portway"
+base_url = "http://127.0.0.1:8787/codex"
+requires_openai_auth = true
+wire_api = "responses"</code></pre>
+      <p>Then run this from your project directory:</p>
+<pre class="shell" tabindex="0"><code>codex -p portway</code></pre>
+      <p>The profile inherits your usual model and preferences. Run plain <code>codex</code> to use your usual provider. Both clients keep their credentials; Portway needs no API key of its own. Do not append <code>/v1</code> to either mount URL.</p>
+    </li>
+    <li>
+      <p><strong>Check your first request.</strong> Send a short message in your CLI and confirm it answers and appears in Portway’s log or browser console. These direct provider connections do not enable delta compression. If you already use a remote Portway server, replace <code>127.0.0.1:8787</code> in the client settings with its reachable address.</p>
+      <p><a href="https://github.com/rath/portway/blob/main/docs/cli-setup.md">Persistent settings, API-key options, and troubleshooting</a></p>
     </li>
     <li>
       <p><strong>Add a receiver to enable delta compression.</strong> Run <code>portway receive</code> behind
@@ -216,7 +229,7 @@ codex = "https://chatgpt.com/backend-api/codex"</code></pre>
   metadata in SQLite, never bodies, credentials or dictionary contents.</p>
 
   <ul class="docs">
-    <li><a href="https://github.com/rath/portway/blob/main/docs/agents.md">Claude Code and Codex</a></li>
+    <li><a href="https://github.com/rath/portway/blob/main/docs/cli-setup.md">Claude Code and Codex</a></li>
     <li><a href="https://github.com/rath/portway/blob/main/docs/getting-started.md">Getting started</a></li>
     <li><a href="https://github.com/rath/portway/blob/main/docs/faq.md">FAQ</a></li>
     <li><a href="https://github.com/rath/portway/blob/main/docs/configuration.md">Configuration</a></li>

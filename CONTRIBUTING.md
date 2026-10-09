@@ -86,7 +86,11 @@ which carries one entry per language.
 
 - Use placeholder destinations such as `https://api.example.com` and model
   names such as `model-a`. Do not present a real provider's endpoints, models,
-  or prices as facts. The exception is `docs/prices.md`, a dated snapshot of
+  or prices as facts in generic examples. Vendor-specific CLI setup guides
+  and their README/website quick starts may use the real API destinations
+  needed for a working connection, checked against the client documentation.
+  Keep private hostnames and addresses out of all published examples.
+  Another exception is `docs/prices.md`, a dated snapshot of
   the vendors' published list prices for users to copy: change its figures only
   against the sources it links, and update its date when you do.
 - Keep claims about savings conditional. State that compression needs a

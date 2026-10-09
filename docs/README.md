@@ -7,9 +7,10 @@ shows measured savings; the pages below cover setting it up and running it.
 
 ## Set up
 
-- [Claude Code and Codex](agents.md): mount each vendor's API under a name,
-  point the client's base URL at it, and keep the client's own login and
-  models; the two-hop layout and prices.
+- [Claude Code and Codex](cli-setup.md): mount each vendor's API under a name,
+  connect Claude Code with an environment variable or Codex with a separate
+  profile file, keep your login, and verify the first request; persistent
+  settings, troubleshooting, the two-hop layout, and prices.
 - [Getting started](getting-started.md): install Portway, write a first TOML
   file, send a request, route several models, and
   [add a compression receiver](getting-started.md#add-a-compression-receiver).

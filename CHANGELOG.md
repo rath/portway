@@ -21,6 +21,10 @@ version may contain breaking changes.
 
 ### Fixed
 
+- CLI setup documentation now uses separate Codex profile files and includes
+  complete Claude Code and Codex connection steps in the README and all four
+  website languages, with authentication, verification, and troubleshooting.
+
 - A forwarder told to stop while it is still probing its upstreams at start
   now stops at once and the orderly way. The probes ran before portway
   listened for a way out, so a console stop waited for a slow upstream's probe
