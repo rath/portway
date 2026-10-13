@@ -169,7 +169,9 @@ async fn an_upstream_error_and_a_415_keep_their_levels() {
     assert!(
         lines
             .iter()
-            .any(|l| l.contains("ERROR POST /v1/chat/completions -> upstream error")),
+            .any(|l| l.contains("ERROR POST /v1/chat/completions -> 502")
+                && l.contains("upstream=model-zeta reason=upstream_error phase=response_headers")
+                && l.contains("ConnectError(")),
         "{lines:#?}"
     );
 }

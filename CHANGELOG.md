@@ -9,11 +9,19 @@ version may contain breaking changes.
 
 ### Fixed
 
+- Cancelling an upstream request also closes its connection driver, including
+  requests still waiting for response headers.
 - Receiver origin compression now retries HTTP 400 refusals once with the
   original, uncompressed body, retaining the temporary compression backoff.
 
 ### Added
 
+- Optional `[timeouts.routes.<name>].response_headers_seconds` bounds the time
+  to response headers across dialing, upload and permitted retries. Expiry
+  returns HTTP 504 without replaying a submitted generation request.
+- Abnormal response termination logs distinguish upstream disconnects, header
+  and body timeouts, codec errors and client disconnects. Successful trailing
+  reads after a client's final event remain normal completions.
 - `[model_aliases]` gives model IDs shorter display names throughout the TUI
   and web console. Local and remote viewers receive aliases from the server,
   and reload updates existing events as well as new ones. Details preserve the

@@ -25,3 +25,6 @@ webpki-roots = "1.0.9"
 zstd = "0.14.0"
 
 serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+tokio = { version = "1.53.1", features = ["test-util"] }

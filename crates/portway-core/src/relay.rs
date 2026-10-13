@@ -43,9 +43,61 @@ const GRACE: Duration = Duration::from_secs(2);
 /// Decoded bytes: a trailing `data: [DONE]` or usage chunk, not a generation.
 const GRACE_BYTES: u64 = 1 << 10;
 
+#[derive(Clone, Copy)]
+pub(crate) enum EndReason {
+    ResponseHeadersTimeout,
+    UpstreamDisconnect,
+    UpstreamError,
+    ReadTimeout,
+    DecodeError,
+    EncodeError,
+    ClientDisconnect,
+}
+
+impl EndReason {
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::ResponseHeadersTimeout => "response_headers_timeout",
+            Self::UpstreamDisconnect => "upstream_disconnect",
+            Self::UpstreamError => "upstream_error",
+            Self::ReadTimeout => "read_timeout",
+            Self::DecodeError => "decode_error",
+            Self::EncodeError => "encode_error",
+            Self::ClientDisconnect => "client_disconnect",
+        }
+    }
+
+    pub(crate) fn upstream(error: &hyper::Error) -> Self {
+        if error.is_incomplete_message() || error.is_closed() {
+            return Self::UpstreamDisconnect;
+        }
+        // A truncated body is wrapped as hyper's Body error, with the EOF
+        // or reset in its source chain rather than IncompleteMessage.
+        let mut cause = std::error::Error::source(error);
+        while let Some(error) = cause {
+            if let Some(io) = error.downcast_ref::<std::io::Error>()
+                && matches!(
+                    io.kind(),
+                    std::io::ErrorKind::UnexpectedEof
+                        | std::io::ErrorKind::ConnectionReset
+                        | std::io::ErrorKind::ConnectionAborted
+                        | std::io::ErrorKind::BrokenPipe
+                        | std::io::ErrorKind::NotConnected
+                )
+            {
+                return Self::UpstreamDisconnect;
+            }
+            cause = error.source();
+        }
+        Self::UpstreamError
+    }
+}
+
 /// Everything the one-line request log needs, rendered when the relay ends —
 /// including when the agent disconnects mid-stream.
 pub struct RequestLog {
+    end_reason: Option<EndReason>,
+    started: Instant,
     telemetry: Arc<Telemetry>,
     upstream: String,
     model: String,
@@ -103,6 +155,8 @@ impl RequestLog {
         telemetry: Arc<Telemetry>,
     ) -> Self {
         RequestLog {
+            end_reason: None,
+            started: Instant::now(),
             telemetry,
             upstream,
             model,
@@ -212,6 +266,22 @@ impl Drop for RequestLog {
         // Out of the registry first: a reader that sees the record must not
         // also still see the request in flight.
         self._in_flight.end();
+        if let Some(reason) = self.end_reason {
+            let message = format!(
+                "{} {} -> {} | upstream={} reason={} phase=response_body elapsed={:.3}s",
+                self.method,
+                self.path.split('?').next().unwrap_or(&self.path),
+                self.status,
+                self.upstream,
+                reason.name(),
+                self.ttfb + self.started.elapsed().as_secs_f64(),
+            );
+            if matches!(reason, EndReason::ClientDisconnect) {
+                self.telemetry.info(&message);
+            } else {
+                self.telemetry.warn(&message);
+            }
+        }
         self.telemetry.emit(Event::Request(Arc::new(self.record())));
     }
 }
@@ -265,6 +335,17 @@ impl RelayBody {
             lease.release();
         }
         self.upstream = None;
+        // An error must stop the driver even if the caller retains this body.
+        self.lease = None;
+    }
+
+    fn fail(&mut self, reason: EndReason) {
+        if let Some(log) = self.log.as_mut() {
+            log.end_reason.get_or_insert(reason);
+            log.complete = false;
+            log.usage = None;
+        }
+        self.finish();
     }
 
     /// One frame on its way to the agent, counted only when the hop encodes:
@@ -290,6 +371,7 @@ impl Drop for RelayBody {
         };
         if let Some(log) = self.log.as_mut() {
             log.close_gap(Instant::now());
+            log.end_reason.get_or_insert(EndReason::ClientDisconnect);
         }
         let Ok(runtime) = tokio::runtime::Handle::try_current() else {
             return;
@@ -319,7 +401,15 @@ async fn drain(
     let rest = async {
         let mut more = 0u64;
         while let Some(frame) = upstream.frame().await {
-            let Ok(frame) = frame else { return false };
+            let frame = match frame {
+                Ok(frame) => frame,
+                Err(error) => {
+                    if let Some(log) = log.as_mut() {
+                        log.end_reason = Some(EndReason::upstream(&error));
+                    }
+                    return false;
+                }
+            };
             let Ok(data) = frame.into_data() else {
                 continue;
             };
@@ -330,6 +420,9 @@ async fn drain(
                     .fetch_add(data.len() as u64, Ordering::Relaxed);
             }
             let Ok(decoded) = decoder.push(data) else {
+                if let Some(log) = log.as_mut() {
+                    log.end_reason = Some(EndReason::DecodeError);
+                }
                 return false;
             };
             usage.push(&decoded);
@@ -351,6 +444,7 @@ async fn drain(
     if ended {
         if let Some(log) = log.as_mut() {
             log.complete = true;
+            log.end_reason = None;
             log.usage = usage.usage();
         }
         if let Some(lease) = lease.as_mut() {
@@ -393,7 +487,7 @@ impl Body for RelayBody {
                     let decoded = match self.decoder.push(data) {
                         Ok(decoded) => decoded,
                         Err(err) => {
-                            self.finish();
+                            self.fail(EndReason::DecodeError);
                             return Poll::Ready(Some(Err(err)));
                         }
                     };
@@ -418,7 +512,7 @@ impl Body for RelayBody {
                         Some(encoder) => match encoder.push(&decoded) {
                             Ok(payload) => payload,
                             Err(err) => {
-                                self.finish();
+                                self.fail(EndReason::EncodeError);
                                 return Poll::Ready(Some(Err(err)));
                             }
                         },
@@ -428,7 +522,7 @@ impl Body for RelayBody {
                     return Poll::Ready(Some(Ok(Frame::data(payload))));
                 }
                 Poll::Ready(Some(Err(err))) => {
-                    self.finish();
+                    self.fail(EndReason::upstream(&err));
                     return Poll::Ready(Some(Err(std::io::Error::other(err))));
                 }
                 Poll::Ready(None) => {
@@ -443,7 +537,11 @@ impl Body for RelayBody {
                     // the stream it decodes would be truncated. `finish` takes
                     // the encoder, so this happens exactly once.
                     let tail = self.encoder.as_mut().map(Encoder::finish);
-                    self.finish();
+                    if tail.as_ref().is_some_and(|result| result.is_err()) {
+                        self.fail(EndReason::EncodeError);
+                    } else {
+                        self.finish();
+                    }
                     match tail {
                         Some(Ok(tail)) if !tail.is_empty() => {
                             self.count_agent(tail.len());
@@ -456,7 +554,7 @@ impl Body for RelayBody {
                 }
                 Poll::Pending => {
                     if self.deadline.as_mut().poll(cx).is_ready() {
-                        self.finish();
+                        self.fail(EndReason::ReadTimeout);
                         return Poll::Ready(Some(Err(std::io::Error::new(
                             std::io::ErrorKind::TimedOut,
                             "upstream read timed out",

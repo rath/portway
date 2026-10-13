@@ -17,7 +17,9 @@ pub mod telemetry;
 pub mod time;
 pub mod usage;
 
-pub use config::{CodingPreference, DictionaryPreference, ForwarderConfig};
+pub use config::{
+    CodingPreference, DictionaryPreference, ForwarderConfig, RouteTimeouts, TimeoutConfig,
+};
 pub use forwarder::Forwarder;
 pub use router::Router;
 pub use telemetry::{Event, EventSink, Telemetry};

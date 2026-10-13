@@ -388,6 +388,30 @@ requests; an active stream may not appear until it finishes. Locally generated
 model lists, health responses, and route-validation errors do not represent
 forwarded requests and are not recorded as such.
 
+An HTTP `200` on a request line records the response headers, not a guarantee
+that the entire stream arrived. An interrupted body keeps that status and is
+recorded as incomplete. Abnormal endings also emit a diagnostic line with
+`upstream`, `reason`, `phase` and `elapsed`; a configured header timeout adds
+`limit` and returns HTTP 504. Diagnostics appear in the same file, SQLite
+`logs` table and console log feed as other messages.
+
+| `reason` | Interpretation |
+| --- | --- |
+| `response_headers_timeout` | The configured budget expired before final response headers |
+| `upstream_disconnect` | The upstream closed before its HTTP message was complete |
+| `upstream_error` | Another upstream connection or protocol failure |
+| `read_timeout` | No upstream response frame arrived for 600 seconds |
+| `decode_error`, `encode_error` | The response codec failed while relaying |
+| `client_disconnect` | The client left before headers or before the response finished |
+
+Client disconnects are informational; other stream failures are warnings and
+failures before headers are errors. A client that stops reading at its final
+event is still a normal completion if the existing grace read finishes the
+upstream response. No request/response content or credentials are included.
+See [response header limits](configuration.md#limit-the-wait-for-response-headers)
+for per-route configuration. A header timeout is recorded as a diagnostic on
+the failing hop; an outer sender records the returned 504 as an HTTP response.
+
 ## Check compression
 
 To confirm that your build compresses at all, independent of your network and

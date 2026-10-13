@@ -62,10 +62,19 @@ impl std::fmt::Display for UpstreamError {
 
 /// A live connection plus the two handles the phase log needs from it.
 struct PooledConn {
+    driver: tokio::task::JoinHandle<()>,
     send: SendRequest<TimedBody>,
     slot: Arc<ClockSlot>,
     fd: RawFd,
     idle_since: Instant,
+}
+
+impl Drop for PooledConn {
+    fn drop(&mut self) {
+        // Dropping a send future alone need not stop hyper's detached driver.
+        // A cancelled request must close its socket, even before headers arrive.
+        self.driver.abort();
+    }
 }
 
 /// Plain or TLS, resolved once at dial time so the hot path stays monomorphic.
@@ -269,10 +278,11 @@ impl Upstream {
         // The driver must run for the connection's whole life. Dropping the
         // response body later makes hyper close the socket from in here, which
         // is exactly how an agent abort reaches the engine.
-        tokio::spawn(async move {
+        let driver = tokio::spawn(async move {
             let _ = conn.await;
         });
         Ok(PooledConn {
+            driver,
             send,
             slot,
             fd,

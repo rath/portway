@@ -81,6 +81,7 @@ pub struct Config {
     /// Upstreams chosen by the JSON `model` field at the root.
     pub models: BTreeMap<String, String>,
     pub compression: ForwarderConfig,
+    pub timeouts: portway_core::TimeoutConfig,
     pub receiver: ReceiverConfig,
     pub prices: Prices,
     #[serde(default, deserialize_with = "crate::aliases::deserialize")]
@@ -95,6 +96,7 @@ impl Default for Config {
             upstreams: BTreeMap::new(),
             models: BTreeMap::new(),
             compression: ForwarderConfig::default(),
+            timeouts: Default::default(),
             receiver: ReceiverConfig::default(),
             prices: Prices::new(),
             model_aliases: Default::default(),
@@ -154,6 +156,8 @@ impl Config {
         args.apply_compression(&mut config.compression);
         if (args.tui || args.web) && !config.has_destination() {
             config.compression.validate()?;
+            config.timeouts.validate()?;
+            config.timeouts.validate_routes(std::iter::empty())?;
             config.receiver.validate()?;
         } else {
             config.validate(args.mode)?;
@@ -167,6 +171,14 @@ impl Config {
     }
     pub fn validate(&self, mode: Mode) -> Result<(), String> {
         self.compression.validate()?;
+        self.timeouts.validate()?;
+        self.timeouts.validate_routes(
+            self.upstream
+                .iter()
+                .map(|_| portway_core::router::SINGLE_ROUTE)
+                .chain(self.upstreams.keys().map(String::as_str))
+                .chain(self.models.keys().map(String::as_str)),
+        )?;
         self.receiver.validate()?;
         if self.upstream.is_some() && (!self.upstreams.is_empty() || !self.models.is_empty()) {
             return Err(
@@ -209,6 +221,7 @@ impl Config {
     }
     pub fn router(&self, mode: Mode) -> Result<Arc<Router>, String> {
         let mut compression = self.compression.clone();
+        compression.timeouts = self.timeouts.clone();
         if mode == Mode::Receive {
             compression.origin_compression = self.receiver.origin_compression.clone();
             compression.coding = portway_core::CodingPreference::Off;
@@ -237,6 +250,50 @@ impl Config {
 mod tests {
     use super::*;
     use clap::Parser;
+
+    #[test]
+    fn response_header_timeouts_are_optional_and_name_existing_routes() {
+        let legacy: Config =
+            toml::from_str("[upstreams]\ncodex='https://api.example.test'\n").unwrap();
+        assert!(legacy.timeouts.routes.is_empty());
+        for (routing, name) in [
+            ("[upstreams]\ncodex='https://api.example.test'", "codex"),
+            ("[models]\nmodel='https://api.example.test'", "model"),
+            ("upstream='https://api.example.test'", "upstream"),
+        ] {
+            let text =
+                format!("{routing}\n[timeouts.routes.{name}]\nresponse_headers_seconds=120\n");
+            let config: Config = toml::from_str(&text).unwrap();
+            for mode in [Mode::Forward, Mode::Receive] {
+                config.validate(mode).unwrap();
+                config.router(mode).unwrap();
+            }
+            assert_eq!(
+                config.timeouts.routes[name].response_headers_seconds,
+                Some(120)
+            );
+            let unknown: Config =
+                toml::from_str(&text.replace(&format!("routes.{name}"), "routes.typo")).unwrap();
+            assert!(
+                unknown
+                    .validate(Mode::Forward)
+                    .unwrap_err()
+                    .contains("unknown route")
+            );
+            assert!(unknown.router(Mode::Forward).is_err());
+            for seconds in ["0", "18446744073709551615"] {
+                // TOML itself may reject integers outside its signed range.
+                if let Ok(invalid) = toml::from_str::<Config>(&text.replace("120", seconds)) {
+                    assert!(invalid.validate(Mode::Forward).is_err());
+                }
+            }
+            assert!(toml::from_str::<Config>(&text.replace("120", "-1")).is_err());
+            assert!(
+                toml::from_str::<Config>(&text.replace("response_headers_seconds", "typo"))
+                    .is_err()
+            );
+        }
+    }
     #[test]
     fn explicit_cli_values_override_files_without_default_flags_erasing_them() {
         let path = std::env::temp_dir().join(format!("portway-config-{}.toml", std::process::id()));

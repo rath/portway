@@ -49,6 +49,9 @@ impl Router {
         tls: Option<Arc<rustls::ClientConfig>>,
     ) -> Result<Arc<Self>, String> {
         config.validate()?;
+        config
+            .timeouts
+            .validate_routes(mounts.iter().chain(models).map(|(name, _)| name.as_str()))?;
         if mounts.is_empty() && models.is_empty() {
             return Err("at least one upstream is required".into());
         }
@@ -90,6 +93,7 @@ impl Router {
         tls: Option<Arc<rustls::ClientConfig>>,
     ) -> Result<Arc<Self>, String> {
         config.validate()?;
+        config.timeouts.validate_routes([SINGLE_ROUTE])?;
         let upstream = Arc::new(Upstream::with_telemetry(
             url,
             tls,

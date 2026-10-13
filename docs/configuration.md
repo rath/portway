@@ -119,6 +119,40 @@ including `/v1/models`. It neither inspects nor restricts the JSON `model` field
 Use it when a single upstream already handles multiple models, multipart uploads,
 or other payload formats that model routing cannot inspect.
 
+## Limit the wait for response headers
+
+Timeouts are optional and keyed by the existing route name: an `[upstreams]`
+mount name, a `[models]` key, or `upstream` in single-upstream mode. For example,
+after configuring a mount named `codex`:
+
+```toml
+[timeouts.routes.codex]
+response_headers_seconds = 120
+```
+
+Unconfigured routes retain an unlimited wait for headers. Values must be
+positive integer seconds; unknown route names are rejected. Removing the setting
+disables the limit. The same setting works in forward and receive modes.
+
+The budget starts after initial request encoding, immediately before the first
+upstream send. It includes DNS, TCP, TLS, upload and the wait for final response
+headers. Existing connection retries and compression fallbacks share this one
+budget. The TCP connection limit remains 10 seconds.
+
+Expiry closes the upstream connection and returns HTTP **504** with a JSON
+`detail`. It does not automatically replay an already submitted request. Once
+response headers arrive, this timer no longer applies: the existing 600-second
+response-body inactivity limit remains, renewed by each upstream frame. A long
+response that keeps sending data is not limited to 120 seconds.
+
+For a sender/receiver chain, put the limit on the receiver route that contacts
+the provider. The sender relays the receiver's 504; an identical sender timer
+could expire first and obscure which hop failed. Daemon reload applies changed
+limits to new requests; requests already running keep their original policy.
+
+Embedded users supply `TimeoutConfig` through `ForwarderConfig.timeouts`.
+Standalone TOML uses the top-level `[timeouts]` table, not `[compression]`.
+
 ## Choose the upstream URL
 
 The upstream URL is the destination origin plus an optional **path prefix**.

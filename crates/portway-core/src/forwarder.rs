@@ -16,7 +16,7 @@ use crate::config::{CodingPreference, DictionaryPreference, ForwarderConfig};
 use crate::dict::{self, Ring};
 use crate::flights::Flight;
 use crate::pool::{Lease, Upstream, UpstreamError};
-use crate::relay::{OutBody, RelayBody, RequestLog, json_response};
+use crate::relay::{EndReason, OutBody, RelayBody, RequestLog, json_response};
 use crate::telemetry::Telemetry;
 
 const NEGOTIATE_TIMEOUT: Duration = Duration::from_secs(15);
@@ -285,6 +285,7 @@ pub struct Forwarder {
     origin_auto: bool,
     origin: RwLock<Arc<OriginState>>,
     max_body_bytes: usize,
+    response_headers_timeout: Option<Duration>,
     telemetry: Arc<Telemetry>,
     probe_path: Option<String>,
     /// The route's name: a mount, a model, or `upstream`. What its counters
@@ -337,6 +338,7 @@ struct Encoded {
 impl Forwarder {
     pub fn from_url(name: &str, url: &str, config: &ForwarderConfig) -> Result<Arc<Self>, String> {
         config.validate()?;
+        config.timeouts.validate_routes([name])?;
         let upstream = Arc::new(Upstream::with_telemetry(
             url,
             None,
@@ -349,6 +351,7 @@ impl Forwarder {
             origin_auto: args.origin_compression.mode == OriginCompressionMode::Auto,
             origin: RwLock::new(Arc::default()),
             max_body_bytes: args.max_body_bytes,
+            response_headers_timeout: args.timeouts.response_headers(name),
             telemetry: Arc::clone(&args.telemetry),
             probe_path: args.probe_path.clone(),
             name: name.to_string(),
@@ -925,45 +928,121 @@ impl Forwarder {
             forwarder: Arc::clone(self),
             method: method.clone(),
             path: path.clone(),
+            started: t0,
             armed: true,
         };
 
-        let mut sent = self
-            .send(
-                &method,
-                &path_and_query,
-                &headers,
-                wire.clone(),
-                meter.clone(),
-                (&in_flight, coding),
-            )
-            .await;
-        if let Some(attempt) = &origin_attempt
-            && let Ok((response, _, _)) = &sent
-        {
-            attempt.observe(response.status(), response.headers(), coding);
-            if coding != Coding::None && matches!(response.status().as_u16(), 400 | 415) {
-                self.telemetry.warn(&format!(
-                    "origin {}: {} rejected {}; compression suspended for 600s",
-                    self.name,
-                    response.status().as_u16(),
-                    coding.name().unwrap_or("identity")
-                ));
-            }
-            if coding != Coding::None
-                && matches!(response.status().as_u16(), 400 | 415)
-                && crate::origin::identity_allowed(response.headers())
+        // One budget spans dialing, upload, headers and every permitted
+        // fallback. A retry must not buy another full timeout window.
+        let send = async {
+            let mut sent = self
+                .send(
+                    &method,
+                    &path_and_query,
+                    &headers,
+                    wire.clone(),
+                    meter.clone(),
+                    (&in_flight, coding),
+                )
+                .await;
+            if let Some(attempt) = &origin_attempt
+                && let Ok((response, _, _)) = &sent
             {
-                // Close the unread refusal connection before dialing the identity retry.
-                let status = response.status().as_u16();
-                drop(sent);
-                self.telemetry
-                    .warn(&format!("origin {status}: retrying identity once"));
-                self.stats.retried_identity.fetch_add(1, Ordering::Relaxed);
-                meter.as_ref().expect("origin meter").retry();
-                coding = Coding::None;
-                wire = body.clone();
-                headers.remove(http::header::CONTENT_ENCODING);
+                attempt.observe(response.status(), response.headers(), coding);
+                if coding != Coding::None && matches!(response.status().as_u16(), 400 | 415) {
+                    self.telemetry.warn(&format!(
+                        "origin {}: {} rejected {}; compression suspended for 600s",
+                        self.name,
+                        response.status().as_u16(),
+                        coding.name().unwrap_or("identity")
+                    ));
+                }
+                if coding != Coding::None
+                    && matches!(response.status().as_u16(), 400 | 415)
+                    && crate::origin::identity_allowed(response.headers())
+                {
+                    // Close the unread refusal connection before dialing the identity retry.
+                    let status = response.status().as_u16();
+                    drop(sent);
+                    self.telemetry
+                        .warn(&format!("origin {status}: retrying identity once"));
+                    self.stats.retried_identity.fetch_add(1, Ordering::Relaxed);
+                    meter.as_ref().expect("origin meter").retry();
+                    coding = Coding::None;
+                    wire = body.clone();
+                    headers.remove(http::header::CONTENT_ENCODING);
+                    sent = self
+                        .send(
+                            &method,
+                            &path_and_query,
+                            &headers,
+                            wire.clone(),
+                            meter.clone(),
+                            (&in_flight, coding),
+                        )
+                        .await;
+                }
+            }
+            // A trial ends at response headers; it must not remain reserved for a long SSE stream.
+            drop(origin_attempt);
+            if let Ok((response, _, _)) = &mut sent
+                && coding == Coding::Dcz
+                && let Some(reason) = dict_refusal(response)
+            {
+                // Either way the turn still goes out compressed: plain zstd.
+                // The refusal body on this connection is still unread, so the
+                // connection must NOT go back to the pool: hyper will not write
+                // the next request until the previous response body is consumed,
+                // and the old response is only dropped when `sent` is reassigned
+                // below — which never happens while the resend itself waits on
+                // that connection (deadlock, seen live after every upstream recreate:
+                // the agent hung at 'Working...' with in_flight 1 and no error).
+                // Leave the lease alone instead: it drops with the old `sent`
+                // tuple, the connection that owes bytes is closed, and the
+                // resend dials a fresh one.
+                match reason {
+                    DictRefusal::Miss | DictRefusal::Rejected => {
+                        // Miss: upstream restart or eviction, costs this one round trip.
+                        // Rejected should not happen; if the 400 was about the
+                        // request itself, the zstd resend earns the same 400.
+                        if matches!(reason, DictRefusal::Rejected) {
+                            self.telemetry
+                                .warn("400 for dcz: resending zstd without that dictionary");
+                        }
+                        self.stats.dict_misses.fetch_add(1, Ordering::Relaxed);
+                        if let Some(gone) = &base {
+                            self.ring.forget(gone);
+                        }
+                    }
+                    DictRefusal::Unsupported => {
+                        // The upstream behind the URL no longer takes dcz (rollback).
+                        self.telemetry
+                            .warn("415 for dcz: resending zstd, dictionaries OFF");
+                        self.dict_off(CompressionIssue::DictionaryRefused);
+                        hash = None;
+                        headers.remove(dict::STORE_HEADER);
+                    }
+                }
+                coding = Coding::Zstd;
+                let source = body.clone();
+                let this = Arc::clone(self);
+                let job = tokio::task::spawn_blocking(move || this.encode(&source, Coding::Zstd));
+                match job.await {
+                    Ok(Ok(encoded)) if encoded.len() < body.len() => {
+                        wire = encoded;
+                        headers.insert(
+                            http::header::CONTENT_ENCODING,
+                            HeaderValue::from_static("zstd"),
+                        );
+                    }
+                    _ => {
+                        coding = Coding::None;
+                        wire = body.clone();
+                        headers.remove(http::header::CONTENT_ENCODING);
+                        headers.remove(dict::STORE_HEADER);
+                        hash = None;
+                    }
+                }
                 sent = self
                     .send(
                         &method,
@@ -975,127 +1054,64 @@ impl Forwarder {
                     )
                     .await;
             }
-        }
-        // A trial ends at response headers; it must not remain reserved for a long SSE stream.
-        drop(origin_attempt);
-        if let Ok((response, _, _)) = &mut sent
-            && coding == Coding::Dcz
-            && let Some(reason) = dict_refusal(response)
-        {
-            // Either way the turn still goes out compressed: plain zstd.
-            // The refusal body on this connection is still unread, so the
-            // connection must NOT go back to the pool: hyper will not write
-            // the next request until the previous response body is consumed,
-            // and the old response is only dropped when `sent` is reassigned
-            // below — which never happens while the resend itself waits on
-            // that connection (deadlock, seen live after every upstream recreate:
-            // the agent hung at 'Working...' with in_flight 1 and no error).
-            // Leave the lease alone instead: it drops with the old `sent`
-            // tuple, the connection that owes bytes is closed, and the
-            // resend dials a fresh one.
-            match reason {
-                DictRefusal::Miss | DictRefusal::Rejected => {
-                    // Miss: upstream restart or eviction, costs this one round trip.
-                    // Rejected should not happen; if the 400 was about the
-                    // request itself, the zstd resend earns the same 400.
-                    if matches!(reason, DictRefusal::Rejected) {
-                        self.telemetry
-                            .warn("400 for dcz: resending zstd without that dictionary");
-                    }
-                    self.stats.dict_misses.fetch_add(1, Ordering::Relaxed);
-                    if let Some(gone) = &base {
-                        self.ring.forget(gone);
-                    }
-                }
-                DictRefusal::Unsupported => {
-                    // The upstream behind the URL no longer takes dcz (rollback).
-                    self.telemetry
-                        .warn("415 for dcz: resending zstd, dictionaries OFF");
-                    self.dict_off(CompressionIssue::DictionaryRefused);
-                    hash = None;
-                    headers.remove(dict::STORE_HEADER);
-                }
+            if let Ok((response, _, _)) = &sent
+                && matches!(response.status().as_u16(), 502..=504)
+            {
+                // The upstream hop ends at the edge, so an upstream that is being
+                // replaced does not break this connection — it shows up as the
+                // edge's own 5xx. That is the redeploy signal on this path.
+                self.mark_stale();
             }
-            coding = Coding::Zstd;
-            let source = body.clone();
-            let this = Arc::clone(self);
-            let job = tokio::task::spawn_blocking(move || this.encode(&source, Coding::Zstd));
-            match job.await {
-                Ok(Ok(encoded)) if encoded.len() < body.len() => {
-                    wire = encoded;
-                    headers.insert(
-                        http::header::CONTENT_ENCODING,
-                        HeaderValue::from_static("zstd"),
-                    );
-                }
-                _ => {
-                    coding = Coding::None;
-                    wire = body.clone();
-                    headers.remove(http::header::CONTENT_ENCODING);
-                    headers.remove(dict::STORE_HEADER);
-                    hash = None;
-                }
+            if let Ok((response, _, _)) = &mut sent
+                && !self.origin_auto
+                && response.status() == StatusCode::UNSUPPORTED_MEDIA_TYPE
+                && response.headers().contains_key("x-portway-decode-error")
+                && coding != Coding::None
+            {
+                // The upstream behind the URL no longer inflates (rollback / other
+                // image). Same pool rule as the dictionary refusal above: the
+                // 415 body is unread, so drop the lease with the old `sent`
+                // tuple instead of pooling the connection the identity resend
+                // would immediately check back out.
+                self.telemetry.warn(&format!(
+                    "415 for {}: resending identity, encoding OFF",
+                    coding.name().unwrap_or("identity")
+                ));
+                self.coding.store(Coding::None as u8, Ordering::Relaxed);
+                self.identity_reason
+                    .store(CompressionIssue::EncodingRefused as u8, Ordering::Relaxed);
+                self.encoding_refused_until.store(
+                    self.now() + REFUSAL_BACKOFF.as_millis() as u64,
+                    Ordering::Relaxed,
+                );
+                self.dict_off(CompressionIssue::EncodingRefused);
+                self.mark_stale();
+                self.stats.retried_identity.fetch_add(1, Ordering::Relaxed);
+                coding = Coding::None;
+                wire = body.clone();
+                hash = None;
+                headers.remove(http::header::CONTENT_ENCODING);
+                headers.remove(dict::STORE_HEADER);
+                sent = self
+                    .send(
+                        &method,
+                        &path_and_query,
+                        &headers,
+                        wire.clone(),
+                        meter.clone(),
+                        (&in_flight, coding),
+                    )
+                    .await;
             }
-            sent = self
-                .send(
-                    &method,
-                    &path_and_query,
-                    &headers,
-                    wire.clone(),
-                    meter.clone(),
-                    (&in_flight, coding),
-                )
-                .await;
-        }
-        if let Ok((response, _, _)) = &sent
-            && matches!(response.status().as_u16(), 502..=504)
-        {
-            // The upstream hop ends at the edge, so an upstream that is being
-            // replaced does not break this connection — it shows up as the
-            // edge's own 5xx. That is the redeploy signal on this path.
-            self.mark_stale();
-        }
-        if let Ok((response, _, _)) = &mut sent
-            && !self.origin_auto
-            && response.status() == StatusCode::UNSUPPORTED_MEDIA_TYPE
-            && response.headers().contains_key("x-portway-decode-error")
-            && coding != Coding::None
-        {
-            // The upstream behind the URL no longer inflates (rollback / other
-            // image). Same pool rule as the dictionary refusal above: the
-            // 415 body is unread, so drop the lease with the old `sent`
-            // tuple instead of pooling the connection the identity resend
-            // would immediately check back out.
-            self.telemetry.warn(&format!(
-                "415 for {}: resending identity, encoding OFF",
-                coding.name().unwrap_or("identity")
-            ));
-            self.coding.store(Coding::None as u8, Ordering::Relaxed);
-            self.identity_reason
-                .store(CompressionIssue::EncodingRefused as u8, Ordering::Relaxed);
-            self.encoding_refused_until.store(
-                self.now() + REFUSAL_BACKOFF.as_millis() as u64,
-                Ordering::Relaxed,
-            );
-            self.dict_off(CompressionIssue::EncodingRefused);
-            self.mark_stale();
-            self.stats.retried_identity.fetch_add(1, Ordering::Relaxed);
-            coding = Coding::None;
-            wire = body.clone();
-            hash = None;
-            headers.remove(http::header::CONTENT_ENCODING);
-            headers.remove(dict::STORE_HEADER);
-            sent = self
-                .send(
-                    &method,
-                    &path_and_query,
-                    &headers,
-                    wire.clone(),
-                    meter.clone(),
-                    (&in_flight, coding),
-                )
-                .await;
-        }
+
+            sent
+        };
+        let sent = match self.response_headers_timeout {
+            Some(limit) => tokio::time::timeout(limit, send)
+                .await
+                .unwrap_or(Err(UpstreamError::Timeout("response headers"))),
+            None => send.await,
+        };
 
         let (response, lease, clock) = match sent {
             Ok(done) => done,
@@ -1105,10 +1121,27 @@ impl Forwarder {
                 // An upstream that stopped answering is the one most likely to come
                 // back as a different image.
                 self.mark_stale();
-                self.telemetry
-                    .error(&format!("{method} {path} -> upstream error {err}"));
+                let (status, reason) = match &err {
+                    UpstreamError::Timeout("response headers") => (
+                        StatusCode::GATEWAY_TIMEOUT,
+                        EndReason::ResponseHeadersTimeout,
+                    ),
+                    UpstreamError::Protocol(error) => {
+                        (StatusCode::BAD_GATEWAY, EndReason::upstream(error))
+                    }
+                    _ => (StatusCode::BAD_GATEWAY, EndReason::UpstreamError),
+                };
+                let limit = self
+                    .response_headers_timeout
+                    .map_or(String::new(), |limit| {
+                        format!(" limit={}s", limit.as_secs())
+                    });
+                self.telemetry.error(&format!(
+                    "{method} {path} -> {} | upstream={} reason={} phase=response_headers elapsed={:.3}s{limit} | {err}",
+                    status.as_u16(), self.name, reason.name(), t0.elapsed().as_secs_f64(),
+                ));
                 return json_response(
-                    StatusCode::BAD_GATEWAY,
+                    status,
                     serde_json::json!({
                         "detail": format!("portway: upstream request failed: {err}")
                     }),
@@ -1444,6 +1477,7 @@ struct AbortGuard {
     forwarder: Arc<Forwarder>,
     method: Method,
     path: String,
+    started: Instant,
     armed: bool,
 }
 
@@ -1463,8 +1497,8 @@ impl Drop for AbortGuard {
             .client_aborts
             .fetch_add(1, Ordering::Relaxed);
         self.forwarder.telemetry.info(&format!(
-            "{} {} -> agent left before the first byte",
-            self.method, self.path
+            "{} {} -> upstream={} reason=client_disconnect phase=response_headers elapsed={:.3}s | agent left before the first byte",
+            self.method, self.path, self.forwarder.name, self.started.elapsed().as_secs_f64(),
         ));
     }
 }
