@@ -108,6 +108,24 @@ fn running(pid: i32) -> bool {
     !stat.is_empty() && !stat.starts_with('Z')
 }
 
+/// The daemon releases its pid file's lock *before* its last instructions run:
+/// `--stop` returns on that release, and the process only goes after `main`
+/// returns. On a loaded machine that tail outlives the stop, so waiting it out
+/// is this helper's job — bounded, so a daemon that really hangs still fails.
+async fn wait_for_exit(pid: i32) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        if !running(pid) {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "pid {pid} is still running"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
 /// The daemon binds its listener before it reports ready, so this is normally
 /// instant; the loop is for a slow machine, not for a race.
 async fn wait_for_listener(port: u16) {
@@ -216,7 +234,7 @@ async fn the_daemon_starts_serves_records_and_stops() {
         !dir.join(PID_FILE).exists(),
         "the pid file outlived the daemon"
     );
-    assert!(!running(pid), "pid {pid} is still running");
+    wait_for_exit(pid).await;
 
     let not_running = oneshot(&dir, "--status");
     assert!(!not_running.status.success());
@@ -554,7 +572,7 @@ async fn a_daemon_stopped_while_negotiating_stops_the_orderly_way() {
         "the stop waited {:?} for the probe",
         started.elapsed()
     );
-    assert!(!running(pid), "pid {pid} is still running");
+    wait_for_exit(pid).await;
     wait_for_log(&dir, "stopping").await;
     drop(silent);
 }
