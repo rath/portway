@@ -12,6 +12,8 @@ version may contain breaking changes.
 - `--upstream URL` drops the `[timeouts.routes.<name>]` entries keyed by the
   `[upstreams]` and `[models]` routes it clears, so the documented override
   starts and reloads instead of failing on an unknown route.
+- Recorded dashboards count a request as encoded only when compressed bytes
+  reached the upstream, matching the live counters for failures before upload.
 
 ## [0.2.6] - 2026-10-17
 

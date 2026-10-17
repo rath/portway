@@ -323,7 +323,9 @@ impl Board {
             .entry(record.upstream.clone())
             .or_default();
         view.requests += 1;
-        if record.coding != Coding::None {
+        // The same test as `Forwarder::account_upload`: a coding chosen for a
+        // request that failed before its body went out encoded nothing.
+        if record.coding != Coding::None && record.wire_len > 0 {
             view.encoded_requests += 1;
         }
         view.body_bytes += record.body_len;
@@ -479,6 +481,7 @@ pub fn compression_status(view: &StatsView) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
 
     /// A window is sampled whole rather than accumulated, so loading one
     /// replaces whatever the chart was holding — and the window that does not
@@ -521,6 +524,51 @@ mod tests {
         view.identity_reason = None;
         view.last_probe_ok = Some(false);
         assert_eq!(compression_status(&view), "probe failed; coding kept");
+    }
+
+    /// A replayed window counts a request as encoded the way the live
+    /// counters do: by compressed bytes that went out, not by the coding the
+    /// forwarder had chosen. A failure before the upload carries that coding
+    /// with nothing on the wire.
+    #[test]
+    fn a_recorded_request_is_encoded_only_when_its_coding_reached_the_wire() {
+        let record = |status: u16, wire_len: u64| RequestRecord {
+            stamp: "12:00:00".to_string(),
+            upstream: "codex".to_string(),
+            model: "gpt-x".to_string(),
+            tier: None,
+            method: Method::POST,
+            path: "/codex/responses".to_string(),
+            status,
+            dns: Some(0.001),
+            tcp: None,
+            tls: None,
+            body_len: 4_096,
+            wire_len,
+            coding: Coding::Zstd,
+            upload: None,
+            ttfb: 0.5,
+            received: 0,
+            received_wire: 0,
+            received_agent: 0,
+            upstream_encoding: "identity".to_string(),
+            agent_encoding: None,
+            download: None,
+            max_gap: None,
+            complete: status < 500,
+            usage: None,
+            flight: None,
+        };
+        let mut board = Board::new();
+        board.recorded = true;
+        board.observe(&Event::Request(Arc::new(record(502, 0))));
+        board.observe(&Event::Request(Arc::new(record(200, 1_024))));
+        let view = &board.upstreams_tally["codex"];
+        assert_eq!(view.requests, 2);
+        assert_eq!(view.encoded_requests, 1);
+        assert_eq!(view.upstream_errors, 1);
+        assert_eq!(view.wire_bytes, 1_024);
+        assert_eq!(view.coding, Coding::Zstd);
     }
 
     #[test]
