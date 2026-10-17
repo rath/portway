@@ -17,7 +17,7 @@ export class UsageView {
     this.table = null;
     this.error = null;
     this.timer = 0;
-    this.loading = false;
+    this.loading = null;
   }
 
   show() {
@@ -44,16 +44,23 @@ export class UsageView {
   }
 
   async load() {
-    if (this.loading) return;
-    this.loading = true;
+    if (this.loading?.range === this.range) return;
+    const request = { range: this.range };
+    this.loading = request;
+    if (this.table?.range !== this.range) this.table = null;
+    this.error = null;
+    this.render();
     try {
-      this.table = await this.ctx.api.usage(this.range);
+      const table = await this.ctx.api.usage(request.range);
+      if (this.loading !== request) return;
+      this.table = table;
       this.error = null;
     } catch (err) {
+      if (this.loading !== request) return;
       this.error = err.message;
       if (err.status === 401) this.ctx.expired();
     } finally {
-      this.loading = false;
+      if (this.loading === request) this.loading = null;
     }
     this.render();
   }

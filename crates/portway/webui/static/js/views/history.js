@@ -17,6 +17,7 @@ export class HistoryView {
     this.model = "";
     this.report = null;
     this.error = null;
+    this.request = 0;
   }
 
   show() {
@@ -27,11 +28,15 @@ export class HistoryView {
   hide() {}
 
   async load() {
+    const request = ++this.request;
     this.error = null;
     this.renderControls("reading…");
     try {
-      this.report = await this.ctx.api.report(this.since, this.model, true);
+      const report = await this.ctx.api.report(this.since, this.model, true);
+      if (request !== this.request) return;
+      this.report = report;
     } catch (err) {
+      if (request !== this.request) return;
       this.report = null;
       this.error = err.message;
       if (err.status === 401) this.ctx.expired();

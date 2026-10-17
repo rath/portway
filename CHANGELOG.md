@@ -25,6 +25,8 @@ version may contain breaking changes.
 - Attached dashboards group requests by upstream for filtering and live counts.
   Database tailing detects row IDs reused after retention and does not replay
   older history when the initial one-hour window is empty.
+- Web history and usage views retain the latest selection when asynchronous
+  replies arrive out of order, and changing usage ranges starts a fresh query.
 - Cancelling an upstream request also closes its connection driver, including
   requests still waiting for response headers.
 - Receiver origin compression now retries HTTP 400 refusals once with the
