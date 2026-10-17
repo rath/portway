@@ -63,10 +63,20 @@ pub struct Scanner {
     /// The last byte of the previous chunk: the escaped-key check for a key
     /// that starts a chunk.
     prev: Option<u8>,
-    /// The last complete usage object seen. A stream may carry more than one —
-    /// an engine that reports the running total per chunk — and the last one is
-    /// the answer's.
+    /// The latest complete counts, including partial cumulative updates.
     last: Option<Usage>,
+    /// Anthropic streams report input and output counts in separate events.
+    input_counts: InputCounts,
+}
+
+#[derive(Default)]
+struct InputCounts {
+    input: Option<u64>,
+    cache_read: Option<u64>,
+    cache_creation: Option<u64>,
+    cached: Option<u64>,
+    output: Option<u64>,
+    reasoning: Option<u64>,
 }
 
 /// Where the scan is. Every state survives a chunk boundary, so a key or an
@@ -170,7 +180,7 @@ impl Scanner {
         }
     }
 
-    /// The counts of the last complete usage object, if one arrived.
+    /// The latest counts, once both input and output have been reported.
     pub fn usage(&self) -> Option<Usage> {
         self.last
     }
@@ -203,7 +213,7 @@ impl Scanner {
             State::Object(candidate) => match candidate.take(byte) {
                 Step::More => {}
                 Step::Closed => {
-                    if let Some(usage) = read(&candidate.kept) {
+                    if let Some(usage) = read(&candidate.kept, &mut self.input_counts) {
                         self.last = Some(usage);
                     }
                     self.state = State::Search(0);
@@ -216,26 +226,52 @@ impl Scanner {
 
 /// Read the counts out of one usage object. Anything else — another field's
 /// object, an error body, content that looks like this one — is `None`.
-fn read(object: &[u8]) -> Option<Usage> {
+fn read(object: &[u8], input: &mut InputCounts) -> Option<Usage> {
     let Value::Object(map) = serde_json::from_slice::<Value>(object).ok()? else {
         return None;
     };
     let count = |name: &str| map.get(name).and_then(Value::as_u64);
-    // Both counts are required: a body with one of them is not a usage object
-    // this process can account for, and half a turn is worse than none.
-    let prompt = match count("prompt_tokens") {
-        Some(prompt) => prompt,
-        // Anthropic's `input_tokens` is only what follows the last cache
-        // breakpoint: the part the cache served and the part this turn wrote
-        // into it are reported beside it, not inside it. The Responses API's
-        // `input_tokens` already includes its cache and carries neither field.
-        None => {
-            count("input_tokens")?
-                + count("cache_read_input_tokens").unwrap_or(0)
-                + count("cache_creation_input_tokens").unwrap_or(0)
+    if !map.contains_key("prompt_tokens") && !map.contains_key("completion_tokens") {
+        if ![
+            "input_tokens",
+            "output_tokens",
+            "cache_read_input_tokens",
+            "cache_creation_input_tokens",
+        ]
+        .iter()
+        .any(|key| map.contains_key(*key))
+        {
+            return None;
         }
-    };
-    let completion = count("completion_tokens").or_else(|| count("output_tokens"))?;
+        // These are cumulative totals, not increments. Missing fields keep
+        // their previous value; explicit zeroes replace it.
+        input.input = count("input_tokens").or(input.input);
+        input.output = count("output_tokens").or(input.output);
+        input.cache_read = count("cache_read_input_tokens").or(input.cache_read);
+        input.cache_creation = count("cache_creation_input_tokens").or(input.cache_creation);
+        input.cached = nested(&map, "input_tokens_details", "cached_tokens")
+            .or_else(|| count("cached_tokens"))
+            .or(input.cached);
+        input.reasoning = nested(&map, "output_tokens_details", "reasoning_tokens")
+            .or_else(|| count("reasoning_tokens"))
+            .or(input.reasoning);
+        return Some(Usage {
+            // Anthropic reports cache reads and writes beside input_tokens;
+            // Responses includes its cache in input_tokens already.
+            prompt: input
+                .input?
+                .checked_add(input.cache_read.unwrap_or(0))?
+                .checked_add(input.cache_creation.unwrap_or(0))?,
+            cached: input.cached.or(input.cache_read),
+            completion: input.output?,
+            reasoning: input.reasoning,
+        });
+    }
+    // Chat Completions supplies complete objects. Do not merge its fields
+    // with an input/output schema from another candidate.
+    *input = InputCounts::default();
+    let prompt = count("prompt_tokens")?;
+    let completion = count("completion_tokens")?;
     Some(Usage {
         prompt,
         cached: nested(&map, "prompt_tokens_details", "cached_tokens")
@@ -391,13 +427,43 @@ data: {"type":"message_start","message":{"usage":{"input_tokens":12,"cache_creat
 
 "#[..],
             &br#"event: message_delta
-data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":12,"cache_creation_input_tokens":800,"cache_read_input_tokens":17000,"output_tokens":431}}
+data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":431}}
 
 "#[..],
         ];
         assert_eq!(
             scan_all(&stream).map(|usage| (usage.prompt, usage.cached, usage.completion)),
             Some((17_812, Some(17_000), 431))
+        );
+        let joined = stream.concat();
+        for size in [1, 7, 31, joined.len()] {
+            assert_eq!(
+                scan_all(&joined.chunks(size).collect::<Vec<_>>()),
+                scan_all(&stream)
+            );
+        }
+    }
+
+    #[test]
+    fn partial_counts_preserve_input_and_replace_cumulative_output() {
+        let mut scanner = Scanner::default();
+        scanner.push(br#"{"usage":{"output_tokens":2}}"#);
+        assert_eq!(scanner.usage(), None);
+        scanner.push(br#"{"usage":{"input_tokens":10,"cache_read_input_tokens":20}}"#);
+        assert_eq!(scanner.usage().unwrap().prompt, 30);
+        scanner.push(br#"{"usage":{"output_tokens":40}}"#);
+        assert_eq!(scanner.usage().unwrap().completion, 40);
+        scanner.push(
+            br#"{"usage":{"input_tokens":0,"cache_creation_input_tokens":5,"output_tokens":0}}"#,
+        );
+        assert_eq!(
+            scanner.usage(),
+            Some(Usage {
+                prompt: 25,
+                cached: Some(20),
+                completion: 0,
+                reasoning: None
+            })
         );
     }
 
