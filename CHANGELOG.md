@@ -9,6 +9,22 @@ version may contain breaking changes.
 
 ### Fixed
 
+- Response decoding preserves concatenated gzip members and rejects incomplete
+  gzip, deflate, and zstd streams before marking requests complete or reusing
+  upstream connections, including trailing reads after a client disconnect.
+- Requests with `Cache-Control: no-transform` preserve response bytes and
+  validators instead of decompressing and recompressing them.
+- Dictionary partitions include `X-API-Key` alongside Authorization and Cookie,
+  keeping API-key callers' sender bases and receiver dictionaries separate.
+- Anthropic output-only usage events update the cumulative output count while
+  preserving input and cache counts from the start of the stream.
+- Seven-day and thirty-day spending windows follow local calendar dates across
+  daylight-saving changes.
+- Upstream failures before response headers produce persistent request records,
+  so HTTP 502 and 504 failures appear in history and request aggregates.
+- Attached dashboards group requests by upstream for filtering and live counts.
+  Database tailing detects row IDs reused after retention and does not replay
+  older history when the initial one-hour window is empty.
 - Cancelling an upstream request also closes its connection driver, including
   requests still waiting for response headers.
 - Receiver origin compression now retries HTTP 400 refusals once with the
