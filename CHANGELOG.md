@@ -7,6 +7,8 @@ version may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-10-17
+
 ### Fixed
 
 - Response decoding preserves concatenated gzip members and rejects incomplete
@@ -373,7 +375,8 @@ The first public release.
   FAQ; the request compression protocol; a security policy; and contribution
   guidelines.
 
-[Unreleased]: https://github.com/rath/portway/compare/v0.2.5...HEAD
+[Unreleased]: https://github.com/rath/portway/compare/v0.2.6...HEAD
+[0.2.6]: https://github.com/rath/portway/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/rath/portway/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/rath/portway/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/rath/portway/compare/v0.2.2...v0.2.3
