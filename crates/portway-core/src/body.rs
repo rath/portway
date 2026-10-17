@@ -214,7 +214,7 @@ const SCRATCH: usize = 32 * 1024;
 
 enum Kind {
     Identity,
-    Flate(flate2::Decompress),
+    Flate(flate2::Decompress, bool),
     Zstd(Box<zstd::stream::raw::Decoder<'static>>),
 }
 
@@ -223,6 +223,7 @@ enum Kind {
 pub struct Decoder {
     kind: Kind,
     scratch: Vec<u8>,
+    ended: bool,
 }
 
 impl Decoder {
@@ -231,9 +232,9 @@ impl Decoder {
     pub fn for_encoding(encoding: &str) -> Option<Self> {
         let kind = match encoding.trim().to_ascii_lowercase().as_str() {
             "" | "identity" => Kind::Identity,
-            "gzip" | "x-gzip" => Kind::Flate(flate2::Decompress::new_gzip(15)),
+            "gzip" | "x-gzip" => Kind::Flate(flate2::Decompress::new_gzip(15), true),
             // Real-world `deflate` is overwhelmingly zlib-wrapped.
-            "deflate" => Kind::Flate(flate2::Decompress::new(true)),
+            "deflate" => Kind::Flate(flate2::Decompress::new(true), false),
             "zstd" => Kind::Zstd(Box::new(zstd::stream::raw::Decoder::new().ok()?)),
             _ => return None,
         };
@@ -241,13 +242,18 @@ impl Decoder {
             Kind::Identity => Vec::new(),
             _ => vec![0u8; SCRATCH],
         };
-        Some(Decoder { kind, scratch })
+        Some(Decoder {
+            kind,
+            scratch,
+            ended: false,
+        })
     }
 
     pub fn identity() -> Self {
         Decoder {
             kind: Kind::Identity,
             scratch: Vec::new(),
+            ended: false,
         }
     }
 
@@ -256,18 +262,53 @@ impl Decoder {
     }
 
     pub fn push(&mut self, chunk: Bytes) -> io::Result<Bytes> {
+        if chunk.is_empty() {
+            return Ok(chunk);
+        }
         match &mut self.kind {
             Kind::Identity => Ok(chunk),
-            Kind::Flate(state) => inflate(state, &chunk, &mut self.scratch),
-            Kind::Zstd(state) => unzstd(state, &chunk, &mut self.scratch),
+            Kind::Flate(state, gzip) => {
+                inflate(state, *gzip, &mut self.ended, &chunk, &mut self.scratch)
+            }
+            Kind::Zstd(state) => unzstd(state, &mut self.ended, &chunk, &mut self.scratch),
+        }
+    }
+
+    /// HTTP EOF is only complete after the codec has consumed its trailer.
+    pub fn finish(&self) -> io::Result<()> {
+        if self.is_identity() || self.ended {
+            Ok(())
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "compressed response ended before its trailer",
+            ))
         }
     }
 }
 
-fn inflate(state: &mut flate2::Decompress, input: &[u8], scratch: &mut [u8]) -> io::Result<Bytes> {
+fn inflate(
+    state: &mut flate2::Decompress,
+    gzip: bool,
+    ended: &mut bool,
+    input: &[u8],
+    scratch: &mut [u8],
+) -> io::Result<Bytes> {
     let mut out = BytesMut::new();
     let mut rest = input;
     loop {
+        if *ended {
+            if !gzip {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "data after deflate stream",
+                ));
+            }
+            // A gzip representation can contain several members, even when
+            // the next member starts in a different HTTP frame.
+            *state = flate2::Decompress::new_gzip(15);
+            *ended = false;
+        }
         let read_before = state.total_in();
         let wrote_before = state.total_out();
         let status = state
@@ -277,7 +318,20 @@ fn inflate(state: &mut flate2::Decompress, input: &[u8], scratch: &mut [u8]) -> 
         let wrote = (state.total_out() - wrote_before) as usize;
         out.extend_from_slice(&scratch[..wrote]);
         rest = &rest[read..];
-        if status == flate2::Status::StreamEnd || (read == 0 && wrote == 0) {
+        if status == flate2::Status::StreamEnd {
+            *ended = true;
+            if !rest.is_empty() {
+                continue;
+            }
+            break;
+        }
+        if read == 0 && wrote == 0 {
+            if !rest.is_empty() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "compressed response made no progress",
+                ));
+            }
             break;
         }
         // Output window filled: go around for the rest of this input.
@@ -290,6 +344,7 @@ fn inflate(state: &mut flate2::Decompress, input: &[u8], scratch: &mut [u8]) -> 
 
 fn unzstd(
     state: &mut zstd::stream::raw::Decoder<'static>,
+    ended: &mut bool,
     input: &[u8],
     scratch: &mut [u8],
 ) -> io::Result<Bytes> {
@@ -301,8 +356,15 @@ fn unzstd(
         out.extend_from_slice(&scratch[..status.bytes_written]);
         rest = &rest[status.bytes_read..];
         if status.bytes_read == 0 && status.bytes_written == 0 {
+            if !rest.is_empty() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "compressed response made no progress",
+                ));
+            }
             break;
         }
+        *ended = status.remaining == 0;
         if rest.is_empty() && status.bytes_written < scratch.len() {
             break;
         }
@@ -436,6 +498,62 @@ mod tests {
         b"data: [DONE]\n\n",
     ];
 
+    fn compressed(coding: &str, data: &[u8]) -> Vec<u8> {
+        if coding == "deflate" {
+            let mut encoder =
+                flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+            encoder.write_all(data).unwrap();
+            return encoder.finish().unwrap();
+        }
+        let mut encoder = Encoder::for_accept(Some(coding)).unwrap();
+        let mut wire = encoder.push(data).unwrap().to_vec();
+        wire.extend_from_slice(&encoder.finish().unwrap());
+        wire
+    }
+
+    #[test]
+    fn concatenated_members_survive_every_chunk_boundary() {
+        for coding in ["gzip", "zstd"] {
+            let mut wire = compressed(coding, b"first ");
+            wire.extend(compressed(coding, b"second"));
+            for split in 0..=wire.len() {
+                let mut decoder = Decoder::for_encoding(coding).unwrap();
+                let mut out = decoder
+                    .push(Bytes::copy_from_slice(&wire[..split]))
+                    .unwrap()
+                    .to_vec();
+                out.extend_from_slice(
+                    &decoder
+                        .push(Bytes::copy_from_slice(&wire[split..]))
+                        .unwrap(),
+                );
+                decoder.finish().unwrap();
+                assert_eq!(out, b"first second", "{coding}, split {split}");
+            }
+        }
+    }
+
+    #[test]
+    fn compressed_eof_requires_a_complete_frame_and_trailer() {
+        for coding in ["gzip", "deflate", "zstd"] {
+            let wire = compressed(coding, &b"payload".repeat(SCRATCH));
+            for end in 0..wire.len() {
+                let mut decoder = Decoder::for_encoding(coding).unwrap();
+                assert!(
+                    decoder.push(Bytes::copy_from_slice(&wire[..end])).is_err()
+                        || decoder.finish().is_err(),
+                    "{coding} accepted truncation at {end}"
+                );
+            }
+            let mut decoder = Decoder::for_encoding(coding).unwrap();
+            assert_eq!(
+                decoder.push(Bytes::from(wire)).unwrap(),
+                b"payload".repeat(SCRATCH)
+            );
+            decoder.finish().unwrap();
+        }
+    }
+
     #[test]
     fn an_encoded_stream_round_trips() {
         for coding in ["zstd", "gzip"] {
@@ -448,6 +566,7 @@ mod tests {
             wire.extend_from_slice(&encoder.finish().expect("finish"));
             let mut decoder = Decoder::for_encoding(coding).expect("known coding");
             let decoded = decoder.push(Bytes::from(wire)).expect("decode");
+            decoder.finish().expect("complete frame");
             assert_eq!(decoded.to_vec(), FRAMES.concat(), "{coding} lost a frame");
         }
     }

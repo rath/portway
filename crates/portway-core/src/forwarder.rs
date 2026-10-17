@@ -1181,8 +1181,10 @@ impl Forwarder {
         let no_body = method == Method::HEAD
             || parts.status == StatusCode::NO_CONTENT
             || parts.status == StatusCode::NOT_MODIFIED;
-        let preserve =
-            no_body || parts.status == StatusCode::PARTIAL_CONTENT || no_transform(&parts.headers);
+        let preserve = no_body
+            || parts.status == StatusCode::PARTIAL_CONTENT
+            || no_transform(&client_headers)
+            || no_transform(&parts.headers);
         let decoder = if preserve {
             None
         } else {

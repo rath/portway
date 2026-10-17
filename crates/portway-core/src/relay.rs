@@ -438,6 +438,12 @@ async fn drain(
                 return false;
             }
         }
+        if decoder.finish().is_err() {
+            if let Some(log) = log.as_mut() {
+                log.end_reason = Some(EndReason::DecodeError);
+            }
+            return false;
+        }
         true
     };
     let ended = tokio::time::timeout(GRACE, rest).await.unwrap_or(false);
@@ -526,6 +532,10 @@ impl Body for RelayBody {
                     return Poll::Ready(Some(Err(std::io::Error::other(err))));
                 }
                 Poll::Ready(None) => {
+                    if let Err(err) = self.decoder.finish() {
+                        self.fail(EndReason::DecodeError);
+                        return Poll::Ready(Some(Err(err)));
+                    }
                     // The engine reports the counts in its last chunk, so the
                     // body ending is what makes them this answer's.
                     let usage = self.usage.usage();

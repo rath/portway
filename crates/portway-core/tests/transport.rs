@@ -47,7 +47,8 @@ async fn origin() -> Origin {
                 } else {
                     200
                 };
-                let broken = parts.uri.path().ends_with("/broken-gzip");
+                let broken = parts.uri.path().ends_with("/broken-gzip")
+                    || parts.uri.path().ends_with("/gzip");
                 sink.lock().unwrap().push(Seen {
                     method: parts.method,
                     uri: parts.uri.to_string(),
@@ -454,6 +455,87 @@ async fn a_decoder_failure_does_not_return_the_connection_to_the_pool() {
             .await
             .1,
         b"ok"[..]
+    );
+}
+
+#[tokio::test]
+async fn a_truncated_codec_is_incomplete_even_after_client_disconnect() {
+    use std::io::Write;
+    let origin = origin().await;
+    for drain in [false, true] {
+        let (telemetry, events) = Telemetry::channel(16);
+        let router = Router::single(
+            &ForwarderConfig {
+                telemetry,
+                ..config()
+            },
+            &origin.url,
+            None,
+        )
+        .unwrap();
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(b"complete plaintext").unwrap();
+        let mut wire = encoder.finish().unwrap();
+        wire.truncate(wire.len() - 8);
+        let reply = router
+            .clone()
+            .handle(
+                Request::post("/gzip")
+                    .body(Full::new(Bytes::from(wire)))
+                    .unwrap(),
+            )
+            .await;
+        let mut body = reply.into_body();
+        if drain {
+            assert!(body.frame().await.unwrap().is_ok());
+            drop(body);
+        } else {
+            assert!(body.collect().await.is_err());
+        }
+        let record = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                if let Some(record) = events.try_iter().find_map(|event| match event {
+                    Event::Request(record) => Some(record),
+                    _ => None,
+                }) {
+                    break record;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(!record.complete);
+        assert!(record.usage.is_none());
+        assert_eq!(router.routes()[0].1.view().idle_conns, 0);
+    }
+}
+
+#[tokio::test]
+async fn request_no_transform_preserves_the_response_bytes_and_validator() {
+    use std::io::Write;
+    let origin = origin().await;
+    let router = Router::single(&config(), &origin.url, None).unwrap();
+    let mut encoder = flate2::GzBuilder::new()
+        .mtime(123)
+        .write(Vec::new(), flate2::Compression::default());
+    encoder.write_all(b"payload").unwrap();
+    let wire = Bytes::from(encoder.finish().unwrap());
+    let response = router
+        .clone()
+        .handle(
+            Request::post("/gzip")
+                .header("cache-control", "no-transform")
+                .header("accept-encoding", "gzip")
+                .body(Full::new(wire.clone()))
+                .unwrap(),
+        )
+        .await;
+    assert_eq!(response.headers()["content-encoding"], "gzip");
+    assert_eq!(response.headers()["etag"], "\"example\"");
+    assert_eq!(
+        response.into_body().collect().await.unwrap().to_bytes(),
+        wire
     );
 }
 #[tokio::test]
