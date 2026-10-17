@@ -169,7 +169,7 @@ pub struct Board {
     /// below are then the only ones there are, and the log lines the window
     /// replayed are the only place its retries and aborts can be counted.
     pub recorded: bool,
-    models_tally: BTreeMap<String, StatsView>,
+    upstreams_tally: BTreeMap<String, StatsView>,
     retried_identity: u64,
     aborted: u64,
     /// How far back the rows on screen reach, when they were read rather than
@@ -206,7 +206,7 @@ impl Board {
             traffic: Traffic::new(),
             started: Instant::now(),
             recorded: false,
-            models_tally: BTreeMap::new(),
+            upstreams_tally: BTreeMap::new(),
             retried_identity: 0,
             aborted: 0,
             coverage: None,
@@ -238,7 +238,7 @@ impl Board {
             Event::Request(record) => {
                 self.tally(record);
                 if self.recorded {
-                    self.tally_model(record);
+                    self.tally_upstream(record);
                 }
             }
         }
@@ -296,7 +296,7 @@ impl Board {
     /// itself is the only source for the per-second bytes.
     pub fn tick_recorded(&mut self, window: &watch::Window) {
         self.models = self
-            .models_tally
+            .upstreams_tally
             .iter()
             .map(|(name, view)| ModelRow {
                 name: name.clone(),
@@ -314,11 +314,14 @@ impl Board {
         self.coverage = Some(window.coverage);
     }
 
-    /// One replayed request, added to the model it went to. The fields the
+    /// One replayed request, added to the upstream it went to. The fields the
     /// running process keeps in memory — in flight, idle connections, whether
     /// a dictionary is in use — stay at zero: no row can carry them.
-    fn tally_model(&mut self, record: &RequestRecord) {
-        let view = self.models_tally.entry(record.model.clone()).or_default();
+    fn tally_upstream(&mut self, record: &RequestRecord) {
+        let view = self
+            .upstreams_tally
+            .entry(record.upstream.clone())
+            .or_default();
         view.requests += 1;
         if record.coding != Coding::None {
             view.encoded_requests += 1;

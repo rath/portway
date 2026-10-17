@@ -2141,6 +2141,28 @@ mod tests {
         }
     }
 
+    #[test]
+    fn attached_upstreams_group_models_and_keep_filter_matches() {
+        let mut state = State::new();
+        state.recorded = true;
+        state.viewport = 10;
+        for model in ["claude-one", "claude-two"] {
+            let mut request = record(model, 200);
+            request.upstream = "anthropic".into();
+            state.push(Event::Request(Arc::new(request)));
+        }
+        state.tick_recorded(&watch::Window::default());
+        assert_eq!(state.models.len(), 1);
+        assert_eq!(state.models[0].name, "anthropic");
+        assert_eq!(state.models[0].view.requests, 2);
+        state.cycle_filter();
+        state.cycle_filter();
+        assert_eq!(state.filter.label(), "anthropic");
+        assert_eq!(state.len(), 2);
+        let text = screen(160, 30, &state);
+        assert!(text.contains("claude-one") && text.contains("claude-two"));
+    }
+
     fn screen(width: u16, height: u16, state: &State) -> String {
         screen_of(width, height, state, &header())
     }

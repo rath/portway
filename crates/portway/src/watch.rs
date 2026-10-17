@@ -158,6 +158,14 @@ enum Key {
     After(i64),
 }
 
+/// Row ids can be reused after retention empties a table. Its timestamp
+/// distinguishes a cursor's original row from a replacement with the same id.
+#[derive(Clone, Copy, Default)]
+struct Cursor {
+    id: i64,
+    ts: f64,
+}
+
 /// One row, read back as the event it was recorded from. The record is boxed
 /// because a window is read whole: the rows pile up while the backfill is
 /// replayed, and a log row has no business paying for a request's shape.
@@ -176,6 +184,13 @@ enum Stored {
 }
 
 impl Stored {
+    fn cursor(&self) -> Cursor {
+        Cursor {
+            id: self.id(),
+            ts: self.ts(),
+        }
+    }
+
     fn id(&self) -> i64 {
         match self {
             Stored::Request { id, .. } | Stored::Log { id, .. } => *id,
@@ -232,11 +247,26 @@ impl Reader {
     }
 
     /// What arrived since the last poll, by row id.
-    fn tail(&self, request_id: i64, log_id: i64) -> Result<(Vec<Stored>, Vec<Stored>), String> {
-        Ok((
-            self.requests(Key::After(request_id))?,
-            self.logs(Key::After(log_id))?,
-        ))
+    fn tail(&self, requests: Cursor, logs: Cursor) -> Result<(Vec<Stored>, Vec<Stored>), String> {
+        let snapshot = self.connection.unchecked_transaction().map_err(db_error)?;
+        let rows = (
+            self.requests(Key::After(self.resume("requests", requests)?))?,
+            self.logs(Key::After(self.resume("logs", logs)?))?,
+        );
+        snapshot.commit().map_err(db_error)?;
+        Ok(rows)
+    }
+
+    fn resume(&self, table: &str, cursor: Cursor) -> Result<i64, String> {
+        let exists: bool = self
+            .connection
+            .query_row(
+                &format!("SELECT EXISTS(SELECT 1 FROM {table} WHERE id = ?1 AND ts_unix = ?2)"),
+                rusqlite::params![cursor.id, cursor.ts],
+                |row| row.get(0),
+            )
+            .map_err(db_error)?;
+        Ok(if exists { cursor.id } else { 0 })
     }
 
     fn requests(&self, key: Key) -> Result<Vec<Stored>, String> {
@@ -365,19 +395,24 @@ impl Reader {
             .unwrap_or_default())
     }
 
-    /// The highest row id in each table, or 0 for a table with nothing in it.
-    ///
-    /// The tail is keyed on those ids, and SQLite hands out the ids a table
-    /// freed once it is empty: a retention pass that prunes the last row would
-    /// otherwise leave a viewer waiting for ids that are never coming again.
-    /// Asked every poll so the two ways of seeing nothing — "nothing new" and
-    /// "what we were reading is gone" — can be told apart.
-    fn latest(&self) -> Result<(i64, i64), String> {
-        let high = |table: &str| -> Result<i64, String> {
+    /// The cursor includes rows older than the backfill window, so an idle
+    /// database does not replay its entire retention history on the first poll.
+    fn latest(&self) -> Result<(Cursor, Cursor), String> {
+        use rusqlite::OptionalExtension;
+        let high = |table: &str| -> Result<Cursor, String> {
             self.connection
-                .query_row(&format!("SELECT MAX(id) FROM {table}"), [], |row| {
-                    Ok(row.get::<_, Option<i64>>(0)?.unwrap_or(0))
-                })
+                .query_row(
+                    &format!("SELECT id, ts_unix FROM {table} ORDER BY id DESC LIMIT 1"),
+                    [],
+                    |row| {
+                        Ok(Cursor {
+                            id: row.get(0)?,
+                            ts: row.get(1)?,
+                        })
+                    },
+                )
+                .optional()
+                .map(Option::unwrap_or_default)
                 .map_err(db_error)
         };
         Ok((high("requests")?, high("logs")?))
@@ -435,17 +470,20 @@ impl Watch {
 pub fn spawn(db: &Path, events: Sender<Event>) -> Result<Watch, String> {
     let reader = Reader::open(db)?;
     let start = Instant::now();
-    let (mut requests, mut logs) = match &reader {
+    let (mut requests, mut logs, request_id, log_id) = match &reader {
         Some(reader) => {
+            let snapshot = reader
+                .connection
+                .unchecked_transaction()
+                .map_err(db_error)?;
             let cutoff = logfmt::epoch() - WINDOW.as_secs_f64();
-            reader.since(cutoff)?
+            let (requests, logs) = reader.since(cutoff)?;
+            let (request_id, log_id) = reader.latest()?;
+            snapshot.commit().map_err(db_error)?;
+            (requests, logs, request_id, log_id)
         }
-        None => (Vec::new(), Vec::new()),
+        None => (Vec::new(), Vec::new(), Cursor::default(), Cursor::default()),
     };
-    // Both reads are ordered by the id the recorder assigned, so the last row
-    // of each is where the tail picks up from.
-    let request_id = requests.last().map(Stored::id).unwrap_or(0);
-    let log_id = logs.last().map(Stored::id).unwrap_or(0);
     // The two tables are recorded apart but happened together: one replay.
     requests.append(&mut logs);
     requests.sort_by(|left, right| left.ts().total_cmp(&right.ts()));
@@ -495,8 +533,8 @@ fn poll(
     window: &Mutex<Window>,
     stop: &AtomicBool,
     start: Instant,
-    mut request_id: i64,
-    mut log_id: i64,
+    mut request_id: Cursor,
+    mut log_id: Cursor,
 ) {
     let Some(reader) = reader else {
         // Nothing recorded, and a reader may not create what it reads. Said
@@ -516,19 +554,6 @@ fn poll(
         std::thread::sleep(POLL.saturating_sub(last.elapsed()));
         last = Instant::now();
 
-        // Never forward, only back: the ids can be smaller than the ones we
-        // remember only when the rows they named are gone.
-        match reader.latest() {
-            Ok((requests, logs)) => {
-                request_id = request_id.min(requests);
-                log_id = log_id.min(logs);
-            }
-            Err(message) => {
-                logfmt::error(&format!("watching: {message}"));
-                continue;
-            }
-        }
-
         let (mut fresh, mut fresh_logs) = match reader.tail(request_id, log_id) {
             Ok(rows) => rows,
             Err(message) => {
@@ -540,10 +565,10 @@ fn poll(
             }
         };
         if let Some(row) = fresh.last() {
-            request_id = row.id();
+            request_id = row.cursor();
         }
         if let Some(row) = fresh_logs.last() {
-            log_id = row.id();
+            log_id = row.cursor();
         }
         fresh.append(&mut fresh_logs);
         if !fresh.is_empty() {
@@ -721,8 +746,8 @@ mod tests {
 
         let reader = Reader::open(&dir.join(store::DB_FILE)).unwrap().unwrap();
         let (requests, logs) = reader.since(0.0).unwrap();
-        let request_id = requests[0].id();
-        let log_id = logs[0].id();
+        let request_id = requests[0].cursor();
+        let log_id = logs[0].cursor();
         let (fresh, fresh_logs) = reader.tail(request_id, log_id).unwrap();
         assert!(fresh.is_empty());
         assert!(fresh_logs.is_empty());
@@ -864,16 +889,85 @@ mod tests {
 
         let reader = Reader::open(&dir.join(store::DB_FILE)).unwrap().unwrap();
         let (requests, logs) = reader.latest().unwrap();
-        assert_eq!(requests, 1);
-        assert_eq!(logs, 1);
+        assert_eq!(requests.id, 1);
+        assert_eq!(logs.id, 1);
 
         // What `--retention-days` does to a file nothing is writing to.
         reader
             .connection
             .execute_batch("DELETE FROM requests; DELETE FROM logs;")
             .unwrap();
-        assert_eq!(reader.latest().unwrap(), (0, 0));
-        let (fresh, fresh_logs) = reader.tail(0, 0).unwrap();
+        let latest = reader.latest().unwrap();
+        assert_eq!((latest.0.id, latest.1.id), (0, 0));
+        let (fresh, fresh_logs) = reader.tail(requests, logs).unwrap();
         assert!(fresh.is_empty() && fresh_logs.is_empty());
+    }
+
+    #[test]
+    fn pruning_and_refilling_between_polls_does_not_skip_reused_ids() {
+        for count in [1, 3, 5] {
+            let dir = dir(&format!("refilled-{count}"));
+            let recorder = store::spawn(&dir, 0).unwrap();
+            for _ in 0..3 {
+                recorder.sender().send(record(request("12:00:00"))).unwrap();
+                recorder
+                    .sender()
+                    .send(Event::Log {
+                        stamp: "12:00:00".into(),
+                        level: Level::Info,
+                        message: "before".into(),
+                    })
+                    .unwrap();
+            }
+            recorder.shutdown();
+            let reader = Reader::open(&dir.join(store::DB_FILE)).unwrap().unwrap();
+            let cursors = reader.latest().unwrap();
+            reader
+                .connection
+                .execute_batch(
+                    "CREATE TEMP TABLE saved AS SELECT * FROM requests LIMIT 1;
+                UPDATE saved SET ts_unix = ts_unix + 1;
+                DELETE FROM requests; DELETE FROM logs;",
+                )
+                .unwrap();
+            for id in 1..=count {
+                reader
+                    .connection
+                    .execute("UPDATE saved SET id = ?1", [id])
+                    .unwrap();
+                reader.connection.execute_batch("INSERT INTO requests SELECT * FROM saved;
+                    INSERT INTO logs (ts_unix, level, message) SELECT ts_unix, 0, 'after' FROM saved;").unwrap();
+            }
+            let (requests, logs) = reader.tail(cursors.0, cursors.1).unwrap();
+            assert_eq!(requests.len(), count as usize);
+            assert_eq!(logs.len(), count as usize);
+            let (requests, logs) = reader
+                .tail(
+                    requests.last().unwrap().cursor(),
+                    logs.last().unwrap().cursor(),
+                )
+                .unwrap();
+            assert!(requests.is_empty() && logs.is_empty());
+        }
+    }
+
+    #[test]
+    fn an_idle_database_does_not_replay_rows_outside_the_backfill_window() {
+        let dir = dir("old-only");
+        let recorder = store::spawn(&dir, 0).unwrap();
+        recorder.sender().send(record(request("12:00:00"))).unwrap();
+        recorder.shutdown();
+        let db = dir.join(store::DB_FILE);
+        let connection = Connection::open(&db).unwrap();
+        connection
+            .execute(
+                "UPDATE requests SET ts_unix = ?1",
+                [logfmt::epoch() - 7200.0],
+            )
+            .unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let watch = spawn(&db, tx).unwrap();
+        assert!(rx.recv_timeout(POLL + Duration::from_millis(500)).is_err());
+        watch.shutdown();
     }
 }
