@@ -1140,6 +1140,39 @@ impl Forwarder {
                     "{method} {path} -> {} | upstream={} reason={} phase=response_headers elapsed={:.3}s{limit} | {err}",
                     status.as_u16(), self.name, reason.name(), t0.elapsed().as_secs_f64(),
                 ));
+                let clock = in_flight.flight().clock().unwrap_or_default();
+                let uploaded = meter.as_ref().map_or_else(
+                    || {
+                        if clock.body_handed() {
+                            wire.len() as u64
+                        } else {
+                            0
+                        }
+                    },
+                    |meter| meter.bytes(),
+                );
+                self.account_upload(body.len(), uploaded, coding);
+                // Failed attempts need the same persistent request event as
+                // relayed responses. The diagnostic above keeps its precise
+                // reason; this incomplete record feeds history and aggregates.
+                drop(RequestLog::new(
+                    self.name.clone(),
+                    model,
+                    named.tier,
+                    method,
+                    path,
+                    status.as_u16(),
+                    clock,
+                    body.len() as u64,
+                    uploaded,
+                    coding,
+                    t0.elapsed().as_secs_f64(),
+                    "identity".into(),
+                    None,
+                    Arc::clone(&self.stats),
+                    in_flight,
+                    Arc::clone(&self.telemetry),
+                ));
                 return json_response(
                     status,
                     serde_json::json!({
@@ -1150,22 +1183,13 @@ impl Forwarder {
         };
         abort.disarm();
 
-        if coding != Coding::None {
-            self.stats.encoded_requests.fetch_add(1, Ordering::Relaxed);
-        }
-        if coding == Coding::Dcz {
-            self.stats.dict_hits.fetch_add(1, Ordering::Relaxed);
-        }
         if let Some(hash) = hash {
             self.note_stored(response.headers(), hash, &body, scope);
         }
         let uploaded = meter
             .as_ref()
             .map_or(wire.len() as u64, |meter| meter.bytes());
-        self.stats
-            .body_bytes
-            .fetch_add(body.len() as u64, Ordering::Relaxed);
-        self.stats.wire_bytes.fetch_add(uploaded, Ordering::Relaxed);
+        self.account_upload(body.len(), uploaded, coding);
         let ttfb = t0.elapsed().as_secs_f64();
         in_flight
             .flight()
@@ -1303,6 +1327,19 @@ impl Forwarder {
             log,
         )))
         .expect("relay response is well formed")
+    }
+
+    fn account_upload(&self, body_len: usize, uploaded: u64, coding: Coding) {
+        if coding != Coding::None && uploaded > 0 {
+            self.stats.encoded_requests.fetch_add(1, Ordering::Relaxed);
+        }
+        if coding == Coding::Dcz && uploaded > 0 {
+            self.stats.dict_hits.fetch_add(1, Ordering::Relaxed);
+        }
+        self.stats
+            .body_bytes
+            .fetch_add(body_len as u64, Ordering::Relaxed);
+        self.stats.wire_bytes.fetch_add(uploaded, Ordering::Relaxed);
     }
 
     /// A body becomes a base only once the upstream says it holds exactly these

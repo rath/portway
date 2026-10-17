@@ -142,6 +142,29 @@ fn assert_reason(messages: &[String], reason: &str) {
     }
 }
 
+fn failed_record(events: &Events<Event>, status: u16, upstream: &str) -> Vec<String> {
+    let mut messages = Vec::new();
+    let mut records = Vec::new();
+    for event in events.try_iter() {
+        match event {
+            Event::Request(record) => records.push(record),
+            Event::Log { message, .. } => messages.push(message),
+        }
+    }
+    assert_eq!(records.len(), 1);
+    let record = &records[0];
+    assert_eq!(record.status, status);
+    assert_eq!(record.upstream, upstream);
+    assert_eq!(record.path, "/responses");
+    assert!(!record.complete);
+    assert!(record.usage.is_none());
+    assert!(record.flight.is_some());
+    assert_eq!(record.received, 0);
+    assert_eq!(record.body_len, b"private-test-body".len() as u64);
+    assert!(record.ttfb > 0.0);
+    messages
+}
+
 #[tokio::test]
 async fn stalled_headers_close_the_socket_without_replaying_the_post() {
     let (closed, mut closure) = mpsc::unbounded_channel();
@@ -185,7 +208,7 @@ async fn stalled_headers_close_the_socket_without_replaying_the_post() {
         (0, 0, 1)
     );
     assert!(config.telemetry.flights().views().is_empty());
-    let messages = logs(&events);
+    let messages = failed_record(&events, 504, "codex");
     assert_reason(&messages, "response_headers_timeout");
     assert!(messages[0].contains("limit=1s"));
     assert_eq!(
@@ -303,7 +326,10 @@ async fn a_disconnect_before_headers_is_a_502_and_is_not_retried() {
         send(&router, "/responses").await.status(),
         StatusCode::BAD_GATEWAY
     );
-    assert_reason(&logs(&events), "upstream_disconnect");
+    assert_reason(
+        &failed_record(&events, 502, "upstream"),
+        "upstream_disconnect",
+    );
     assert_eq!(up.connections.load(Ordering::SeqCst), 1);
     assert_eq!(router.routes()[0].1.view().in_flight, 0);
 }

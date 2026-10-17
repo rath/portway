@@ -74,6 +74,10 @@ impl Flight {
         self.id
     }
 
+    pub(crate) fn clock(&self) -> Option<Arc<PhaseClock>> {
+        self.clock.lock().expect("flight clock").clone()
+    }
+
     fn touch(&self) {
         self.progress
             .store(self.started.elapsed().as_nanos() as u64, Ordering::Relaxed);
@@ -108,7 +112,7 @@ impl Flight {
 
     pub fn view(&self) -> FlightView {
         let now = self.started.elapsed().as_secs_f64();
-        let clock = self.clock.lock().expect("flight clock").clone();
+        let clock = self.clock();
         let upload = clock.as_ref().and_then(|clock| clock.upload_wall());
         let status = match self.status.load(Ordering::Relaxed) {
             0 => None,
