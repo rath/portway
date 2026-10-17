@@ -111,16 +111,16 @@ the receiver's read-only capability endpoint through your gateway.
 
 A receiving Portway must sit behind authentication so unauthenticated callers
 cannot read or use an application's dictionary context. By default, sender and
-receiver partition dictionaries using the exact Authorization and Cookie header
-values. A different key or cookie creates a separate context; rotating a key may
+receiver partition dictionaries using the exact Authorization, Cookie, and
+X-API-Key header values. A different key or cookie creates a separate context; rotating a key may
 therefore require new dictionary warm-up.
 
 A gateway that removes or replaces caller credentials with one shared value can
 collapse those contexts. Preserve distinct identity headers, isolate receiver
 instances per trust context, or integrate `portway-core` and set a
-`DictionaryScope` extension after authenticating the caller. A custom `X-API-Key`
-header is forwarded, but it is **not** part of the default dictionary scope;
-use explicit scopes or separate receivers when it distinguishes tenants.
+`DictionaryScope` extension after authenticating the caller. Other custom identity
+headers are forwarded but are not part of the default dictionary scope; use
+explicit scopes or separate receivers when those headers distinguish tenants.
 
 Dictionary scope separates storage; it does not authenticate a request.
 See [receiver configuration](configuration.md#receiving) and the

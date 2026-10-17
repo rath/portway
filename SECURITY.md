@@ -40,7 +40,7 @@ storage.
   are dropped on restart, after one idle hour on the receiver by default, or
   on eviction under the memory budget.
 - Dictionaries are partitioned by a SHA-256 fingerprint of the exact
-  `Authorization` and `Cookie` values, so a caller can only compress against,
+  `Authorization`, `Cookie`, and `X-API-Key` values, so a caller can only compress against,
   or have decoded against, bodies sent with the same credentials. Only the
   fingerprint is kept as the key. An embedding application can replace the
   partition with an explicit `DictionaryScope` after authenticating the caller.

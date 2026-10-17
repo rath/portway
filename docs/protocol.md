@@ -58,8 +58,8 @@ compressed bodies explicitly opted into storage that fit both its per-entry and
 total memory budgets, and within a context it keeps only the newest bodies. Identity requests do not seed dictionaries. Retained bodies
 never go to disk. Restarting a receiver empties its store.
 
-Authorization and Cookie values determine the default local storage partition;
-only fingerprints are retained as scope keys. An application may override that
+Authorization, Cookie, and X-API-Key values determine the default local storage
+partition; only fingerprints are retained as scope keys. An application may override that
 partition through the `DictionaryScope` request extension after authentication.
 Authentication remains the gateway or embedding application's responsibility.
 The scope is not transmitted as a new HTTP header.
