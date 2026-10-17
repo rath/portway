@@ -65,15 +65,14 @@ impl Range {
     /// that day: a clock change inside the window makes it an hour longer or
     /// shorter rather than moving its start.
     pub fn window(self, now: f64) -> (f64, f64) {
-        const DAY: f64 = 86_400.0;
         let midnight = logfmt::midnight(now);
         match self {
             Range::Today => (midnight, now),
             // A second before today's midnight is yesterday, whatever length
             // the clocks gave that one.
             Range::Yesterday => (logfmt::midnight(midnight - 1.0), midnight),
-            Range::Week => (logfmt::midnight(midnight - 6.0 * DAY), now),
-            Range::Month => (logfmt::midnight(midnight - 29.0 * DAY), now),
+            Range::Week => (logfmt::midnight_days_ago(now, 6), now),
+            Range::Month => (logfmt::midnight_days_ago(now, 29), now),
         }
     }
 
@@ -656,6 +655,45 @@ mod tests {
 
         let (since, _) = Range::Month.window(now);
         assert!(since < Range::Week.window(now).0);
+    }
+
+    #[test]
+    fn calendar_windows_cross_daylight_saving_transitions() {
+        // Set TZ before the child starts; changing it inside a parallel test
+        // would race every other caller of localtime/mktime.
+        if std::env::var_os("PORTWAY_TEST_CALENDAR_CHILD").is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "spend::tests::calendar_windows_cross_daylight_saving_transitions",
+                    "--nocapture",
+                ])
+                .env("TZ", "Europe/Berlin")
+                .env("PORTWAY_TEST_CALENDAR_CHILD", "1")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stdout)
+            );
+            return;
+        }
+        for (now, week, month) in [
+            (
+                1_774_864_800.0,
+                "2026-03-24 00:00:00",
+                "2026-03-01 00:00:00",
+            ),
+            (
+                1_792_998_000.0,
+                "2026-10-20 00:00:00",
+                "2026-09-27 00:00:00",
+            ),
+        ] {
+            assert_eq!(logfmt::datetime(Range::Week.window(now).0), week);
+            assert_eq!(logfmt::datetime(Range::Month.window(now).0), month);
+        }
     }
 
     #[test]

@@ -267,6 +267,12 @@ pub fn clock(ts: f64) -> String {
 /// follows the calendar the stamps are printed in, and a day the clocks moved
 /// in still starts where a reader would say it did.
 pub fn midnight(ts: f64) -> f64 {
+    midnight_days_ago(ts, 0)
+}
+
+/// Calendar arithmetic before normalization keeps daylight-saving changes
+/// from turning a seven-day window into eight dates.
+pub(crate) fn midnight_days_ago(ts: f64, days: i32) -> f64 {
     // SAFETY: `localtime_r` fills the caller-owned `tm`, which `mktime`
     // normalizes in place; neither touches a shared static.
     unsafe {
@@ -278,6 +284,10 @@ pub fn midnight(ts: f64) -> f64 {
         tm.tm_hour = 0;
         tm.tm_min = 0;
         tm.tm_sec = 0;
+        let Some(day) = tm.tm_mday.checked_sub(days) else {
+            return ts;
+        };
+        tm.tm_mday = day;
         tm.tm_isdst = -1;
         let start = libc::mktime(&mut tm);
         if start == -1 { ts } else { start as f64 }
