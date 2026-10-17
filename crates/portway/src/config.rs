@@ -146,6 +146,13 @@ impl Config {
             config.upstream = Some(url.clone());
             config.upstreams.clear();
             config.models.clear();
+            // The route names those tables held go with them, or validation
+            // refuses a budget for a route that no longer exists. Only the
+            // single route's own budget still names something.
+            config
+                .timeouts
+                .routes
+                .retain(|name, _| name == portway_core::router::SINGLE_ROUTE);
         }
         if let Some(host) = &args.host {
             config.host = host.clone();
@@ -506,6 +513,42 @@ mod tests {
         let config = Config::load(&args).unwrap();
         assert_eq!(config.upstream.as_deref(), Some("http://single.test"));
         assert!(config.upstreams.is_empty());
+        std::fs::remove_file(path).unwrap();
+    }
+    #[test]
+    fn the_cli_upstream_drops_the_timeouts_of_the_routes_it_clears() {
+        let path =
+            std::env::temp_dir().join(format!("portway-timeouts-{}.toml", std::process::id()));
+        let load = |text: &str| {
+            std::fs::write(&path, text).unwrap();
+            Config::load(&Args::parse_from([
+                "portway",
+                "--config",
+                path.to_str().unwrap(),
+                "--upstream",
+                "http://single.test",
+            ]))
+        };
+        // A budget keyed by a cleared mount or model would name an unknown
+        // route; it leaves with its table instead of refusing the override.
+        let config = load(
+            "[upstreams]\ncodex='https://api.example.test'\n[models]\nm='http://m.test'\n\
+             [timeouts.routes.codex]\nresponse_headers_seconds=120\n\
+             [timeouts.routes.m]\nresponse_headers_seconds=30\n",
+        )
+        .unwrap();
+        assert!(config.timeouts.routes.is_empty());
+        config.validate(Mode::Forward).unwrap();
+        // The single route's own budget still names a route that exists.
+        let config = load(
+            "upstream='http://file.test'\n[timeouts.routes.upstream]\nresponse_headers_seconds=45\n",
+        )
+        .unwrap();
+        assert_eq!(
+            config.timeouts.routes["upstream"].response_headers_seconds,
+            Some(45)
+        );
+        config.validate(Mode::Forward).unwrap();
         std::fs::remove_file(path).unwrap();
     }
     #[test]

@@ -61,9 +61,10 @@ portway --config ./portway.toml --port 8789 --level 3
 ```
 
 This changes the listening port and compression level for that invocation.
-`--upstream URL` also clears a file's `[upstreams]` and `[models]` tables and
-selects single-upstream mode. There is no flag that adds a table entry; edit
-the TOML.
+`--upstream URL` also clears a file's `[upstreams]` and `[models]` tables,
+drops the `[timeouts.routes.<name>]` entries keyed by those names, and selects
+single-upstream mode; a `[timeouts.routes.upstream]` entry still applies. There
+is no flag that adds a table entry; edit the TOML.
 A file must still parse successfully before CLI overrides can be applied.
 
 Relative config paths are read before daemonization. TOML strings do not expand

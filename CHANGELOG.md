@@ -7,6 +7,12 @@ version may contain breaking changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- `--upstream URL` drops the `[timeouts.routes.<name>]` entries keyed by the
+  `[upstreams]` and `[models]` routes it clears, so the documented override
+  starts and reloads instead of failing on an unknown route.
+
 ## [0.2.6] - 2026-10-17
 
 ### Fixed
