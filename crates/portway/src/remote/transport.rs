@@ -6,6 +6,7 @@ use std::os::fd::AsRawFd;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use http::{Request, StatusCode, Uri};
@@ -14,6 +15,13 @@ use hyper::body::Incoming;
 use ratatui::crossterm::{
     event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
     terminal,
+};
+use rustls::{
+    SignatureScheme,
+    client::ResolvesClientCert,
+    crypto::CryptoProvider,
+    pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject},
+    sign::CertifiedKey,
 };
 use serde::de::DeserializeOwned;
 
@@ -26,6 +34,8 @@ use crate::{
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_JSON: usize = 8 * 1024 * 1024;
 const CACHE: &str = "remote-sessions.json";
+/// Names the client certificate when `--client-cert` is absent.
+pub const CLIENT_CERT_ENV: &str = "PORTWAY_CLIENT_CERT";
 
 pub enum Error {
     Expired,
@@ -62,10 +72,11 @@ pub struct Client {
     prefix: String,
     authority: String,
     upstream: Arc<Upstream>,
+    identity: Arc<Identity>,
     cookie: Option<String>,
 }
 impl Client {
-    pub fn new(raw: &str) -> Result<Self, Error> {
+    pub fn new(raw: &str, client_cert: Option<&Path>) -> Result<Self, Error> {
         let invalid = || {
             Error::Other("--attach requires an http:// or https:// console URL without credentials, query or fragment".into())
         };
@@ -91,12 +102,22 @@ impl Client {
         };
         let prefix = uri.path().trim_end_matches('/').to_owned();
         let url = format!("{scheme}://{authority}{prefix}/");
-        let upstream = Arc::new(Upstream::new(&url, None).map_err(|_| invalid())?);
+        // The upstream client's roots, provider and ALPN, plus the identity.
+        let mut tls = (*portway_core::server::tls_config()).clone();
+        let identity = Arc::new(Identity {
+            key: client_cert
+                .map(|path| load_identity(path, tls.crypto_provider()).map(Arc::new))
+                .transpose()?,
+            requested: AtomicBool::new(false),
+        });
+        tls.client_auth_cert_resolver = Arc::clone(&identity) as Arc<dyn ResolvesClientCert>;
+        let upstream = Arc::new(Upstream::new(&url, Some(Arc::new(tls))).map_err(|_| invalid())?);
         Ok(Self {
             url,
             prefix,
             authority,
             upstream,
+            identity,
             cookie: None,
         })
     }
@@ -134,6 +155,11 @@ impl Client {
                 .map_err(|error| Error::Other(format!("console connection: {error}")))?;
         if response.status() == StatusCode::UNAUTHORIZED {
             return Err(Error::Expired);
+        }
+        if response.status() == StatusCode::FORBIDDEN && self.identity.missing() {
+            return Err(Error::Other(format!(
+                "console returned HTTP 403 after its TLS server asked for a client certificate; pass --client-cert PATH or set {CLIENT_CERT_ENV}"
+            )));
         }
         if !response.status().is_success() {
             // Do not echo arbitrary proxy response bodies, URLs or headers.
@@ -231,6 +257,56 @@ impl Client {
             }
         }
     }
+}
+
+/// The certificate a console behind mutual TLS is shown, and whether a
+/// handshake asked for one: a 403 means a missing certificate only then.
+#[derive(Debug)]
+struct Identity {
+    key: Option<Arc<CertifiedKey>>,
+    requested: AtomicBool,
+}
+impl Identity {
+    fn missing(&self) -> bool {
+        self.key.is_none() && self.requested.load(Ordering::Relaxed)
+    }
+}
+impl ResolvesClientCert for Identity {
+    fn resolve(&self, _: &[&[u8]], _: &[SignatureScheme]) -> Option<Arc<CertifiedKey>> {
+        self.requested.store(true, Ordering::Relaxed);
+        self.key.clone()
+    }
+    fn has_certs(&self) -> bool {
+        self.key.is_some()
+    }
+}
+
+/// A PEM file holding the client certificate, any intermediates, and its
+/// unencrypted private key (PKCS#8, SEC1 or PKCS#1), as curl's `--cert` takes.
+fn load_identity(path: &Path, provider: &CryptoProvider) -> Result<CertifiedKey, Error> {
+    let pem = fs::read(path).map_err(|error| {
+        Error::Other(format!(
+            "reading the client certificate {} (--client-cert / {CLIENT_CERT_ENV}): {error}",
+            path.display()
+        ))
+    })?;
+    let chain = CertificateDer::pem_slice_iter(&pem)
+        .collect::<Result<Vec<_>, _>>()
+        .ok()
+        .filter(|chain| !chain.is_empty());
+    let key = PrivateKeyDer::from_pem_slice(&pem).ok();
+    let (Some(chain), Some(key)) = (chain, key) else {
+        return Err(Error::Other(format!(
+            "{}: expected a PEM file with the client certificate followed by its unencrypted private key (an encrypted key or a PKCS#12 file does not work here)",
+            path.display()
+        )));
+    };
+    CertifiedKey::from_der(chain, key, provider).map_err(|error| {
+        Error::Other(format!(
+            "{}: unusable client certificate: {error}",
+            path.display()
+        ))
+    })
 }
 
 fn valid_cookie(value: &str) -> bool {
@@ -391,15 +467,19 @@ mod tests {
     #[test]
     fn targets_keep_prefixes_and_isolate_credentials() {
         assert_eq!(
-            Client::new("https://EXAMPLE.com/portway").unwrap().url,
+            Client::new("https://EXAMPLE.com/portway", None)
+                .unwrap()
+                .url,
             "https://example.com/portway/"
         );
         assert_eq!(
-            Client::new("https://example.com:443/portway/").unwrap().url,
+            Client::new("https://example.com:443/portway/", None)
+                .unwrap()
+                .url,
             "https://example.com/portway/"
         );
         assert_eq!(
-            Client::new("http://[::1]:8790/").unwrap().url,
+            Client::new("http://[::1]:8790/", None).unwrap().url,
             "http://[::1]:8790/"
         );
         for bad in [
@@ -409,17 +489,58 @@ mod tests {
             "https://server/?token=secret",
             "https://server/#token=secret",
         ] {
-            let error = Client::new(bad).err().expect("bad URL").to_string();
+            let error = Client::new(bad, None).err().expect("bad URL").to_string();
             assert!(!error.contains("secret"));
         }
+    }
+
+    #[test]
+    fn client_certificates_name_their_source_and_need_both_halves() {
+        let dir = std::env::temp_dir().join(format!("pw-remote-cert-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let url = "https://example.com/portway";
+        let error = |path: &Path| {
+            Client::new(url, Some(path))
+                .err()
+                .expect("rejected")
+                .to_string()
+        };
+
+        let missing = dir.join("missing.pem");
+        let text = error(&missing);
+        assert!(text.contains(&missing.display().to_string()), "{text}");
+        assert!(text.contains(CLIENT_CERT_ENV), "{text}");
+
+        // Placeholder bodies: the halves are found by their PEM labels.
+        let cert = "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n";
+        let key = "-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n";
+        let encrypted =
+            "-----BEGIN ENCRYPTED PRIVATE KEY-----\nAAAA\n-----END ENCRYPTED PRIVATE KEY-----\n";
+        for (name, pem) in [
+            ("cert.pem", cert.to_owned()),
+            ("key.pem", key.to_owned()),
+            ("encrypted.pem", format!("{cert}{encrypted}")),
+        ] {
+            let path = dir.join(name);
+            fs::write(&path, pem).unwrap();
+            let text = error(&path);
+            assert!(text.contains("unencrypted private key"), "{name}: {text}");
+        }
+        let path = dir.join("garbage.pem");
+        fs::write(&path, format!("{cert}{key}")).unwrap();
+        assert!(error(&path).contains("unusable client certificate"));
+
+        assert!(!Client::new(url, None).unwrap().identity.missing());
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn sessions_are_private_scoped_and_atomically_replaced() {
         let dir = std::env::temp_dir().join(format!("pw-remote-cache-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
-        let one = Client::new("https://example.com/a").unwrap();
-        let two = Client::new("https://example.com/b").unwrap();
+        let one = Client::new("https://example.com/a", None).unwrap();
+        let two = Client::new("https://example.com/b", None).unwrap();
         let cookie = format!("portway_8790={}", "a".repeat(64));
         save_session(&dir, &one.url, Some(&cookie)).unwrap();
         save_session(&dir, &two.url, Some(&cookie)).unwrap();

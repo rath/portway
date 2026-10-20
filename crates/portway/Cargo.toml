@@ -9,7 +9,7 @@ description = "A compression-first HTTP forwarder"
 
 [features]
 default = []
-tui = ["dep:ratatui", "dep:bytes", "dep:hyper"]
+tui = ["dep:ratatui", "dep:bytes", "dep:hyper", "dep:rustls"]
 web = ["dep:bytes", "dep:http-body", "dep:hyper", "dep:hyper-util"]
 
 [dependencies]
@@ -24,6 +24,8 @@ ratatui = { optional = true, version = "0.30.2", default-features = false, featu
 # No `cache` feature (statement caching is not used here) and no wasm backend;
 # `bundled` compiles the SQLite C sources once into target/.
 rusqlite = { version = "0.40.2", default-features = false, features = ["bundled"] }
+# The remote viewer's client certificate, on the forwarder's TLS client config.
+rustls = { optional = true, version = "0.23.45" }
 serde_json = "1.0.151"
 # The web console's own listener; the forwarder already links all four.
 bytes = { optional = true, version = "1.12.1" }

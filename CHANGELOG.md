@@ -7,6 +7,13 @@ version may contain breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- `--tui --attach` presents a TLS client certificate to a console behind
+  mutual TLS: `--client-cert PATH`, or `PORTWAY_CLIENT_CERT` when the flag is
+  absent. A 403 after the server asked for a certificate that was not
+  configured now says so.
+
 ### Fixed
 
 - `--upstream URL` drops the `[timeouts.routes.<name>]` entries keyed by the

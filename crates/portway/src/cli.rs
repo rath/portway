@@ -56,6 +56,12 @@ pub struct Args {
         "min_bytes", "max_body_bytes", "probe_path", "retention_days"
     ])]
     pub attach: Option<String>,
+    /// PEM file with the client certificate and its unencrypted private key,
+    /// for a console behind a proxy that requires mutual TLS;
+    /// `PORTWAY_CLIENT_CERT` names it when the flag is absent.
+    #[cfg(feature = "tui")]
+    #[arg(long, value_name = "PATH", requires = "attach")]
+    pub client_cert: Option<PathBuf>,
     #[cfg(feature = "tui")]
     #[arg(long,value_name="LIST",value_delimiter=',',value_parser=column,requires="tui")]
     pub event_columns: Option<Vec<Column>>,
@@ -302,6 +308,14 @@ mod tests {
             ])
             .is_ok()
         );
+        let cert = "/tmp/client.pem";
+        assert_eq!(
+            Args::try_parse_from(["portway", "--tui", "--attach", url, "--client-cert", cert])
+                .unwrap()
+                .client_cert,
+            Some(PathBuf::from(cert))
+        );
+        assert!(Args::try_parse_from(["portway", "--tui", "--client-cert", cert]).is_err());
     }
 
     #[cfg(feature = "tui")]

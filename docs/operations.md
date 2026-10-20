@@ -187,6 +187,14 @@ An existing reverse proxy keeps its path and Host/Origin rewrites unchanged.
 HTTPS uses the same certificate verification as Portway's upstream client;
 redirects are not followed.
 
+A console behind a proxy that requires mutual TLS needs a client certificate.
+`--client-cert PATH` names a PEM file holding the certificate, any
+intermediates, and its unencrypted private key: the file curl's `--cert` takes.
+`PORTWAY_CLIENT_CERT` names it when the flag is absent, so an exported variable
+keeps the usual command unchanged. The certificate is shown only to a TLS server
+that asks for one. A 403 from a server that asked while none was configured is
+reported as such, not as a wrong URL.
+
 On the first connection, paste just the console token at the hidden prompt.
 Use the current token from the remote console's launch URL or its private
 `portway.web` file. Do not put a token in the `--attach` argument. The viewer
@@ -259,8 +267,8 @@ otherwise. The palettes need 24-bit color: on a terminal without it, or over an
 SSH session that does not pass `COLORTERM` along, choose `terminal` or set
 `COLORTERM`.
 
-`--tui`, `--attach`, `--event-columns` and `--theme` are absent in builds
-without the `tui` feature.
+`--tui`, `--attach`, `--client-cert`, `--event-columns` and `--theme` are
+absent in builds without the `tui` feature.
 
 ## Optional web console
 

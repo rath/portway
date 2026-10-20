@@ -23,7 +23,12 @@ pub enum Update {
 }
 
 pub fn run(url: &str, args: &Args) -> Result<(), Box<dyn std::error::Error>> {
-    let client = Client::new(url)?;
+    let client_cert = args.client_cert.clone().or_else(|| {
+        std::env::var_os(transport::CLIENT_CERT_ENV)
+            .filter(|path| !path.is_empty())
+            .map(PathBuf::from)
+    });
+    let client = Client::new(url, client_cert.as_deref())?;
     let dir = store::data_dir(args.data_dir.as_deref())?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()

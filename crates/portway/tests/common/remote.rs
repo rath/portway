@@ -361,7 +361,7 @@ async fn remote_data_uses_server_totals_and_costs_without_recounting_events() {
             "/console",
         ],
     );
-    let mut client = Client::new(launched.url.split('#').next().unwrap()).unwrap();
+    let mut client = Client::new(launched.url.split('#').next().unwrap(), None).unwrap();
     assert!(client.login("invalid").await.is_err());
     client.login(&launched.token).await.unwrap();
     record_one(port, r#"{"model":"model-web"}"#).await;
@@ -469,7 +469,7 @@ async fn remote_flights_are_live_and_quitting_does_not_abort_them() {
         .unwrap();
     let mut held = response.into_body();
     held.frame().await.unwrap().unwrap();
-    let mut client = Client::new(launched.url.split('#').next().unwrap()).unwrap();
+    let mut client = Client::new(launched.url.split('#').next().unwrap(), None).unwrap();
     client.login(&launched.token).await.unwrap();
     eventually("streaming request", async || {
         let snapshot: wire::Snapshot = client.get("/api/snapshot").await.unwrap();
@@ -691,7 +691,7 @@ async fn remote_backfills_events_older_than_the_initial_snapshot() {
     while let Some(done) = requests.join_next().await {
         done.unwrap();
     }
-    let mut client = Client::new(launched.url.split('#').next().unwrap()).unwrap();
+    let mut client = Client::new(launched.url.split('#').next().unwrap(), None).unwrap();
     client.login(&launched.token).await.unwrap();
     eventually("all backfill records published", async || {
         let snapshot: wire::Snapshot = client.get("/api/snapshot").await.unwrap();
