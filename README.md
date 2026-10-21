@@ -1,3 +1,5 @@
+<p align="center"><img src="site/logo.svg" alt="" width="120"></p>
+
 # Portway
 
 Portway is a local HTTP proxy that sits between a coding agent and the LLM API
