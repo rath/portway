@@ -18,6 +18,8 @@ version may contain breaking changes.
 ### Fixed
 
 - Include cache-write costs in web and TUI totals without double-counting input.
+- Refresh the vendor price snapshot, including Sonnet 5.5 cache reads and
+  GPT-6.1 Sol ultrafast pricing.
 
 ## [0.2.7] - 2026-10-20
 

@@ -3,9 +3,9 @@
 The vendors' published list prices, written as Portway `[prices]` tables to
 copy into `portway.toml`. Checked against
 [OpenAI's API pricing](https://developers.openai.com/api/docs/pricing) on
-2026-10-02,
+2026-10-23,
 [Anthropic's pricing](https://platform.claude.com/docs/en/about-claude/pricing)
-on 2026-10-07 and
+on 2026-10-23 and
 [Kimi's API pricing](https://platform.kimi.ai/docs/pricing/chat) on
 2026-10-23. Prices change, so check those pages before relying on a
 figure. Portway's costs are estimates, not a bill; behind a ChatGPT, Claude or
@@ -30,12 +30,32 @@ client sends, and each tier by the value its request names; see
 `auto` is not priced here: it lets the vendor pick the class, so a request that
 sends it stays unpriced.
 
+## Cache-write estimates
+
+`cache_write` is the default rate for writes whose lifetime is not reported.
+It uses the vendor's default lifetime: 30 minutes for the listed OpenAI models
+with separate write pricing, 5 minutes for Anthropic and Kimi. Lifetime-specific
+rates override it when the response reports that breakdown. These are total
+write prices, not surcharges on top of ordinary input.
+
+Portway reads usage from the response, without changing the client's cache
+settings. [OpenAI](https://developers.openai.com/api/docs/guides/prompt-caching)
+reports 30-minute and 12-hour writes, and
+[Anthropic](https://platform.claude.com/docs/en/build-with-claude/prompt-caching)
+reports 5-minute and 1-hour writes. Kimi's
+[Messages API](https://platform.kimi.ai/docs/guide/context-caching) reports the
+same 5-minute/1-hour breakdown; its Chat Completions and Responses documentation
+only specifies the write total. When lifetime is unknown, the default is an
+estimate and the usage view flags it. In particular, a Kimi request's selected
+TTL is not proof of its billed TTL: an existing cache entry keeps its lifetime.
+
+Older records and responses without write counts cannot be reconstructed.
+Their existing input-rate estimates remain, with missing-write counts shown.
+Models without separately published write prices, such as `gpt-5.3-codex`,
+keep the original three-rate table.
+
 ## What these tables leave out
 
-- **Cache writes.** Portway bills a cache write at the input rate. OpenAI lists
-  cache writes at 1.25 times input; Anthropic at 1.25 times for a 5-minute
-  cache and twice input for 1-hour; Kimi at exactly the input rate for 5-minute
-  writes and twice input for 1-hour.
 - **Regional pricing.** OpenAI's data residency endpoints and Anthropic's
   US-only inference (`inference_geo: "us"`) cost 10% more.
 - **Unpublished models.** Codex's `codex-auto-review` is not on OpenAI's
@@ -51,7 +71,7 @@ the long-context column of the same page. `gpt-5.3-codex` lists none.
 `priority` and `fast` are one class under two names: Codex sends `priority`,
 and the API accepts either since OpenAI renamed Priority processing to Fast
 mode. `default` repeats the standard rates for clients that name it.
-Ultrafast is published for `gpt-6-astra` only, and `gpt-5.6-sol`'s rates are
+Ultrafast is published for `gpt-6-astra` and `gpt-6.1-sol`, and `gpt-5.6-sol`'s rates are
 promotional "at least through November 21, 2026".
 
 ```toml
@@ -59,157 +79,244 @@ promotional "at least through November 21, 2026".
 input = 10.0
 output = 50.0
 cache_read = 1.0
-long_context = { above = 272000, input = 20.0, output = 75.0, cache_read = 2.0 }
+cache_write = 12.5
+cache_write_30m = 12.5
+cache_write_12h = 25.0
+long_context = { above = 272000, input = 20.0, output = 75.0, cache_read = 2.0, cache_write = 25.0, cache_write_30m = 25.0, cache_write_12h = 50.0 }
 
 [prices."gpt-6-astra".tiers.default]
 input = 10.0
 output = 50.0
 cache_read = 1.0
-long_context = { above = 272000, input = 20.0, output = 75.0, cache_read = 2.0 }
+cache_write = 12.5
+cache_write_30m = 12.5
+cache_write_12h = 25.0
+long_context = { above = 272000, input = 20.0, output = 75.0, cache_read = 2.0, cache_write = 25.0, cache_write_30m = 25.0, cache_write_12h = 50.0 }
 
 [prices."gpt-6-astra".tiers.priority]
 input = 20.0
 output = 100.0
 cache_read = 2.0
-long_context = { above = 272000, input = 40.0, output = 150.0, cache_read = 4.0 }
+cache_write = 25.0
+cache_write_30m = 25.0
+cache_write_12h = 50.0
+long_context = { above = 272000, input = 40.0, output = 150.0, cache_read = 4.0, cache_write = 50.0, cache_write_30m = 50.0, cache_write_12h = 100.0 }
 
 [prices."gpt-6-astra".tiers.fast]
 input = 20.0
 output = 100.0
 cache_read = 2.0
-long_context = { above = 272000, input = 40.0, output = 150.0, cache_read = 4.0 }
+cache_write = 25.0
+cache_write_30m = 25.0
+cache_write_12h = 50.0
+long_context = { above = 272000, input = 40.0, output = 150.0, cache_read = 4.0, cache_write = 50.0, cache_write_30m = 50.0, cache_write_12h = 100.0 }
 
 [prices."gpt-6-astra".tiers.ultrafast]
 input = 60.0
 output = 300.0
 cache_read = 6.0
-long_context = { above = 272000, input = 120.0, output = 450.0, cache_read = 12.0 }
+cache_write = 75.0
+cache_write_30m = 75.0
+cache_write_12h = 150.0
+long_context = { above = 272000, input = 120.0, output = 450.0, cache_read = 12.0, cache_write = 150.0, cache_write_30m = 150.0, cache_write_12h = 300.0 }
 
 [prices."gpt-6-astra".tiers.flex]
 input = 5.0
 output = 25.0
 cache_read = 0.5
-long_context = { above = 272000, input = 10.0, output = 37.5, cache_read = 1.0 }
+cache_write = 6.25
+cache_write_30m = 6.25
+cache_write_12h = 12.5
+long_context = { above = 272000, input = 10.0, output = 37.5, cache_read = 1.0, cache_write = 12.5, cache_write_30m = 12.5, cache_write_12h = 25.0 }
 
 [prices."gpt-6.1-sol"]
 input = 2.0
 output = 10.0
 cache_read = 0.1
-long_context = { above = 272000, input = 4.0, output = 15.0, cache_read = 0.2 }
+cache_write = 2.5
+cache_write_30m = 2.5
+cache_write_12h = 5.0
+long_context = { above = 272000, input = 4.0, output = 15.0, cache_read = 0.2, cache_write = 5.0, cache_write_30m = 5.0, cache_write_12h = 10.0 }
 
 [prices."gpt-6.1-sol".tiers.default]
 input = 2.0
 output = 10.0
 cache_read = 0.1
-long_context = { above = 272000, input = 4.0, output = 15.0, cache_read = 0.2 }
+cache_write = 2.5
+cache_write_30m = 2.5
+cache_write_12h = 5.0
+long_context = { above = 272000, input = 4.0, output = 15.0, cache_read = 0.2, cache_write = 5.0, cache_write_30m = 5.0, cache_write_12h = 10.0 }
 
 [prices."gpt-6.1-sol".tiers.priority]
 input = 4.0
 output = 20.0
 cache_read = 0.2
-long_context = { above = 272000, input = 8.0, output = 30.0, cache_read = 0.4 }
+cache_write = 5.0
+cache_write_30m = 5.0
+cache_write_12h = 10.0
+long_context = { above = 272000, input = 8.0, output = 30.0, cache_read = 0.4, cache_write = 10.0, cache_write_30m = 10.0, cache_write_12h = 20.0 }
 
 [prices."gpt-6.1-sol".tiers.fast]
 input = 4.0
 output = 20.0
 cache_read = 0.2
-long_context = { above = 272000, input = 8.0, output = 30.0, cache_read = 0.4 }
+cache_write = 5.0
+cache_write_30m = 5.0
+cache_write_12h = 10.0
+long_context = { above = 272000, input = 8.0, output = 30.0, cache_read = 0.4, cache_write = 10.0, cache_write_30m = 10.0, cache_write_12h = 20.0 }
+
+[prices."gpt-6.1-sol".tiers.ultrafast]
+input = 12.0
+output = 60.0
+cache_read = 0.6
+cache_write = 15.0
+cache_write_30m = 15.0
+cache_write_12h = 30.0
+long_context = { above = 272000, input = 24.0, output = 90.0, cache_read = 1.2, cache_write = 30.0, cache_write_30m = 30.0, cache_write_12h = 60.0 }
 
 [prices."gpt-6.1-sol".tiers.flex]
 input = 1.0
 output = 5.0
 cache_read = 0.05
-long_context = { above = 272000, input = 2.0, output = 7.5, cache_read = 0.1 }
+cache_write = 1.25
+cache_write_30m = 1.25
+cache_write_12h = 2.5
+long_context = { above = 272000, input = 2.0, output = 7.5, cache_read = 0.1, cache_write = 2.5, cache_write_30m = 2.5, cache_write_12h = 5.0 }
 
 [prices."gpt-6-sol"]
 input = 2.0
 output = 10.0
 cache_read = 0.2
-long_context = { above = 272000, input = 4.0, output = 15.0, cache_read = 0.4 }
+cache_write = 2.5
+cache_write_30m = 2.5
+cache_write_12h = 5.0
+long_context = { above = 272000, input = 4.0, output = 15.0, cache_read = 0.4, cache_write = 5.0, cache_write_30m = 5.0, cache_write_12h = 10.0 }
 
 [prices."gpt-6-sol".tiers.default]
 input = 2.0
 output = 10.0
 cache_read = 0.2
-long_context = { above = 272000, input = 4.0, output = 15.0, cache_read = 0.4 }
+cache_write = 2.5
+cache_write_30m = 2.5
+cache_write_12h = 5.0
+long_context = { above = 272000, input = 4.0, output = 15.0, cache_read = 0.4, cache_write = 5.0, cache_write_30m = 5.0, cache_write_12h = 10.0 }
 
 [prices."gpt-6-sol".tiers.priority]
 input = 4.0
 output = 20.0
 cache_read = 0.4
-long_context = { above = 272000, input = 8.0, output = 30.0, cache_read = 0.8 }
+cache_write = 5.0
+cache_write_30m = 5.0
+cache_write_12h = 10.0
+long_context = { above = 272000, input = 8.0, output = 30.0, cache_read = 0.8, cache_write = 10.0, cache_write_30m = 10.0, cache_write_12h = 20.0 }
 
 [prices."gpt-6-sol".tiers.fast]
 input = 4.0
 output = 20.0
 cache_read = 0.4
-long_context = { above = 272000, input = 8.0, output = 30.0, cache_read = 0.8 }
+cache_write = 5.0
+cache_write_30m = 5.0
+cache_write_12h = 10.0
+long_context = { above = 272000, input = 8.0, output = 30.0, cache_read = 0.8, cache_write = 10.0, cache_write_30m = 10.0, cache_write_12h = 20.0 }
 
 [prices."gpt-6-sol".tiers.flex]
 input = 1.0
 output = 5.0
 cache_read = 0.1
-long_context = { above = 272000, input = 2.0, output = 7.5, cache_read = 0.2 }
+cache_write = 1.25
+cache_write_30m = 1.25
+cache_write_12h = 2.5
+long_context = { above = 272000, input = 2.0, output = 7.5, cache_read = 0.2, cache_write = 2.5, cache_write_30m = 2.5, cache_write_12h = 5.0 }
 
 [prices."gpt-6-luna"]
 input = 0.1
 output = 0.5
 cache_read = 0.01
-long_context = { above = 272000, input = 0.2, output = 0.75, cache_read = 0.02 }
+cache_write = 0.125
+cache_write_30m = 0.125
+cache_write_12h = 0.25
+long_context = { above = 272000, input = 0.2, output = 0.75, cache_read = 0.02, cache_write = 0.25, cache_write_30m = 0.25, cache_write_12h = 0.5 }
 
 [prices."gpt-6-luna".tiers.default]
 input = 0.1
 output = 0.5
 cache_read = 0.01
-long_context = { above = 272000, input = 0.2, output = 0.75, cache_read = 0.02 }
+cache_write = 0.125
+cache_write_30m = 0.125
+cache_write_12h = 0.25
+long_context = { above = 272000, input = 0.2, output = 0.75, cache_read = 0.02, cache_write = 0.25, cache_write_30m = 0.25, cache_write_12h = 0.5 }
 
 [prices."gpt-6-luna".tiers.priority]
 input = 0.2
 output = 1.0
 cache_read = 0.02
-long_context = { above = 272000, input = 0.4, output = 1.5, cache_read = 0.04 }
+cache_write = 0.25
+cache_write_30m = 0.25
+cache_write_12h = 0.5
+long_context = { above = 272000, input = 0.4, output = 1.5, cache_read = 0.04, cache_write = 0.5, cache_write_30m = 0.5, cache_write_12h = 1.0 }
 
 [prices."gpt-6-luna".tiers.fast]
 input = 0.2
 output = 1.0
 cache_read = 0.02
-long_context = { above = 272000, input = 0.4, output = 1.5, cache_read = 0.04 }
+cache_write = 0.25
+cache_write_30m = 0.25
+cache_write_12h = 0.5
+long_context = { above = 272000, input = 0.4, output = 1.5, cache_read = 0.04, cache_write = 0.5, cache_write_30m = 0.5, cache_write_12h = 1.0 }
 
 [prices."gpt-6-luna".tiers.flex]
 input = 0.05
 output = 0.25
 cache_read = 0.005
-long_context = { above = 272000, input = 0.1, output = 0.375, cache_read = 0.01 }
+cache_write = 0.0625
+cache_write_30m = 0.0625
+cache_write_12h = 0.125
+long_context = { above = 272000, input = 0.1, output = 0.375, cache_read = 0.01, cache_write = 0.125, cache_write_30m = 0.125, cache_write_12h = 0.25 }
 
 [prices."gpt-5.6-sol"]
 input = 4.0
 output = 20.0
 cache_read = 0.4
-long_context = { above = 272000, input = 8.0, output = 30.0, cache_read = 0.8 }
+cache_write = 5.0
+cache_write_30m = 5.0
+cache_write_12h = 10.0
+long_context = { above = 272000, input = 8.0, output = 30.0, cache_read = 0.8, cache_write = 10.0, cache_write_30m = 10.0, cache_write_12h = 20.0 }
 
 [prices."gpt-5.6-sol".tiers.default]
 input = 4.0
 output = 20.0
 cache_read = 0.4
-long_context = { above = 272000, input = 8.0, output = 30.0, cache_read = 0.8 }
+cache_write = 5.0
+cache_write_30m = 5.0
+cache_write_12h = 10.0
+long_context = { above = 272000, input = 8.0, output = 30.0, cache_read = 0.8, cache_write = 10.0, cache_write_30m = 10.0, cache_write_12h = 20.0 }
 
 [prices."gpt-5.6-sol".tiers.priority]
 input = 8.0
 output = 40.0
 cache_read = 0.8
-long_context = { above = 272000, input = 16.0, output = 60.0, cache_read = 1.6 }
+cache_write = 10.0
+cache_write_30m = 10.0
+cache_write_12h = 20.0
+long_context = { above = 272000, input = 16.0, output = 60.0, cache_read = 1.6, cache_write = 20.0, cache_write_30m = 20.0, cache_write_12h = 40.0 }
 
 [prices."gpt-5.6-sol".tiers.fast]
 input = 8.0
 output = 40.0
 cache_read = 0.8
-long_context = { above = 272000, input = 16.0, output = 60.0, cache_read = 1.6 }
+cache_write = 10.0
+cache_write_30m = 10.0
+cache_write_12h = 20.0
+long_context = { above = 272000, input = 16.0, output = 60.0, cache_read = 1.6, cache_write = 20.0, cache_write_30m = 20.0, cache_write_12h = 40.0 }
 
 [prices."gpt-5.6-sol".tiers.flex]
 input = 2.0
 output = 10.0
 cache_read = 0.2
-long_context = { above = 272000, input = 4.0, output = 15.0, cache_read = 0.4 }
+cache_write = 2.5
+cache_write_30m = 2.5
+cache_write_12h = 5.0
+long_context = { above = 272000, input = 4.0, output = 15.0, cache_read = 0.4, cache_write = 5.0, cache_write_30m = 5.0, cache_write_12h = 10.0 }
 
 [prices."gpt-5.3-codex"]
 input = 1.75
@@ -244,51 +351,71 @@ reads use the model's cache multiplier on the fast input rate (0.05 times on
 Opus 5.5, 0.1 times on Opus 5). The other models on Anthropic's page take the
 same shape.
 
-Anthropic's page disagrees with itself on Sonnet 5.5's cache reads: the model
-table lists $0.20, while the caching section gives 0.05 times input ($0.10).
-The table below keeps the model table's $0.20.
-
 ```toml
 [prices."claude-fable-5-1"]
 input = 10.0
 output = 50.0
 cache_read = 0.25
+cache_write = 12.5
+cache_write_5m = 12.5
+cache_write_1h = 20.0
 
 [prices."claude-opus-5-5"]
 input = 4.0
 output = 20.0
 cache_read = 0.2
+cache_write = 5.0
+cache_write_5m = 5.0
+cache_write_1h = 8.0
 
 [prices."claude-opus-5-5".tiers.fast]
 input = 8.0
 output = 40.0
 cache_read = 0.4
+cache_write = 10.0
+cache_write_5m = 10.0
+cache_write_1h = 16.0
 
 [prices."claude-opus-5"]
 input = 5.0
 output = 25.0
 cache_read = 0.5
+cache_write = 6.25
+cache_write_5m = 6.25
+cache_write_1h = 10.0
 
 [prices."claude-opus-5".tiers.fast]
 input = 10.0
 output = 50.0
 cache_read = 1.0
+cache_write = 12.5
+cache_write_5m = 12.5
+cache_write_1h = 20.0
 
 [prices."claude-sonnet-5-5"]
 input = 2.0
 output = 10.0
-cache_read = 0.2
+cache_read = 0.1
+cache_write = 2.5
+cache_write_5m = 2.5
+cache_write_1h = 4.0
 
 [prices."claude-haiku-5-5"]
 input = 0.1
 output = 0.5
 cache_read = 0.01
-long_context = { above = 100000, input = 0.5, output = 2.5, cache_read = 0.05 }
+cache_write = 0.125
+cache_write_5m = 0.125
+cache_write_1h = 0.2
+long_context = { above = 100000, input = 0.5, output = 2.5, cache_read = 0.05, cache_write = 0.625, cache_write_5m = 0.625, cache_write_1h = 1.0 }
 
 [prices."claude-haiku-4-5-20251001"]
 input = 1.0
 output = 5.0
 cache_read = 0.1
+cache_write = 1.25
+cache_write_5m = 1.25
+cache_write_1h = 2.0
 ```
 
 ## Kimi
@@ -296,17 +423,22 @@ cache_read = 0.1
 Kimi Code is a subscription, but the same models are sold per token on the API
 platform, and that is what these tables use: the estimate is what the tokens
 would cost on the API, not the subscription bill. K3 models bill cache writes
-separately: 5-minute writes at the input rate (already how Portway bills a
-write) and 1-hour writes at twice input.
+separately: 5-minute writes at the input rate and 1-hour writes at twice input.
 
 ```toml
 [prices."k3.1-pro"]
 input = 2.0
 output = 10.0
 cache_read = 0.2
+cache_write = 2.0
+cache_write_5m = 2.0
+cache_write_1h = 4.0
 
 [prices."k3.1-pro-highspeed"]
 input = 4.0
 output = 20.0
 cache_read = 0.2
+cache_write = 4.0
+cache_write_5m = 4.0
+cache_write_1h = 8.0
 ```
