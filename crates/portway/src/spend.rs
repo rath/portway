@@ -312,10 +312,32 @@ pub fn notes_named(table: &Table, label: impl Fn(&Row) -> String) -> Vec<String>
         }
     }
     for row in &table.rows {
-        if row.write_unreported > 0 || row.write_unknown > 0 || row.write_fallback > 0 {
+        // A row none of whose answers reported writes says so in its own
+        // column; only a mixed row has a write count that reads like a fact.
+        let mut parts = Vec::new();
+        if row.write_unreported > 0 && row.write_unreported < row.requests {
+            parts.push(format!(
+                "{} of {} request(s) reported none, so theirs stay in the input estimate",
+                row.write_unreported, row.requests
+            ));
+        }
+        if row.write_unknown > 0 {
+            parts.push(format!(
+                "{} with an unknown lifetime, at the default write rate (or input)",
+                row.write_unknown
+            ));
+        }
+        if row.write_fallback > 0 {
+            parts.push(format!(
+                "{} at a fallback rate: no rate of their own",
+                row.write_fallback
+            ));
+        }
+        if !parts.is_empty() {
             notes.push(format!(
-                "{}: cache writes — {} request(s) unreported, {} with unknown lifetime, {} using fallback rates; missing writes retain the input estimate, unknown lifetimes use the default write rate (or input rate)",
-                label(row), row.write_unreported, row.write_unknown, row.write_fallback
+                "{}: cache writes — {}",
+                label(row),
+                parts.join("; ")
             ));
         }
     }
@@ -1308,6 +1330,42 @@ mod tests {
         // say so instead of drawing an empty day.
         let missing = load(&dir.join("nothing.sqlite3"), 0.0, 1e12);
         assert!(missing.is_err(), "{missing:?}");
+    }
+
+    #[test]
+    fn write_notes_speak_only_where_a_count_misleads() {
+        let mut table = Table::default();
+        let silent = Row {
+            requests: 3,
+            write_unreported: 3,
+            ..row("model-alpha", 10, 0, 1)
+        };
+        let mixed = Row {
+            requests: 2,
+            write_unreported: 1,
+            ..row("model-beta", 10, 0, 1)
+        };
+        let unknown = Row {
+            requests: 2,
+            write_unknown: 2,
+            write_fallback: 1,
+            ..row("model-gamma", 10, 0, 1)
+        };
+        for row in [silent, mixed, unknown] {
+            table.absorb(&row);
+            table.rows.push(row);
+        }
+        let writes: Vec<String> = notes(&table)
+            .into_iter()
+            .filter(|note| note.contains("cache writes"))
+            .collect();
+        assert_eq!(
+            writes,
+            [
+                "model-beta: cache writes — 1 of 2 request(s) reported none, so theirs stay in the input estimate",
+                "model-gamma: cache writes — 2 with an unknown lifetime, at the default write rate (or input); 1 at a fallback rate: no rate of their own",
+            ]
+        );
     }
 
     #[test]
