@@ -77,6 +77,9 @@ pub enum Reply {
     Restarting,
     /// A buffered answer carrying the engine's usage object.
     UsageJson,
+    /// Mixed-lifetime Anthropic usage, buffered or in gzip SSE.
+    CacheWriteJson,
+    CacheWriteStream,
     /// An SSE answer that ends with the no-choices chunk that carries it, the
     /// way `stream_options.include_usage` is answered.
     UsageStream,
@@ -96,6 +99,8 @@ pub const USAGE_REASONING: u64 = 742;
 /// The buffered reply carries every number, in vLLM's layout: the cache detail
 /// under `prompt_tokens_details`, the thinking under
 /// `completion_tokens_details`.
+pub const CACHE_WRITE_JSON: &str = r#"{"usage":{"input_tokens":12,"cache_read_input_tokens":17000,"cache_creation_input_tokens":800,"cache_creation":{"ephemeral_5m_input_tokens":500,"ephemeral_1h_input_tokens":300},"output_tokens":431}}"#;
+
 fn usage_json() -> serde_json::Value {
     serde_json::json!({
         "prompt_tokens": USAGE_PROMPT,
@@ -442,6 +447,25 @@ async fn respond(
                 stream::Linger::new(usage_stream(), std::time::Duration::from_millis(hold)).boxed(),
             )
             .unwrap(),
+        Reply::CacheWriteJson => Response::builder()
+            .status(200)
+            .header("content-type", "application/json")
+            .body(boxed(CACHE_WRITE_JSON))
+            .unwrap(),
+        Reply::CacheWriteStream => {
+            use std::io::Write;
+            let mut encoder =
+                flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+            encoder
+                .write_all(format!("data: {CACHE_WRITE_JSON}\n\ndata: [DONE]\n\n").as_bytes())
+                .unwrap();
+            Response::builder()
+                .status(200)
+                .header("content-type", "text/event-stream")
+                .header("content-encoding", "gzip")
+                .body(boxed(encoder.finish().unwrap()))
+                .unwrap()
+        }
         Reply::UsageJson => Response::builder()
             .status(200)
             .header("content-type", "application/json")

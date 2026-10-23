@@ -149,6 +149,7 @@ struct Reader {
     upstream: bool,
     tier: bool,
     gap: bool,
+    writes: bool,
 }
 
 /// What a row is read by: a window cutoff, or the id the last poll stopped at.
@@ -228,6 +229,7 @@ impl Reader {
         let upstream = store::has_upstream_column(&connection)?;
         let tier = store::has_tier_column(&connection)?;
         let gap = store::has_gap_column(&connection)?;
+        let writes = store::has_write_columns(&connection)?;
         Ok(Some(Reader {
             connection,
             tokens,
@@ -235,6 +237,7 @@ impl Reader {
             upstream,
             tier,
             gap,
+            writes,
         }))
     }
 
@@ -278,7 +281,12 @@ impl Reader {
             (true, false, _, _, _) => REQUEST_COLUMNS_V2,
             _ => REQUEST_COLUMNS_V1,
         };
-        let sql = read("requests", columns, key);
+        let writes = if self.writes {
+            "cache_write_tokens, cache_write_5m_tokens, cache_write_1h_tokens, cache_write_30m_tokens, cache_write_12h_tokens"
+        } else {
+            "NULL, NULL, NULL, NULL, NULL"
+        };
+        let sql = read("requests", &format!("{columns}, {writes}"), key);
         let param = match key {
             Key::Since(cutoff) => Value::Real(cutoff),
             Key::After(id) => Value::Integer(id),
@@ -325,6 +333,11 @@ impl Reader {
                                 cached: row.get::<_, Option<i64>>(20)?.map(|n| n as u64),
                                 completion: completion as u64,
                                 reasoning: row.get::<_, Option<i64>>(22)?.map(|n| n as u64),
+                                cache_write: row.get::<_, Option<i64>>(27)?.map(|n| n as u64),
+                                cache_write_5m: row.get::<_, Option<i64>>(28)?.map(|n| n as u64),
+                                cache_write_1h: row.get::<_, Option<i64>>(29)?.map(|n| n as u64),
+                                cache_write_30m: row.get::<_, Option<i64>>(30)?.map(|n| n as u64),
+                                cache_write_12h: row.get::<_, Option<i64>>(31)?.map(|n| n as u64),
                             }),
                             _ => None,
                         },
@@ -631,6 +644,11 @@ mod tests {
                 cached: Some(18_200),
                 completion: 891,
                 reasoning: Some(742),
+                cache_write: Some(30),
+                cache_write_5m: Some(10),
+                cache_write_1h: Some(20),
+                cache_write_30m: None,
+                cache_write_12h: None,
             }),
             flight: None,
         }

@@ -420,7 +420,13 @@ fn apply(event: TermEvent, state: &mut State, settings: &Settings) -> bool {
         TermEvent::Key(key) => return key_press(key, state, settings),
         TermEvent::Mouse(mouse) => {
             if state.usage_open {
-                if !state.usage_rates {
+                if state.usage_rates {
+                    match mouse.kind {
+                        MouseEventKind::ScrollUp => state.scroll_costs(-3),
+                        MouseEventKind::ScrollDown => state.scroll_costs(3),
+                        _ => {}
+                    }
+                } else {
                     match mouse.kind {
                         MouseEventKind::ScrollUp => state.scroll_usage(-3),
                         MouseEventKind::ScrollDown => state.scroll_usage(3),
@@ -523,6 +529,16 @@ fn key_press(key: KeyEvent, state: &mut State, settings: &Settings) -> bool {
             match key.code {
                 KeyCode::Char('p') | KeyCode::Esc | KeyCode::Char('q') => state.usage_rates = false,
                 KeyCode::Char('u') => state.close_usage(),
+                KeyCode::Down | KeyCode::Char('j') => state.scroll_costs(1),
+                KeyCode::Up | KeyCode::Char('k') => state.scroll_costs(-1),
+                KeyCode::PageDown | KeyCode::Char(' ') => {
+                    state.scroll_costs(state.costs_page_height.get() as isize)
+                }
+                KeyCode::PageUp => state.scroll_costs(-(state.costs_page_height.get() as isize)),
+                KeyCode::Home | KeyCode::Char('g') => state.costs_scroll.set(0),
+                KeyCode::End | KeyCode::Char('G') => {
+                    state.costs_scroll.set(state.costs_scroll_max.get())
+                }
                 _ => {}
             }
             return false;
@@ -531,7 +547,10 @@ fn key_press(key: KeyEvent, state: &mut State, settings: &Settings) -> bool {
             KeyCode::Char('u') | KeyCode::Esc | KeyCode::Char('q') => state.close_usage(),
             KeyCode::Left | KeyCode::Char('h') => state.step_usage_range(-1),
             KeyCode::Right | KeyCode::Char('l') => state.step_usage_range(1),
-            KeyCode::Char('p') => state.usage_rates = true,
+            KeyCode::Char('p') => {
+                state.usage_rates = true;
+                state.costs_scroll.set(0);
+            }
             KeyCode::Down | KeyCode::Char('j') => state.scroll_usage(1),
             KeyCode::Up | KeyCode::Char('k') => state.scroll_usage(-1),
             KeyCode::PageDown | KeyCode::Char(' ') => state.page_usage(1),
@@ -744,9 +763,13 @@ mod tests {
         apply(wheel.clone(), &mut state, &Settings::default());
         assert_eq!(state.usage_scroll.get(), 3);
         state.usage_rates = true;
+        state.costs_scroll_max.set(20);
         apply(wheel, &mut state, &Settings::default());
         key(KeyCode::Down, &mut state);
         assert_eq!(state.usage_scroll.get(), 3);
+        assert_eq!(state.costs_scroll.get(), 4);
+        key(KeyCode::End, &mut state);
+        assert_eq!(state.costs_scroll.get(), 20);
         assert!(state.follow);
         state.usage_rates = false;
         key(KeyCode::Right, &mut state);
@@ -837,6 +860,11 @@ mod tests {
                     cached: Some(2_700),
                     completion: 300,
                     reasoning: Some(150),
+                    cache_write: None,
+                    cache_write_5m: None,
+                    cache_write_1h: None,
+                    cache_write_30m: None,
+                    cache_write_12h: None,
                 }),
                 flight: None,
             })))

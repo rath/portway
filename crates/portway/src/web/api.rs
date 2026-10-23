@@ -38,6 +38,20 @@ pub fn event(seq: u64, ts: f64, event: &Event) -> Value {
 
 fn request(seq: u64, ts: f64, record: &RequestRecord) -> Value {
     let (route, known) = board::route(&record.method, &record.path);
+    let usage = record.usage.map(|usage| {
+        json!({
+            "prompt": usage.prompt,
+            "cached": usage.cached,
+            "cache_write": usage.cache_write,
+            "cache_write_5m": usage.cache_write_5m,
+            "cache_write_1h": usage.cache_write_1h,
+            "cache_write_30m": usage.cache_write_30m,
+            "cache_write_12h": usage.cache_write_12h,
+
+            "completion": usage.completion,
+            "reasoning": usage.reasoning,
+        })
+    });
     json!({
         "seq": seq,
         "kind": "request",
@@ -70,12 +84,7 @@ fn request(seq: u64, ts: f64, record: &RequestRecord) -> Value {
         "download": record.download,
         "max_gap": record.max_gap,
         "complete": record.complete,
-        "usage": record.usage.map(|usage| json!({
-            "prompt": usage.prompt,
-            "cached": usage.cached,
-            "completion": usage.completion,
-            "reasoning": usage.reasoning,
-        })),
+        "usage": usage,
         "trouble": record.status >= 400 || !record.complete,
         "flight": record.flight,
     })
@@ -261,6 +270,15 @@ fn usage_row(row: &spend::Row) -> Value {
         "requests": row.requests,
         "prompt": row.prompt,
         "cached": row.cached,
+        "cache_write": row.cache_write,
+        "cache_write_5m": row.cache_write_5m,
+        "cache_write_1h": row.cache_write_1h,
+        "cache_write_30m": row.cache_write_30m,
+        "cache_write_12h": row.cache_write_12h,
+        "write_unreported": row.write_unreported,
+        "write_unknown": row.write_unknown,
+        "write_fallback": row.write_fallback,
+
         "unreported": row.unreported,
         "completion": row.completion,
         "reasoning": row.reasoning,
@@ -270,6 +288,12 @@ fn usage_row(row: &spend::Row) -> Value {
         "charge": row.charge.map(|charge| json!({
             "input": charge.input,
             "cache_read": charge.cache_read,
+            "cache_write": charge.cache_write,
+            "cache_write_5m": charge.cache_write_5m,
+            "cache_write_1h": charge.cache_write_1h,
+            "cache_write_30m": charge.cache_write_30m,
+            "cache_write_12h": charge.cache_write_12h,
+
             "output": charge.output,
             "total": charge.total(),
         })),

@@ -3,7 +3,7 @@
 // view turns into spans. Pure, so the line can be tested without a page.
 
 import { displayModel } from "./modelnames.js";
-import { human, humanCount, humanTime, label, ratio, share } from "./format.js";
+import { human, humanCount, humanTime, label, ratio, share, writeTokens } from "./format.js";
 
 /**
  * Every field a request line can carry, in draw order (tui::state::COLUMNS).
@@ -138,6 +138,7 @@ export function requestLine(event, columns) {
         line.word(humanCount(usage.prompt), "raw");
         const cached = usage.cached == null ? null : share(usage.cached, usage.prompt);
         if (cached != null) line.glue(`(${cached} cached)`, "dim");
+        if (usage.cache_write != null) line.glue(`(${humanCount(usage.cache_write)} written)`, "dim");
         line.glue("→", "dim");
         line.word(humanCount(usage.completion), "wire");
         break;
@@ -190,6 +191,7 @@ export function detailFields(event) {
     ["tokens", usage
       ? `${usage.prompt} in${usage.cached != null ? ` (${usage.cached} cached)` : ""} -> ${usage.completion} out${usage.reasoning != null ? ` (${usage.reasoning} reasoning)` : ""}`
       : "not reported"],
+    ["cache writes", writeTokens(usage)],
     ["ended", event.complete
       ? "upstream body finished"
       : "cut short (agent abort, error or read timeout)"],

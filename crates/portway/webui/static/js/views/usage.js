@@ -90,8 +90,8 @@ export class UsageView {
       fill(this.root, h("section", { class: "panel" }, head, h("p", { class: "note", text: "reading…" })));
       return;
     }
-    const names = ["model", "reqs", "prompt", "cached", "hit", "output", "in$", "cache$", "out$", "total$"];
-    const roomy = new Set(["in$", "cache$", "out$"]);
+    const names = ["model", "reqs", "prompt", "cached", "written", "hit", "output", "in$", "read$", "write$", "out$", "total$"];
+    const roomy = new Set(["in$", "read$", "write$", "out$"]);
     const body = table.rows.length
       ? h("div", { class: "table-wrap models" }, h("table", { class: "data" },
         h("thead", {}, h("tr", {}, names.map((name) => h("th", { class: roomy.has(name) ? "roomy" : "", scope: "col", text: name })))),
@@ -118,10 +118,12 @@ function usageRow(row, total) {
     [String(row.requests)],
     [humanCount(row.prompt)],
     [unreported ? "-" : humanCount(row.cached), unreported ? "dim" : null],
+    [row.write_unreported === row.requests && row.requests > 0 ? "-" : humanCount(row.cache_write ?? 0)],
     [percent(hit), hit == null ? "dim" : hit >= 0.5 ? "good" : "time"],
     [humanCount(row.completion)],
     [part("input"), null, "roomy"],
     [part("cache_read"), null, "roomy"],
+    [part("cache_write"), null, "roomy"],
     [part("output"), null, "roomy"],
     [row.cost == null ? "unpriced" : dollars(row.cost), "good t-bold"],
   ];

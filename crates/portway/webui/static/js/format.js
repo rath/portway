@@ -122,3 +122,14 @@ export function clock(unix) {
 export function rate(bytesPerSecond) {
   return `${human(Math.round(bytesPerSecond))}/s`;
 }
+
+/** Exact cache-write counts; null means unreported, zero is a measured zero. */
+export function writeTokens(usage) {
+  if (usage?.cache_write == null) return "not reported";
+  const periods = ["5m", "1h", "30m", "12h"];
+  const known = periods.reduce((n, ttl) => n + (usage[`cache_write_${ttl}`] ?? 0), 0);
+  const parts = periods.filter((ttl) => usage[`cache_write_${ttl}`] != null)
+    .map((ttl) => `${ttl}: ${usage[`cache_write_${ttl}`]}`);
+  if (usage.cache_write > known) parts.push(`unknown TTL: ${usage.cache_write - known}`);
+  return `${usage.cache_write}${parts.length ? ` (${parts.join(", ")})` : ""}`;
+}

@@ -197,17 +197,27 @@ export function openCosts(table) {
   const money = (charge, part) => (charge ? dollars(charge[part]) : "-");
   const rows = table.rows.map((row) => h("tr", {},
     h("td", { class: row.charge ? "t-model" : "t-dim", title: row.model, text: label(displayModel(row.model), row.tier) }),
-    ["input", "cache_read", "output", "total"].map((part) => h("td", { class: row.charge ? "t-good" : "t-dim", text: money(row.charge, part) }))));
+    ["input", "cache_read", "cache_write", "output", "total"].map((part) => h("td", { class: row.charge ? "t-good" : "t-dim", text: money(row.charge, part) }))));
   if (table.total.charge) {
     rows.push(h("tr", { class: "total" },
       h("td", { class: "t-good", text: "total" }),
-      ["input", "cache_read", "output", "total"].map((part) => h("td", { class: "t-good", text: money(table.total.charge, part) }))));
+      ["input", "cache_read", "cache_write", "output", "total"].map((part) => h("td", { class: "t-good", text: money(table.total.charge, part) }))));
   }
   dialogFrame(dialog, "Costs", [
     h("p", { class: "note", text: "cost by source: what the window cost, not the rates that produced it" }),
     h("div", { class: "table-wrap" }, h("table", { class: "data" },
-      h("thead", {}, h("tr", {}, ["model", "prompt", "cached", "output", "total$"].map((name) => h("th", { text: name })))),
+      h("thead", {}, h("tr", {}, ["model", "input", "read", "write", "output", "total$"].map((name) => h("th", { text: name })))),
       h("tbody", {}, rows))),
+    h("h3", { text: "Cache writes by lifetime" }),
+    ...table.rows.filter((row) => row.cache_write > 0).map((row) => {
+      const periods = ["5m", "1h", "30m", "12h"];
+      const known = periods.reduce((n, ttl) => n + (row[`cache_write_${ttl}`] ?? 0), 0);
+      const knownCost = periods.reduce((n, ttl) => n + (row.charge?.[`cache_write_${ttl}`] ?? 0), 0);
+      const parts = periods.filter((ttl) => row[`cache_write_${ttl}`] > 0)
+        .map((ttl) => `${ttl}: ${row[`cache_write_${ttl}`]} tokens · ${money(row.charge, `cache_write_${ttl}`)}`);
+      if (row.cache_write > known) parts.push(`unknown TTL: ${row.cache_write - known} tokens · ${row.charge ? dollars(Math.max(0, row.charge.cache_write - knownCost)) : "-"}`);
+      return h("p", { class: "note", text: `${label(displayModel(row.model), row.tier)} — ${parts.join("; ")}` });
+    }),
   ]);
   open(dialog);
 }

@@ -981,7 +981,7 @@ fn models_table(state: &State, width: u16) -> Table<'_> {
 // ------------------------------------------------------------- usage screen
 
 /// Where a model name, the token columns and the money columns all fit.
-const USAGE_ROOMY: u16 = 106;
+const USAGE_ROOMY: u16 = 126;
 /// A border, a header row, one model and the total: below this the screen has
 /// nothing left to say. The compact tier below `USAGE_ROOMY` still carries the
 /// counts and the total, so it wants the same 75 columns they add up to.
@@ -1100,12 +1100,31 @@ fn usage_screen(frame: &mut Frame, state: &State, area: Rect) {
     }
 
     if state.usage_rates {
+        let lines = cost_lines(
+            t,
+            table,
+            &state.aliases,
+            area.width.min(92).saturating_sub(2),
+        );
+        let height = lines
+            .len()
+            .min(area.height.saturating_sub(2) as usize)
+            .max(1);
+        let max_scroll = lines.len().saturating_sub(height);
+        let offset = state.costs_scroll.get().min(max_scroll);
+        state.costs_scroll.set(offset);
+        state.costs_scroll_max.set(max_scroll);
+        state.costs_page_height.set(height);
         popup(
             t,
             frame,
             area,
-            "costs",
-            cost_lines(t, table, &state.aliases),
+            if max_scroll > 0 {
+                "costs · ↑↓ / PgUp/PgDn scroll · esc close"
+            } else {
+                "costs"
+            },
+            lines.into_iter().skip(offset).take(height).collect(),
         );
     }
 }
@@ -1158,9 +1177,14 @@ fn usage_table(
     aliases: &ModelAliases,
 ) -> Table<'static> {
     let roomy = width >= USAGE_ROOMY;
-    let mut names = vec!["model", "reqs", "prompt", "cached", "hit", "output"];
+    let show_hit = width >= 84;
+    let mut names = vec!["model", "reqs", "prompt", "cached", "written"];
+    if show_hit {
+        names.push("hit");
+    }
+    names.push("output");
     if roomy {
-        names.extend(["in$", "cache$", "out$"]);
+        names.extend(["in$", "read$", "write$", "out$"]);
     }
     names.push("total$");
     // Every heading but the first sits over a right-aligned column, so it is
@@ -1172,13 +1196,17 @@ fn usage_table(
     let mut rows: Vec<Row> = table
         .rows
         .iter()
-        .map(|model| usage_row(t, model, roomy, false, aliases))
+        .map(|model| usage_row(t, model, roomy, show_hit, false, aliases))
         .collect();
-    rows.push(usage_row(t, &table.total, roomy, true, aliases));
+    rows.push(usage_row(t, &table.total, roomy, show_hit, true, aliases));
 
-    let mut numbers: Vec<u16> = vec![5, 9, 9, 6, 9];
+    let mut numbers: Vec<u16> = vec![5, 9, 9, 7];
+    if show_hit {
+        numbers.push(6);
+    }
+    numbers.push(9);
     if roomy {
-        numbers.extend([9, 9, 9]);
+        numbers.extend([9, 9, 9, 9]);
     }
     numbers.push(9);
     // One space between every pair of columns, the label's included.
@@ -1215,81 +1243,88 @@ fn usage_ranges(state: &State) -> Line<'static> {
     Line::from(spans)
 }
 
-/// The money behind the `$` column, split into the three sources it came from:
-/// the prompt tokens that were not cached, the cached tokens that were served
-/// from prefix cache, and the output tokens the engine generated. Prices are
-/// not repeated here — the point is what the window actually cost, not what
-/// rate produced the number.
-///
-/// A model the price table does not name is shown as dashes; its tokens are
-/// already counted in the main table's totals, but its money cannot be summed.
-/// What the costs popup leaves its label column: the popup's widest inner
-/// line, less the margin and the four money columns.
-const COST_LABEL_MAX: u16 = 70 - 1 - 41;
-
-fn cost_lines(t: &Theme, table: &spend::Table, aliases: &ModelAliases) -> Vec<Line<'static>> {
-    let width = label_width(table, COST_LABEL_MAX, aliases) as usize;
+/// Input, cache reads, cache writes and output costs, followed by the
+/// reported lifetime components. Unpriced models keep their token counts.
+fn cost_lines(
+    t: &Theme,
+    table: &spend::Table,
+    aliases: &ModelAliases,
+    room: u16,
+) -> Vec<Line<'static>> {
+    let width = label_width(table, room.saturating_sub(47), aliases) as usize;
     let mut lines = vec![Line::from(Span::styled(
         " cost by source",
         Style::default().fg(t.accent),
     ))];
-    lines.push(Line::from(vec![
-        Span::styled(format!(" {:<width$}", "model"), Style::default().fg(t.dim)),
-        Span::styled(
-            format!(
-                "{:>10}{:>10}{:>10}{:>11}",
-                "prompt", "cached", "output", "total$"
-            ),
-            Style::default().fg(t.dim),
+    lines.push(Line::from(Span::styled(
+        format!(
+            " {:<width$}{:>9}{:>9}{:>9}{:>9}{:>10}",
+            "model", "input", "read", "write", "output", "total$"
         ),
-    ]));
-    for row in &table.rows {
-        let label = spend::label(display(aliases, &row.model), row.tier.as_deref());
-        let (prompt, cached, output, total) = match row.charge {
-            Some(c) => (
-                dollars(c.input),
-                dollars(c.cache_read),
-                dollars(c.output),
-                Some(dollars(c.total())),
-            ),
-            None => ("-".to_string(), "-".to_string(), "-".to_string(), None),
+        Style::default().fg(t.dim),
+    )));
+    for (row, total) in table
+        .rows
+        .iter()
+        .map(|r| (r, false))
+        .chain(std::iter::once((&table.total, true)))
+    {
+        let label = if total {
+            "total".to_string()
+        } else {
+            spend::label(display(aliases, &row.model), row.tier.as_deref())
         };
-        let priced = total.is_some();
+        let money = |part: fn(spend::Charge) -> f64| {
+            row.charge
+                .map(|c| dollars(part(c)))
+                .unwrap_or_else(|| "-".into())
+        };
         lines.push(Line::from(vec![
             Span::styled(
                 format!(" {label:<width$.width$}"),
-                Style::default().fg(if priced { t.model } else { t.dim }),
-            ),
-            Span::styled(
-                format!("{:>10}{:>10}{:>10}", prompt, cached, output),
-                Style::default().fg(if priced { t.good } else { t.dim }),
-            ),
-            Span::styled(
-                format!("{:>11}", total.as_deref().unwrap_or("-")),
-                Style::default().fg(if priced { t.good } else { t.dim }),
-            ),
-        ]));
-    }
-    if let Some(sum) = table.total.charge {
-        lines.push(Line::from(vec![
-            Span::styled(
-                format!(" {:<width$}", "total"),
-                Style::default().fg(t.good).add_modifier(Modifier::BOLD),
+                Style::default().fg(if total { t.good } else { t.model }),
             ),
             Span::styled(
                 format!(
-                    "{:>10}{:>10}{:>10}",
-                    dollars(sum.input),
-                    dollars(sum.cache_read),
-                    dollars(sum.output)
+                    "{:>9}{:>9}{:>9}{:>9}{:>10}",
+                    money(|c| c.input),
+                    money(|c| c.cache_read),
+                    money(|c| c.cache_write),
+                    money(|c| c.output),
+                    money(|c| c.total())
                 ),
-                Style::default().fg(t.good),
-            ),
-            Span::styled(
-                format!("{:>11}", dollars(sum.total())),
-                Style::default().fg(t.good).add_modifier(Modifier::BOLD),
+                Style::default().fg(if row.charge.is_some() { t.good } else { t.dim }),
             ),
         ]));
+        let c = row.charge.unwrap_or_default();
+        let periods = [
+            ("5m", row.cache_write_5m, c.cache_write_5m),
+            ("1h", row.cache_write_1h, c.cache_write_1h),
+            ("30m", row.cache_write_30m, c.cache_write_30m),
+            ("12h", row.cache_write_12h, c.cache_write_12h),
+        ];
+        let known: u64 = periods.iter().map(|(_, n, _)| n).sum();
+        let known_cost: f64 = periods.iter().map(|(_, _, cost)| cost).sum();
+        for (ttl, tokens, cost) in periods.into_iter().chain(std::iter::once((
+            "unknown TTL",
+            row.cache_write.saturating_sub(known),
+            (c.cache_write - known_cost).max(0.0),
+        ))) {
+            if tokens > 0 {
+                lines.push(Line::from(Span::styled(
+                    format!(
+                        "   write {ttl}: {} tokens · {}",
+                        human_count(tokens),
+                        if row.charge.is_some() {
+                            dollars(cost)
+                        } else {
+                            "unpriced".into()
+                        }
+                    ),
+                    Style::default().fg(t.dim),
+                )));
+            }
+        }
     }
     lines.push(Line::from(Span::styled(
         " p / esc close",
@@ -1304,6 +1339,7 @@ fn usage_row(
     t: &Theme,
     model: &spend::Row,
     roomy: bool,
+    show_hit: bool,
     total: bool,
     aliases: &ModelAliases,
 ) -> Row<'static> {
@@ -1328,13 +1364,23 @@ fn usage_row(
                 Span::raw(human_count(model.cached))
             },
         ),
-        number(hit_span(t, model.hit_rate())),
-        number(human_count(model.completion)),
+        number(
+            if model.write_unreported == model.requests && model.requests > 0 {
+                "-".to_string()
+            } else {
+                human_count(model.cache_write)
+            },
+        ),
     ];
+    if show_hit {
+        cells.push(number(hit_span(t, model.hit_rate())));
+    }
+    cells.push(number(human_count(model.completion)));
     if roomy {
         cells.extend([
             number(part(charge.map(|charge| charge.input))),
             number(part(charge.map(|charge| charge.cache_read))),
+            number(part(charge.map(|charge| charge.cache_write))),
             number(part(charge.map(|charge| charge.output))),
         ]);
     }
@@ -1710,6 +1756,12 @@ fn request_line(
                         Style::default().fg(t.dim),
                     ));
                 }
+                if let Some(written) = usage.cache_write {
+                    line.glue(Span::styled(
+                        format!("({} written)", human_count(written)),
+                        Style::default().fg(t.dim),
+                    ));
+                }
                 line.glue(Span::styled("→", Style::default().fg(t.dim)));
                 line.word(Span::styled(
                     human_count(usage.completion),
@@ -1928,7 +1980,8 @@ fn theme_lines(state: &State) -> Vec<Line<'static>> {
 // -------------------------------------------------------------------- popups
 
 fn popup(t: &Theme, frame: &mut Frame, area: Rect, title: &str, lines: Vec<Line<'static>>) {
-    let width = area.width.clamp(MIN_WIDTH, 72.max(MIN_WIDTH));
+    let limit = if title.starts_with("costs") { 92 } else { 72 };
+    let width = area.width.clamp(MIN_WIDTH, limit.max(MIN_WIDTH));
     let height = (lines.len() as u16 + 2).min(area.height);
     let box_area = Rect {
         x: area.x + (area.width - width) / 2,
@@ -2046,6 +2099,14 @@ fn detail_lines(t: &Theme, record: &RequestRecord, aliases: &ModelAliases) -> Ve
                         .unwrap_or_default(),
                 ),
             },
+        ),
+        field(
+            t,
+            "cache writes",
+            record
+                .usage
+                .and_then(crate::request_log::write_tokens)
+                .unwrap_or_else(|| "not reported".into()),
         ),
         field(
             t,
@@ -2645,6 +2706,11 @@ mod tests {
             cached: Some(18_200),
             completion: 891,
             reasoning: Some(742),
+            cache_write: None,
+            cache_write_5m: None,
+            cache_write_1h: None,
+            cache_write_30m: None,
+            cache_write_12h: None,
         });
         let line = text(&request_line(
             &TERMINAL,
@@ -2666,6 +2732,11 @@ mod tests {
             cached: None,
             completion: 891,
             reasoning: None,
+            cache_write: None,
+            cache_write_5m: None,
+            cache_write_1h: None,
+            cache_write_30m: None,
+            cache_write_12h: None,
         });
         let line = text(&request_line(
             &TERMINAL,
@@ -3099,7 +3170,9 @@ mod tests {
                 input: 2.3783,
                 cache_read: 18.8950,
                 output: 4.0654,
+                ..Default::default()
             }),
+            ..Default::default()
         };
         let flash = spend::Row {
             model: "model-alpha".to_string(),
@@ -3115,7 +3188,9 @@ mod tests {
                 input: 3.8594,
                 cache_read: 0.0,
                 output: 0.0721,
+                ..Default::default()
             }),
+            ..Default::default()
         };
         let mut state = State::new();
         state.usage_open = true;
@@ -3137,7 +3212,9 @@ mod tests {
                     input: 6.2377,
                     cache_read: 18.8950,
                     output: 4.1375,
+                    ..Default::default()
                 }),
+                ..Default::default()
             },
             rows: vec![priced_model, flash],
             unpriced: 0,
@@ -3193,7 +3270,7 @@ mod tests {
     fn the_usage_screen_shows_the_day_by_model() {
         let state = usage_state();
 
-        let out = screen(120, 20, &state);
+        let out = screen(140, 20, &state);
         assert!(out.contains("usage — "), "{out}");
         assert!(out.contains("model-epsilon"), "{out}");
         // The window selector sits above the table, with the one in force
@@ -3215,13 +3292,13 @@ mod tests {
         assert!(out.contains("$29.27"), "the day's total:\n{out}");
         // The column that matters is present with the money split out beside
         // it, and the row that could not report a cache says so.
-        assert!(out.contains("cache$"), "{out}");
+        assert!(out.contains("read$"), "{out}");
         assert!(out.contains("model-alpha"), "{out}");
         assert!(out.contains("n/a"), "an unknown rate is not 0.0%:\n{out}");
 
         assert!(out.contains("111 request(s)"), "{out}");
         assert!(
-            out.contains("model-alpha: no cache detail reported"),
+            out.contains("model-alpha: no cache read detail reported"),
             "{out}"
         );
         assert!(out.contains("they are not a bill"), "{out}");
@@ -3251,7 +3328,7 @@ mod tests {
         assert!(compact.contains("model-epsilon"), "{compact}");
         assert!(compact.contains("$25.34"), "{compact}");
         assert!(compact.contains("total$"), "{compact}");
-        assert!(!compact.contains("cache$"), "{compact}");
+        assert!(!compact.contains("read$"), "{compact}");
 
         // Below that there is no room for the columns, so it says so rather
         // than drawing half a table.
@@ -3277,6 +3354,7 @@ mod tests {
             &TERMINAL,
             state.usage.as_ref().unwrap(),
             &ModelAliases::new(),
+            90,
         )
         .iter()
         .map(text)
@@ -3286,6 +3364,33 @@ mod tests {
             line.chars().count()
         };
         assert_eq!(column(label), column("model-epsilon"), "{lines:#?}");
+    }
+
+    #[test]
+    fn costs_scroll_to_lifetime_details_and_total() {
+        let mut state = usage_state();
+        let table = state.usage.as_mut().unwrap();
+        let mut model = table.rows[0].clone();
+        model.cache_write = 500;
+        model.cache_write_5m = 500;
+        table.rows = (0..40)
+            .map(|i| {
+                let mut row = model.clone();
+                row.model = format!("cost-model-{i:02}");
+                row
+            })
+            .collect();
+        state.usage_rates = true;
+        let top = screen(120, 12, &state);
+        assert!(top.contains("cost-model-00"), "{top}");
+        assert!(state.costs_scroll_max.get() > 0);
+        state.scroll_costs(isize::MAX);
+        let bottom = screen(120, 12, &state);
+        assert!(bottom.contains("cost-model-39"), "{bottom}");
+        assert!(bottom.contains("write 5m"), "{bottom}");
+        assert!(bottom.contains("total"), "{bottom}");
+        screen(120, 120, &state);
+        assert_eq!(state.costs_scroll.get(), 0);
     }
 
     #[test]
@@ -3311,6 +3416,7 @@ mod tests {
             &TERMINAL,
             state.usage.as_ref().unwrap(),
             &ModelAliases::new(),
+            90,
         )
         .iter()
         .map(text)
@@ -3455,6 +3561,11 @@ mod tests {
             cached: Some(18_200),
             completion: 891,
             reasoning: Some(742),
+            cache_write: None,
+            cache_write_5m: None,
+            cache_write_1h: None,
+            cache_write_30m: None,
+            cache_write_12h: None,
         });
         assert_eq!(
             text(&request_line(

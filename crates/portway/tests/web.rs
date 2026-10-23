@@ -584,14 +584,16 @@ async fn record_at(port: u16, body: &str, path: &str) {
 /// already recorded, with no restart to drop the requests in flight.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_reload_reprices_the_running_console() {
-    let upstream = upstream(Health::Json(vec!["zstd"]), Reply::UsageJson).await;
+    let upstream = upstream(Health::Json(vec!["zstd"]), Reply::CacheWriteJson).await;
     let dir = data_dir("reprice");
     let port = free_port();
     let config = dir.join("test.toml");
     let write = |price: Option<(f64, f64, f64)>| {
         let table = match price {
             Some((input, output, cache_read)) => format!(
-                "\n[prices.\"model-web\"]\ninput = {input}\noutput = {output}\ncache_read = {cache_read}\n"
+                "\n[prices.\"model-web\"]\ninput = {input}\noutput = {output}\ncache_read = {cache_read}\ncache_write = {write_5m}\ncache_write_5m = {write_5m}\ncache_write_1h = {write_1h}\n",
+                write_5m = input * 1.25,
+                write_1h = input * 2.0
             ),
             None => String::new(),
         };
@@ -684,6 +686,32 @@ async fn a_reload_reprices_the_running_console() {
         (after - 2.0 * before).abs() < 1e-12,
         "{before} should have doubled, not become {after}"
     );
+    let json = page.get("/api/usage").await.json();
+    assert_eq!(json["rows"][0]["cache_write"], 800);
+    assert_eq!(json["rows"][0]["cache_write_1h"], 300);
+    assert!((json["rows"][0]["charge"]["cache_write"].as_f64().unwrap() - 0.00245).abs() < 1e-12);
+    #[cfg(feature = "tui")]
+    {
+        let remote: portway::remote::wire::UsageReply =
+            serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(remote.table.total.cache_write, 800);
+        assert!((remote.table.cost().unwrap() - after).abs() < 1e-12);
+        let mut old = json;
+        for row in old["rows"].as_array_mut().unwrap() {
+            row.as_object_mut()
+                .unwrap()
+                .retain(|key, _| !key.starts_with("cache_write") && !key.starts_with("write_"));
+        }
+        old["total"]
+            .as_object_mut()
+            .unwrap()
+            .retain(|key, _| !key.starts_with("cache_write") && !key.starts_with("write_"));
+        let old_remote: portway::remote::wire::UsageReply = serde_json::from_value(old).unwrap();
+        assert_eq!(
+            old_remote.table.total.write_unreported,
+            old_remote.table.total.requests
+        );
+    }
     let log = recorded_text(&dir);
     assert_eq!(
         log.matches("configuration reloaded (1 route(s))").count(),

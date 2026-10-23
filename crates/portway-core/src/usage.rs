@@ -15,7 +15,8 @@
 //!
 //! The object is read as it streams past, keeping only what the counts can
 //! be: its own fields and the `…_details` objects beside them. Anything
-//! nested deeper is skipped, its brackets kept so what is held still parses.
+//! nested deeper is skipped except the cache-write lifetime breakdown; its
+//! brackets are kept so what is held still parses.
 //! That is what makes the size of the object irrelevant: the ChatGPT backend
 //! attributes the turn to every item of the conversation inside its `usage`,
 //! about 250 bytes an item, so a long Codex session reports counts in an
@@ -24,7 +25,7 @@
 use serde_json::{Map, Value};
 
 /// What one answer cost, in the numbers every engine here agrees on.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct Usage {
     /// `prompt_tokens`: the context this turn's prefill read, cache included.
     /// For Anthropic, `input_tokens` plus the cache read and cache write
@@ -33,6 +34,13 @@ pub struct Usage {
     /// `prompt_tokens_details.cached_tokens`: the part a prefix cache served.
     /// `None` when the engine reported counts without that detail.
     pub cached: Option<u64>,
+    /// Tokens written to cache; None means the provider did not report them.
+    pub cache_write: Option<u64>,
+    pub cache_write_5m: Option<u64>,
+    pub cache_write_1h: Option<u64>,
+    pub cache_write_30m: Option<u64>,
+    pub cache_write_12h: Option<u64>,
+
     /// `completion_tokens`: what the decode generated.
     pub completion: u64,
     /// `completion_tokens_details.reasoning_tokens` (the Responses API's
@@ -40,6 +48,27 @@ pub struct Usage {
     /// thinking inside `completion`, which on these models is most of it and
     /// is not part of the answer. `None` when the engine did not break it out.
     pub reasoning: Option<u64>,
+}
+
+impl Usage {
+    /// Bad provider partitions must not charge tokens twice. Preserve the
+    /// total input/output and leave the inconsistent cache counts unknown.
+    fn normalized(mut self) -> Self {
+        if self.cached.is_some_and(|n| n > self.prompt) {
+            self.cached = None;
+        }
+        if self
+            .cache_write
+            .is_some_and(|n| n > self.prompt - self.cached.unwrap_or(0))
+        {
+            self.cache_write = None;
+            self.cache_write_5m = None;
+            self.cache_write_1h = None;
+            self.cache_write_30m = None;
+            self.cache_write_12h = None;
+        }
+        self
+    }
 }
 
 /// The field the counts live under, quotes included.
@@ -73,7 +102,8 @@ pub struct Scanner {
 struct InputCounts {
     input: Option<u64>,
     cache_read: Option<u64>,
-    cache_creation: Option<u64>,
+    anthropic: bool,
+    writes: Writes,
     cached: Option<u64>,
     output: Option<u64>,
     reasoning: Option<u64>,
@@ -104,6 +134,8 @@ struct Candidate {
     depth: usize,
     in_string: bool,
     escaped: bool,
+    input_details: bool,
+    write_details: bool,
 }
 
 enum Step {
@@ -120,7 +152,17 @@ impl Candidate {
             depth: 1,
             in_string: false,
             escaped: false,
+            input_details: false,
+            write_details: false,
         }
+    }
+
+    fn ends_with_key(&self, key: &str) -> bool {
+        let prefix = String::from_utf8_lossy(&self.kept);
+        prefix
+            .trim_end()
+            .strip_suffix(':')
+            .is_some_and(|prefix| prefix.trim_end().ends_with(&format!("\"{key}\"")))
     }
 
     fn take(&mut self, byte: u8) -> Step {
@@ -138,7 +180,17 @@ impl Candidate {
         } else {
             match byte {
                 b'"' => self.in_string = true,
-                b'{' | b'[' => self.depth += 1,
+                b'{' | b'[' => {
+                    if self.depth == 1 {
+                        self.input_details = self.ends_with_key("input_tokens_details")
+                            || self.ends_with_key("prompt_tokens_details");
+                    }
+                    if self.depth == 2 {
+                        self.write_details =
+                            self.input_details && self.ends_with_key("cache_write_tokens_details");
+                    }
+                    self.depth += 1;
+                }
                 b'}' | b']' => {
                     self.depth -= 1;
                     at = self.depth;
@@ -146,7 +198,7 @@ impl Candidate {
                 _ => {}
             }
         }
-        if at <= KEEP_DEPTH {
+        if at <= KEEP_DEPTH || (self.write_details && at == 3) {
             self.kept.push(byte);
         }
         if self.depth == 0 {
@@ -214,7 +266,7 @@ impl Scanner {
                 Step::More => {}
                 Step::Closed => {
                     if let Some(usage) = read(&candidate.kept, &mut self.input_counts) {
-                        self.last = Some(usage);
+                        self.last = Some(usage.normalized());
                     }
                     self.state = State::Search(0);
                 }
@@ -237,6 +289,9 @@ fn read(object: &[u8], input: &mut InputCounts) -> Option<Usage> {
             "output_tokens",
             "cache_read_input_tokens",
             "cache_creation_input_tokens",
+            "cache_creation",
+            "input_tokens_details",
+            "cache_write_tokens",
         ]
         .iter()
         .any(|key| map.contains_key(*key))
@@ -248,7 +303,10 @@ fn read(object: &[u8], input: &mut InputCounts) -> Option<Usage> {
         input.input = count("input_tokens").or(input.input);
         input.output = count("output_tokens").or(input.output);
         input.cache_read = count("cache_read_input_tokens").or(input.cache_read);
-        input.cache_creation = count("cache_creation_input_tokens").or(input.cache_creation);
+        input.anthropic |= map.contains_key("cache_creation_input_tokens")
+            || map.contains_key("cache_read_input_tokens")
+            || map.contains_key("cache_creation");
+        input.writes.update(&map);
         input.cached = nested(&map, "input_tokens_details", "cached_tokens")
             .or_else(|| count("cached_tokens"))
             .or(input.cached);
@@ -261,10 +319,15 @@ fn read(object: &[u8], input: &mut InputCounts) -> Option<Usage> {
             prompt: input
                 .input?
                 .checked_add(input.cache_read.unwrap_or(0))?
-                .checked_add(input.cache_creation.unwrap_or(0))?,
+                .checked_add(if input.anthropic {
+                    input.writes.usage().cache_write.unwrap_or(0)
+                } else {
+                    0
+                })?,
             cached: input.cached.or(input.cache_read),
             completion: input.output?,
             reasoning: input.reasoning,
+            ..input.writes.usage()
         });
     }
     // Chat Completions supplies complete objects. Do not merge its fields
@@ -272,6 +335,8 @@ fn read(object: &[u8], input: &mut InputCounts) -> Option<Usage> {
     *input = InputCounts::default();
     let prompt = count("prompt_tokens")?;
     let completion = count("completion_tokens")?;
+    let mut writes = Writes::default();
+    writes.update(&map);
     Some(Usage {
         prompt,
         cached: nested(&map, "prompt_tokens_details", "cached_tokens")
@@ -285,7 +350,65 @@ fn read(object: &[u8], input: &mut InputCounts) -> Option<Usage> {
         reasoning: nested(&map, "completion_tokens_details", "reasoning_tokens")
             .or_else(|| nested(&map, "output_tokens_details", "reasoning_tokens"))
             .or_else(|| count("reasoning_tokens")),
+        ..writes.usage()
     })
+}
+
+/// Cumulative provider counts. Duration fields are disjoint parts of total.
+#[derive(Default)]
+struct Writes {
+    total: Option<u64>,
+    periods: [Option<u64>; 4],
+}
+impl Writes {
+    fn update(&mut self, map: &Map<String, Value>) {
+        let details = map
+            .get("input_tokens_details")
+            .or_else(|| map.get("prompt_tokens_details"));
+        let total = map
+            .get("cache_creation_input_tokens")
+            .or_else(|| details.and_then(|v| v.get("cache_write_tokens")))
+            .or_else(|| map.get("cache_write_tokens"))
+            .and_then(Value::as_u64);
+        let creation = map.get("cache_creation");
+        let ttl = details.and_then(|v| v.get("cache_write_tokens_details"));
+        let periods = [
+            creation.and_then(|v| v.get("ephemeral_5m_input_tokens")),
+            creation.and_then(|v| v.get("ephemeral_1h_input_tokens")),
+            ttl.and_then(|v| v.get("ttl_30m_tokens")),
+            ttl.and_then(|v| v.get("ttl_12h_tokens")),
+        ]
+        .map(|v| v.and_then(Value::as_u64));
+        self.total = total.or(self.total);
+        for (old, new) in self.periods.iter_mut().zip(periods) {
+            *old = new.or(*old);
+        }
+    }
+
+    fn usage(&self) -> Usage {
+        let mut periods = self.periods;
+        let sum = periods
+            .iter()
+            .flatten()
+            .try_fold(0u64, |a, b| a.checked_add(*b));
+        let complete = (periods[0].is_some() && periods[1].is_some())
+            || (periods[2].is_some() && periods[3].is_some());
+        let total = self.total.or_else(|| complete.then_some(sum).flatten());
+        if total.is_none()
+            || sum.is_none()
+            || total.is_some_and(|t| sum.is_some_and(|s| s > t || (complete && s != t)))
+        {
+            periods = [None; 4];
+        }
+        Usage {
+            cache_write: total,
+            cache_write_5m: periods[0],
+            cache_write_1h: periods[1],
+            cache_write_30m: periods[2],
+            cache_write_12h: periods[3],
+            ..Usage::default()
+        }
+    }
 }
 
 /// One number inside a `…_details` object.
@@ -318,6 +441,11 @@ mod tests {
                 cached: Some(18200),
                 completion: 891,
                 reasoning: Some(742),
+                cache_write: None,
+                cache_write_5m: None,
+                cache_write_1h: None,
+                cache_write_30m: None,
+                cache_write_12h: None,
             })
         );
     }
@@ -336,6 +464,11 @@ mod tests {
                     cached: Some(18200),
                     completion: 891,
                     reasoning: Some(742),
+                    cache_write: None,
+                    cache_write_5m: None,
+                    cache_write_1h: None,
+                    cache_write_30m: None,
+                    cache_write_12h: None,
                 }),
                 "cut at {cut}"
             );
@@ -359,6 +492,11 @@ mod tests {
                 cached: None,
                 completion: 2,
                 reasoning: Some(1),
+                cache_write: None,
+                cache_write_5m: None,
+                cache_write_1h: None,
+                cache_write_30m: None,
+                cache_write_12h: None,
             })
         );
     }
@@ -416,6 +554,11 @@ mod tests {
                 cached: Some(17_000),
                 completion: 431,
                 reasoning: None,
+                cache_write: Some(800),
+                cache_write_5m: None,
+                cache_write_1h: None,
+                cache_write_30m: None,
+                cache_write_12h: None,
             })
         );
 
@@ -462,7 +605,12 @@ data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"outpu
                 prompt: 25,
                 cached: Some(20),
                 completion: 0,
-                reasoning: None
+                reasoning: None,
+                cache_write: Some(5),
+                cache_write_5m: None,
+                cache_write_1h: None,
+                cache_write_30m: None,
+                cache_write_12h: None,
             })
         );
     }
@@ -505,6 +653,11 @@ data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"outpu
                     cached: Some(203_392),
                     completion: 737,
                     reasoning: Some(516),
+                    cache_write: Some(0),
+                    cache_write_5m: None,
+                    cache_write_1h: None,
+                    cache_write_30m: None,
+                    cache_write_12h: None,
                 }),
                 "chunks of {size}"
             );
@@ -521,7 +674,121 @@ data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"outpu
                 reasoning: None,
                 cached: None,
                 completion: 0,
+                cache_write: None,
+                cache_write_5m: None,
+                cache_write_1h: None,
+                cache_write_30m: None,
+                cache_write_12h: None,
             })
         );
+    }
+
+    #[test]
+    fn lifetime_writes_survive_chunk_boundaries_and_cumulative_updates() {
+        let cases: &[(&[u8], Usage)] = &[
+            (br#"{"usage":{"input_tokens":12,"cache_read_input_tokens":17000,"cache_creation_input_tokens":800,"cache_creation":{"ephemeral_5m_input_tokens":500,"ephemeral_1h_input_tokens":300},"output_tokens":431}}"#,
+                Usage { prompt: 17812, cached: Some(17000), completion: 431, cache_write: Some(800), cache_write_5m: Some(500), cache_write_1h: Some(300), ..Usage::default() }),
+            (br#"{"usage":{"input_tokens":12000,"input_tokens_details":{"cached_tokens":4000,"cache_write_tokens":7000,"cache_write_tokens_details":{"ttl_30m_tokens":3000,"ttl_12h_tokens":4000}},"output_tokens":20}}"#,
+                Usage { prompt: 12000, cached: Some(4000), completion: 20, cache_write: Some(7000), cache_write_30m: Some(3000), cache_write_12h: Some(4000), ..Usage::default() }),
+            (br#"{"usage":{"prompt_tokens":12000,"prompt_tokens_details":{"cached_tokens":4000,"cache_write_tokens":7000},"completion_tokens":20}}"#,
+                Usage { prompt: 12000, cached: Some(4000), completion: 20, cache_write: Some(7000), ..Usage::default() }),
+        ];
+        for (bytes, expected) in cases {
+            for cut in 0..bytes.len() {
+                assert_eq!(
+                    scan_all(&[&bytes[..cut], &bytes[cut..]]),
+                    Some(*expected),
+                    "cut {cut}"
+                );
+            }
+        }
+        let mut scanner = Scanner::default();
+        scanner.push(cases[0].0);
+        scanner.push(br#"data: {"usage":{"output_tokens":500}}"#);
+        assert_eq!(
+            scanner.usage(),
+            Some(Usage {
+                completion: 500,
+                ..cases[0].1
+            })
+        );
+        scanner.push(br#"data: {"usage":{"cache_creation_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0},"output_tokens":0}}"#);
+        let usage = scanner.usage().unwrap();
+        assert_eq!(
+            (
+                usage.prompt,
+                usage.cache_write,
+                usage.cache_write_5m,
+                usage.cache_write_1h,
+                usage.completion
+            ),
+            (17012, Some(0), Some(0), Some(0), 0)
+        );
+    }
+
+    #[test]
+    fn a_details_only_update_preserves_cumulative_counts() {
+        let mut scanner = Scanner::default();
+        scanner.push(br#"{"usage":{"input_tokens":100,"output_tokens":10}}"#);
+        scanner.push(br#"{"usage":{"input_tokens_details":{"cache_write_tokens":40,"cache_write_tokens_details":{"ttl_30m_tokens":30,"ttl_12h_tokens":10}}}}"#);
+        let usage = scanner.usage().unwrap();
+        assert_eq!(usage.prompt, 100);
+        assert_eq!(usage.completion, 10);
+        assert_eq!(usage.cache_write, Some(40));
+        assert_eq!(usage.cache_write_30m, Some(30));
+        assert_eq!(usage.cache_write_12h, Some(10));
+    }
+
+    #[test]
+    fn invalid_partitions_are_unknown_instead_of_double_billed() {
+        let scan = |s: &str| scan_all(&[s.as_bytes()]).unwrap();
+        let inconsistent = scan(
+            r#"{"usage":{"input_tokens":100,"input_tokens_details":{"cache_write_tokens":80,"cache_write_tokens_details":{"ttl_30m_tokens":50,"ttl_12h_tokens":50}},"output_tokens":1}}"#,
+        );
+        assert_eq!(inconsistent.cache_write, Some(80));
+        assert_eq!(
+            (inconsistent.cache_write_30m, inconsistent.cache_write_12h),
+            (None, None)
+        );
+        let too_many = scan(
+            r#"{"usage":{"input_tokens":100,"input_tokens_details":{"cached_tokens":50,"cache_write_tokens":80},"output_tokens":1}}"#,
+        );
+        assert_eq!(too_many.cache_write, None);
+        let incomplete = scan(
+            r#"{"usage":{"input_tokens":100,"input_tokens_details":{"cache_write_tokens_details":{"ttl_30m_tokens":50}},"output_tokens":1}}"#,
+        );
+        assert_eq!(
+            (incomplete.cache_write, incomplete.cache_write_30m),
+            (None, None)
+        );
+        let derived = scan(
+            r#"{"usage":{"input_tokens":10,"cache_creation":{"ephemeral_5m_input_tokens":50,"ephemeral_1h_input_tokens":0},"output_tokens":1}}"#,
+        );
+        assert_eq!((derived.prompt, derived.cache_write), (60, Some(50)));
+        let overflow = scan(
+            r#"{"usage":{"input_tokens":100,"input_tokens_details":{"cache_write_tokens":80,"cache_write_tokens_details":{"ttl_30m_tokens":18446744073709551615,"ttl_12h_tokens":1}},"output_tokens":1}}"#,
+        );
+        assert_eq!(
+            (overflow.cache_write_30m, overflow.cache_write_12h),
+            (None, None)
+        );
+    }
+
+    #[test]
+    fn deep_attribution_does_not_hide_the_lifetime_breakdown() {
+        let attribution = (0..2000)
+            .map(|i| format!(r#""item{i}":{{"tokens":123}}"#))
+            .collect::<Vec<_>>()
+            .join(",");
+        let answer = format!(
+            r#"{{"usage":{{"attribution":{{"items":{{{attribution}}}}},"input_tokens":100,"input_tokens_details":{{"cache_write_tokens":80,"cache_write_tokens_details":{{"ttl_30m_tokens":30,"ttl_12h_tokens":50}}}},"output_tokens":1}}}}"#
+        );
+        for size in [1, 7, 4096, answer.len()] {
+            let usage = scan_all(&answer.as_bytes().chunks(size).collect::<Vec<_>>()).unwrap();
+            assert_eq!(
+                (usage.cache_write_30m, usage.cache_write_12h),
+                (Some(30), Some(50))
+            );
+        }
     }
 }

@@ -36,12 +36,12 @@ const QUEUE: usize = 4096;
 const POLL: Duration = Duration::from_millis(200);
 const PRUNE_EVERY: Duration = Duration::from_secs(24 * 60 * 60);
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
-const SCHEMA_VERSION: i64 = 6;
+const SCHEMA_VERSION: i64 = 7;
 
 /// `ts_unix` is the epoch second the row reached the store, not the request's
 /// own clock: the writer's clock is the one the window is measured against.
 ///
-/// The four `*_tokens` columns are what the upstream reported for this
+/// The `*_tokens` columns are what the upstream reported for this
 /// answer, and stay NULL on an answer that reported nothing — an engine that
 /// was not asked for usage, or a stream that was cut short before its last
 /// chunk. They are the only numbers here that came from the engine rather than
@@ -74,7 +74,12 @@ CREATE TABLE IF NOT EXISTS requests (
   received_agent INTEGER NOT NULL DEFAULT 0,
   upstream TEXT NOT NULL DEFAULT '',
   tier TEXT,
-  max_gap_ms REAL
+  max_gap_ms REAL,
+  cache_write_tokens INTEGER,
+  cache_write_5m_tokens INTEGER,
+  cache_write_1h_tokens INTEGER,
+  cache_write_30m_tokens INTEGER,
+  cache_write_12h_tokens INTEGER
 );
 CREATE INDEX IF NOT EXISTS requests_ts ON requests(ts_unix);
 CREATE TABLE IF NOT EXISTS logs (
@@ -128,12 +133,22 @@ const MIGRATE_V5: &str = "
 ALTER TABLE requests ADD COLUMN max_gap_ms REAL;
 ";
 
+/// v6 -> v7: cache writes and their disjoint lifetimes, unknown on older rows.
+const MIGRATE_V6: &str = "
+ALTER TABLE requests ADD COLUMN cache_write_tokens INTEGER;
+ALTER TABLE requests ADD COLUMN cache_write_5m_tokens INTEGER;
+ALTER TABLE requests ADD COLUMN cache_write_1h_tokens INTEGER;
+ALTER TABLE requests ADD COLUMN cache_write_30m_tokens INTEGER;
+ALTER TABLE requests ADD COLUMN cache_write_12h_tokens INTEGER;
+";
+
 const INSERT_REQUEST: &str = "INSERT INTO requests (
   ts_unix, model, method, path, status, dns_ms, tcp_ms, tls_ms, body_len,
   wire_len, coding, upload_ms, ttfb_ms, received, received_wire,
   upstream_encoding, download_ms, complete, prompt_tokens, cached_tokens,
-  completion_tokens, reasoning_tokens, received_agent, upstream, tier, max_gap_ms
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+  completion_tokens, reasoning_tokens, received_agent, upstream, tier, max_gap_ms,
+  cache_write_tokens, cache_write_5m_tokens, cache_write_1h_tokens, cache_write_30m_tokens, cache_write_12h_tokens
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
 const INSERT_LOG: &str = "INSERT INTO logs (ts_unix, level, message) VALUES (?, ?, ?)";
 
@@ -280,11 +295,14 @@ fn open_create(db: &Path) -> Result<Connection, String> {
             .map_err(|err| format!("{}: {err}", db.display()))?;
         let steps = match version {
             0 => SCHEMA.to_string(),
-            1 => format!("{MIGRATE_V1}{MIGRATE_V2}{MIGRATE_V3}{MIGRATE_V4}{MIGRATE_V5}"),
-            2 => format!("{MIGRATE_V2}{MIGRATE_V3}{MIGRATE_V4}{MIGRATE_V5}"),
-            3 => format!("{MIGRATE_V3}{MIGRATE_V4}{MIGRATE_V5}"),
-            4 => format!("{MIGRATE_V4}{MIGRATE_V5}"),
-            _ => MIGRATE_V5.to_string(),
+            1 => {
+                format!("{MIGRATE_V1}{MIGRATE_V2}{MIGRATE_V3}{MIGRATE_V4}{MIGRATE_V5}{MIGRATE_V6}")
+            }
+            2 => format!("{MIGRATE_V2}{MIGRATE_V3}{MIGRATE_V4}{MIGRATE_V5}{MIGRATE_V6}"),
+            3 => format!("{MIGRATE_V3}{MIGRATE_V4}{MIGRATE_V5}{MIGRATE_V6}"),
+            4 => format!("{MIGRATE_V4}{MIGRATE_V5}{MIGRATE_V6}"),
+            5 => format!("{MIGRATE_V5}{MIGRATE_V6}"),
+            _ => MIGRATE_V6.to_string(),
         };
         tx.execute_batch(&steps)
             .map_err(|err| format!("{}: {err}", db.display()))?;
@@ -365,6 +383,11 @@ pub fn has_tier_column(connection: &Connection) -> Result<bool, String> {
 pub fn has_gap_column(connection: &Connection) -> Result<bool, String> {
     const GAP_SINCE: i64 = 6;
     Ok(schema_version(connection)? >= GAP_SINCE)
+}
+
+/// Cache-write columns were added in v7. Readers never migrate an older file.
+pub fn has_write_columns(connection: &Connection) -> Result<bool, String> {
+    Ok(schema_version(connection)? >= 7)
 }
 
 /// The writer thread. Nothing here is allowed to end the process: a disk that
@@ -462,6 +485,23 @@ fn insert(tx: &Transaction<'_>, batch: &[Event]) -> rusqlite::Result<()> {
                     record.upstream,
                     record.tier,
                     ms(record.max_gap),
+                    record.usage.and_then(|u| u.cache_write).map(|n| n as i64),
+                    record
+                        .usage
+                        .and_then(|u| u.cache_write_5m)
+                        .map(|n| n as i64),
+                    record
+                        .usage
+                        .and_then(|u| u.cache_write_1h)
+                        .map(|n| n as i64),
+                    record
+                        .usage
+                        .and_then(|u| u.cache_write_30m)
+                        .map(|n| n as i64),
+                    record
+                        .usage
+                        .and_then(|u| u.cache_write_12h)
+                        .map(|n| n as i64),
                 ])?;
             }
             Event::Log { level, message, .. } => {
@@ -552,6 +592,11 @@ mod tests {
                 cached: Some(18200),
                 completion: 891,
                 reasoning: Some(742),
+                cache_write: None,
+                cache_write_5m: None,
+                cache_write_1h: None,
+                cache_write_30m: None,
+                cache_write_12h: None,
             }),
             flight: None,
         }

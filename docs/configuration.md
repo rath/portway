@@ -326,9 +326,9 @@ metadata; remote viewers of older servers show original IDs.
 | `[upstreams]` | empty | Name → upstream URL, mounted at `/<name>/` |
 | `[models]` | empty | Model name → upstream URL, chosen by the JSON `model` field |
 | `[model_aliases]` | empty | Original model ID → display name in dashboards |
-| `[prices.NAME]` | absent | Optional `input`, `output`, `cache_read` rates in USD per million tokens |
-| `[prices.NAME.tiers.TIER]` | absent | The same three rates for requests whose tier is `TIER` (their `speed`, else their `service_tier`) |
-| `long_context = { above, input, output, cache_read }` | absent | In either table: the rates for a request whose prompt passes `above` tokens |
+| `[prices.NAME]` | absent | `input`, `output`, `cache_read`, plus optional cache-write rates in USD per million tokens |
+| `[prices.NAME.tiers.TIER]` | absent | The same rates for requests whose tier is `TIER` (their `speed`, else their `service_tier`) |
+| `long_context = { above, input, output, cache_read, ... }` | absent | In either table: the rates for a request whose prompt passes `above` tokens |
 
 Prices are optional inputs to the TUI's usage and cost estimates. They do not
 change requests, charge a balance, or discover provider rates. Tables for the
@@ -345,7 +345,7 @@ output = 2.0
 cache_read = 0.1
 ```
 
-All three price fields are required together and must be finite, nonnegative
+The `input`, `output`, and `cache_read` fields are required together and must be finite, nonnegative
 numbers. Names match the **model the request named**, the string `model` of
 its JSON body, whatever route it went through: under `upstream = "…"` or a
 mount, a request for `claude-opus-5-5` is priced by `[prices."claude-opus-5-5"]`.
@@ -355,6 +355,43 @@ through (`upstream`, a mount's name, or a model's name), which is what the
 dashboards' upstream tables and filters use; the two coincide only under a
 `[models]` table. Rows recorded before this distinction carry their route name
 as the model.
+
+### Cache writes
+
+Optional `cache_write`, `cache_write_5m`, `cache_write_1h`, `cache_write_30m`,
+and `cache_write_12h` rates are supported in a model's base table, each tier,
+and each `long_context` table. They use the same finite, nonnegative USD per
+million tokens as the required rates. Explicit zero means free, not absent.
+
+```toml
+# Illustrative rates only.
+[prices."model-with-cache"]
+input = 1.0
+output = 2.0
+cache_read = 0.1
+cache_write = 1.25
+cache_write_5m = 1.25
+cache_write_1h = 2.0
+```
+
+A reported lifetime uses its own rate, then falls back to `cache_write`, then
+to `input` if both are absent. Unknown lifetimes use `cache_write`, or `input`.
+Each selected base/tier/long-context table supplies its own fallback rates;
+none are inherited from another table. Old three-rate configurations still work.
+
+The total prompt includes ordinary input, cache reads, and cache writes.
+Writes are subtracted from ordinary input before being priced, and the
+lifetime components are not added to the write total again. Missing write
+counts stay unknown, including in historical records; Portway retains the
+previous input-rate estimate rather than inventing counts. The usage view
+shows missing counts, unknown lifetimes, and requests using fallback rates.
+It cannot claim those estimates are an upper or lower bound.
+
+The usage table and cost popup show cache writes separately. Request details
+and CSV/JSON exports include available lifetime counts; `null` (or an empty
+CSV cell) means unreported, while zero is an explicitly reported zero.
+Use a current remote TUI with a current server: older viewers do not include
+cache-write costs in their reconstructed totals.
 
 ### Service tiers
 
@@ -383,7 +420,7 @@ a price. Neither is always the name the client's settings use. The base
 rates apply only to a request that names no tier; a request that names one
 the table lacks, even `default` or `auto`, stays unpriced rather than being
 billed at the base rates, and the usage screen counts it among the unpriced
-rows. Each tier needs all three rates. The usage screens add up a model once
+rows. Each tier needs those three required rates. The usage screens add up a model once
 per tier its requests named, shown as `model-b.1 · tier-a`, and the request
 detail names the tier beside the model.
 

@@ -374,3 +374,19 @@ test("aliases rename old events, search both identities, and leave exports and f
   assert.equal(lineText(eventLine(event, new Set(["model"]))), event.model);
   assert.equal(compile("changed").test(event), false);
 });
+
+test("cache writes preserve total, lifetimes and unknown values in details and exports", () => {
+  const event = request({ usage: { prompt: 17812, cached: 17000, completion: 431,
+    cache_write: 800, cache_write_5m: 500, cache_write_1h: 300, cache_write_30m: null, cache_write_12h: null } });
+  assert.equal(Object.fromEntries(detailFields(event))["cache writes"], "800 (5m: 500, 1h: 300)");
+  assert.match(lineText(eventLine(event, every)), /800 written/);
+  const lines = toCsv([event]).trim().split("\r\n");
+  const headers = lines[0].split(",");
+  const values = lines[1].split(",");
+  assert.equal(values[headers.indexOf("cache_write_tokens")], "800");
+  assert.equal(values[headers.indexOf("cache_write_1h_tokens")], "300");
+  assert.equal(values[headers.indexOf("cache_write_12h_tokens")], "");
+  assert.equal(Object.fromEntries(detailFields(request()))["cache writes"], "not reported");
+  assert.equal(Object.fromEntries(detailFields(request({ usage: { ...event.usage, cache_write: 0,
+    cache_write_5m: null, cache_write_1h: null } })))["cache writes"], "0");
+});

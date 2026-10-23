@@ -131,6 +131,30 @@ fn down(record: &RequestRecord, agent_coding: Option<&str>, download: &str) -> S
     out
 }
 
+/// Exact reported writes, including the lifetime breakdown when available.
+pub fn write_tokens(usage: Usage) -> Option<String> {
+    let total = usage.cache_write?;
+    let periods = [
+        ("5m", usage.cache_write_5m),
+        ("1h", usage.cache_write_1h),
+        ("30m", usage.cache_write_30m),
+        ("12h", usage.cache_write_12h),
+    ];
+    let known: u64 = periods.iter().filter_map(|(_, n)| *n).sum();
+    let mut parts = periods
+        .into_iter()
+        .filter_map(|(ttl, n)| n.map(|n| format!("{ttl}: {n}")))
+        .collect::<Vec<_>>();
+    if total > known {
+        parts.push(format!("unknown TTL: {}", total - known));
+    }
+    Some(if parts.is_empty() {
+        total.to_string()
+    } else {
+        format!("{total} ({})", parts.join(", "))
+    })
+}
+
 /// `tok N in (M cached) -> N out (N reasoning)`: what the engine said the turn
 /// cost. The counts are printed whole — a token count is the thing being
 /// accounted for, and 689KB-style rounding is for sizes.
@@ -139,12 +163,15 @@ fn tokens(usage: Usage) -> String {
         Some(cached) => format!(" {}", logfmt::c(DIM, &format!("({cached} cached)"))),
         None => String::new(),
     };
+    let writes = write_tokens(usage)
+        .map(|s| format!(" (cache write: {s})"))
+        .unwrap_or_default();
     let reasoning = match usage.reasoning {
         Some(reasoning) => format!(" {}", logfmt::c(DIM, &format!("({reasoning} reasoning)"))),
         None => String::new(),
     };
     format!(
-        "{} {}{cached} -> {} out{reasoning}",
+        "{} {}{cached}{writes} -> {} out{reasoning}",
         logfmt::c(DIM, "tok"),
         logfmt::c(CYAN, &format!("{} in", usage.prompt)),
         logfmt::c(CYAN, &usage.completion.to_string()),

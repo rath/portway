@@ -23,6 +23,12 @@ const FIELDS = [
   ["handshake_s", (e) => e.handshake ?? ""],
   ["prompt_tokens", (e) => e.usage?.prompt ?? ""],
   ["cached_tokens", (e) => e.usage?.cached ?? ""],
+  ["cache_write_tokens", (e) => e.usage?.cache_write ?? ""],
+  ["cache_write_5m_tokens", (e) => e.usage?.cache_write_5m ?? ""],
+  ["cache_write_1h_tokens", (e) => e.usage?.cache_write_1h ?? ""],
+  ["cache_write_30m_tokens", (e) => e.usage?.cache_write_30m ?? ""],
+  ["cache_write_12h_tokens", (e) => e.usage?.cache_write_12h ?? ""],
+
   ["completion_tokens", (e) => e.usage?.completion ?? ""],
   ["reasoning_tokens", (e) => e.usage?.reasoning ?? ""],
   ["message", (e) => e.message ?? ""],

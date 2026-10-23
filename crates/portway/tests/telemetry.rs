@@ -143,6 +143,11 @@ async fn the_counts_the_engine_reported_reach_the_record() {
         cached: Some(USAGE_CACHED),
         completion: USAGE_COMPLETION,
         reasoning: Some(USAGE_REASONING),
+        cache_write: None,
+        cache_write_5m: None,
+        cache_write_1h: None,
+        cache_write_30m: None,
+        cache_write_12h: None,
     });
     fwd.post("/v1/chat/completions", chat_body("model-alpha"))
         .await;
@@ -375,4 +380,23 @@ async fn the_gap_ends_when_the_agent_does() {
     assert!(left.complete, "{left:?}");
     // ...but the agent itself waited for none of that.
     assert!(left.max_gap.unwrap() < 0.5, "{left:?}");
+}
+
+#[tokio::test]
+async fn cache_writes_survive_buffered_and_compressed_streaming_relays() {
+    let _guard = sink().await;
+    for reply in [Reply::CacheWriteJson, Reply::CacheWriteStream] {
+        let up = upstream(Health::Json(vec!["zstd"]), reply).await;
+        let fwd = forwarder(&[("model-alpha", &up.base)], &[]).await;
+        fwd.post("/v1/messages", chat_body("model-alpha")).await;
+        let usage = next_request().await.usage.unwrap();
+        assert_eq!(
+            (usage.prompt, usage.cached, usage.cache_write),
+            (17812, Some(17000), Some(800))
+        );
+        assert_eq!(
+            (usage.cache_write_5m, usage.cache_write_1h),
+            (Some(500), Some(300))
+        );
+    }
 }

@@ -11,6 +11,12 @@ pub struct Rates {
     pub input: f64,
     pub output: f64,
     pub cache_read: f64,
+    /// Default rate for writes without a matching lifetime rate; falls back to input.
+    pub cache_write: Option<f64>,
+    pub cache_write_5m: Option<f64>,
+    pub cache_write_1h: Option<f64>,
+    pub cache_write_30m: Option<f64>,
+    pub cache_write_12h: Option<f64>,
     /// What a request that outgrows the vendor's long-context line is billed
     /// at instead, for all of its tokens.
     #[serde(default)]
@@ -25,6 +31,12 @@ pub struct LongContext {
     pub input: f64,
     pub output: f64,
     pub cache_read: f64,
+    /// Default rate for writes without a matching lifetime rate; falls back to input.
+    pub cache_write: Option<f64>,
+    pub cache_write_5m: Option<f64>,
+    pub cache_write_1h: Option<f64>,
+    pub cache_write_30m: Option<f64>,
+    pub cache_write_12h: Option<f64>,
 }
 impl LongContext {
     /// The rates themselves, with no further line of their own.
@@ -33,6 +45,11 @@ impl LongContext {
             input: self.input,
             output: self.output,
             cache_read: self.cache_read,
+            cache_write: self.cache_write,
+            cache_write_5m: self.cache_write_5m,
+            cache_write_1h: self.cache_write_1h,
+            cache_write_30m: self.cache_write_30m,
+            cache_write_12h: self.cache_write_12h,
             long_context: None,
         }
     }
@@ -45,6 +62,12 @@ pub struct Price {
     pub input: f64,
     pub output: f64,
     pub cache_read: f64,
+    /// Default rate for writes without a matching lifetime rate; falls back to input.
+    pub cache_write: Option<f64>,
+    pub cache_write_5m: Option<f64>,
+    pub cache_write_1h: Option<f64>,
+    pub cache_write_30m: Option<f64>,
+    pub cache_write_12h: Option<f64>,
     #[serde(default)]
     pub long_context: Option<LongContext>,
     /// Keyed by the tier exactly as requests send it: their `speed`, or
@@ -63,6 +86,11 @@ impl Price {
                 input: self.input,
                 output: self.output,
                 cache_read: self.cache_read,
+                cache_write: self.cache_write,
+                cache_write_5m: self.cache_write_5m,
+                cache_write_1h: self.cache_write_1h,
+                cache_write_30m: self.cache_write_30m,
+                cache_write_12h: self.cache_write_12h,
                 long_context: self.long_context,
             }),
             Some(tier) => self.tiers.get(tier).copied(),
@@ -218,8 +246,19 @@ impl Config {
             .flatten();
         for rates in rates {
             if [rates.input, rates.output, rates.cache_read]
-                .iter()
-                .any(|v| !v.is_finite() || *v < 0.0)
+                .into_iter()
+                .chain(
+                    [
+                        rates.cache_write,
+                        rates.cache_write_5m,
+                        rates.cache_write_1h,
+                        rates.cache_write_30m,
+                        rates.cache_write_12h,
+                    ]
+                    .into_iter()
+                    .flatten(),
+                )
+                .any(|v| !v.is_finite() || v < 0.0)
             {
                 return Err("prices must be finite nonnegative USD per million tokens".into());
             }
@@ -334,12 +373,22 @@ mod tests {
             output: 2.0,
             cache_read: 0.1,
             long_context: None,
+            cache_write: None,
+            cache_write_5m: None,
+            cache_write_1h: None,
+            cache_write_30m: None,
+            cache_write_12h: None,
         };
         let faster = Rates {
             input: 2.0,
             output: 4.0,
             cache_read: 0.2,
             long_context: None,
+            cache_write: None,
+            cache_write_5m: None,
+            cache_write_1h: None,
+            cache_write_30m: None,
+            cache_write_12h: None,
         };
         assert_eq!(price.rates(None), Some(standard));
         assert_eq!(price.rates(Some("tier-a")), Some(faster));
@@ -386,6 +435,11 @@ mod tests {
                 input: 2.0,
                 output: 3.0,
                 cache_read: 0.2,
+                cache_write: None,
+                cache_write_5m: None,
+                cache_write_1h: None,
+                cache_write_30m: None,
+                cache_write_12h: None,
             })
         );
         assert_eq!(long("model-a", Some("tier-a")).unwrap().input, 4.0);
@@ -454,6 +508,11 @@ mod tests {
                 cache_read: 0.0,
                 long_context: None,
                 tiers: BTreeMap::new(),
+                cache_write: None,
+                cache_write_5m: None,
+                cache_write_1h: None,
+                cache_write_30m: None,
+                cache_write_12h: None,
             },
         );
         assert!(config.validate(Mode::Forward).is_err());
@@ -463,6 +522,11 @@ mod tests {
             output: -1.0,
             cache_read: 0.0,
             long_context: None,
+            cache_write: None,
+            cache_write_5m: None,
+            cache_write_1h: None,
+            cache_write_30m: None,
+            cache_write_12h: None,
         };
         config.prices.insert(
             "sample".into(),
@@ -472,6 +536,11 @@ mod tests {
                 cache_read: 0.0,
                 long_context: None,
                 tiers: BTreeMap::from([("tier-a".into(), negative)]),
+                cache_write: None,
+                cache_write_5m: None,
+                cache_write_1h: None,
+                cache_write_30m: None,
+                cache_write_12h: None,
             },
         );
         assert!(config.validate(Mode::Forward).is_err());
@@ -590,5 +659,43 @@ mod tests {
             Some(real)
         );
         std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn write_rates_validate_in_every_price_table_and_docs_parse() {
+        for field in [
+            "cache_write",
+            "cache_write_5m",
+            "cache_write_1h",
+            "cache_write_30m",
+            "cache_write_12h",
+        ] {
+            for value in ["-1", "nan", "inf"] {
+                for table in ["prices.m", "prices.m.tiers.fast", "prices.m.long_context"] {
+                    let base = "upstream='http://example.test'\n[prices.m]\ninput=1\noutput=2\ncache_read=0.1\n";
+                    let text = if table == "prices.m" {
+                        format!("{base}{field}={value}\n")
+                    } else {
+                        format!(
+                            "{base}[{table}]\ninput=2\noutput=4\ncache_read=0.2\n{field}={value}\n{}",
+                            if table.ends_with("long_context") {
+                                "above=100\n"
+                            } else {
+                                ""
+                            }
+                        )
+                    };
+                    let config: Config = toml::from_str(&text).unwrap();
+                    assert!(config.validate(Mode::Forward).is_err(), "{text}");
+                }
+            }
+        }
+        let docs = include_str!("../../../docs/prices.md");
+        for block in docs.split("```toml\n").skip(1) {
+            let toml = block.split("```").next().unwrap();
+            let config: Config =
+                toml::from_str(&format!("upstream='http://example.test'\n{toml}")).unwrap();
+            config.validate(Mode::Forward).unwrap();
+        }
     }
 }

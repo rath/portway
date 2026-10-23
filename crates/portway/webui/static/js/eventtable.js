@@ -114,6 +114,10 @@ export const CELLS = [
     },
   },
   {
+    key: "written", column: "tokens", label: "written", numeric: true, note: "tokens written to the cache",
+    read: (e) => e.usage?.cache_write == null ? null : { text: humanCount(e.usage.cache_write), tone: "dim", title: String(e.usage.cache_write) },
+  },
+  {
     key: "completion", column: "tokens", label: "tok out", numeric: true, note: "completion tokens, reasoning included",
     read: (e) => (e.usage ? {
       text: humanCount(e.usage.completion),

@@ -104,7 +104,7 @@ impl Range {
 use crate::config::Prices;
 pub use crate::config::{Price, Rates};
 
-/// Where the money went: the three parts of one model's bill, kept apart so
+/// Where the money went: the four parts of one model's bill, kept apart so
 /// the screen can show which of them the day is actually made of.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Charge {
@@ -112,13 +112,20 @@ pub struct Charge {
     pub input: f64,
     /// The context the prefix cache served, at the cache rate.
     pub cache_read: f64,
+    /// Total cache-write cost and its disjoint lifetime components.
+    pub cache_write: f64,
+    pub cache_write_5m: f64,
+    pub cache_write_1h: f64,
+    pub cache_write_30m: f64,
+    pub cache_write_12h: f64,
+
     /// Everything the engine generated, thinking included, at the output rate.
     pub output: f64,
 }
 
 impl Charge {
     pub fn total(&self) -> f64 {
-        self.input + self.cache_read + self.output
+        self.input + self.cache_read + self.cache_write + self.output
     }
 }
 
@@ -130,6 +137,11 @@ impl std::ops::Add for Charge {
             input: self.input + other.input,
             cache_read: self.cache_read + other.cache_read,
             output: self.output + other.output,
+            cache_write: self.cache_write + other.cache_write,
+            cache_write_5m: self.cache_write_5m + other.cache_write_5m,
+            cache_write_1h: self.cache_write_1h + other.cache_write_1h,
+            cache_write_30m: self.cache_write_30m + other.cache_write_30m,
+            cache_write_12h: self.cache_write_12h + other.cache_write_12h,
         }
     }
 }
@@ -147,6 +159,16 @@ pub struct Row {
     /// The part a prefix cache served. An answer that reported no cache detail
     /// rides here at zero and is counted in `unreported`.
     pub cached: u64,
+    pub cache_write: u64,
+    pub cache_write_5m: u64,
+    pub cache_write_1h: u64,
+    pub cache_write_30m: u64,
+    pub cache_write_12h: u64,
+    /// Requests without a write total, with unknown lifetime, or fallback rates.
+    pub write_unreported: u64,
+    pub write_unknown: u64,
+    pub write_fallback: u64,
+
     /// Answers that said nothing about their cache — the count that makes
     /// `cached` a floor rather than a fact.
     pub unreported: u64,
@@ -242,15 +264,22 @@ impl Table {
         total.requests += row.requests;
         total.prompt += row.prompt;
         total.cached += row.cached;
+        total.cache_write += row.cache_write;
+        total.cache_write_5m += row.cache_write_5m;
+        total.cache_write_1h += row.cache_write_1h;
+        total.cache_write_30m += row.cache_write_30m;
+        total.cache_write_12h += row.cache_write_12h;
+        total.write_unreported += row.write_unreported;
+        total.write_unknown += row.write_unknown;
+        total.write_fallback += row.write_fallback;
+
         total.unreported += row.unreported;
         total.completion += row.completion;
         total.reasoning += row.reasoning;
         total.long += row.long;
         match (row.charge, &mut total.charge) {
             (Some(charge), Some(sum)) => {
-                sum.input += charge.input;
-                sum.cache_read += charge.cache_read;
-                sum.output += charge.output;
+                *sum = *sum + charge;
             }
             (Some(charge), sum @ None) => *sum = Some(charge),
             (None, _) => self.unpriced += 1,
@@ -277,8 +306,16 @@ pub fn notes_named(table: &Table, label: impl Fn(&Row) -> String) -> Vec<String>
     for row in &table.rows {
         if row.requests > 0 && row.unreported == row.requests {
             notes.push(format!(
-                "{}: no cache detail reported, so its prompt is charged at the input rate — an upper bound",
+                "{}: no cache read detail reported; unclassified input uses the input rate",
                 label(row)
+            ));
+        }
+    }
+    for row in &table.rows {
+        if row.write_unreported > 0 || row.write_unknown > 0 || row.write_fallback > 0 {
+            notes.push(format!(
+                "{}: cache writes — {} request(s) unreported, {} with unknown lifetime, {} using fallback rates; missing writes retain the input estimate, unknown lifetimes use the default write rate (or input rate)",
+                label(row), row.write_unreported, row.write_unknown, row.write_fallback
             ));
         }
     }
@@ -315,6 +352,7 @@ fn charge(uncached: u64, cached: u64, completion: u64, rates: Rates) -> Charge {
         input: uncached as f64 * rates.input / 1e6,
         cache_read: cached as f64 * rates.cache_read / 1e6,
         output: completion as f64 * rates.output / 1e6,
+        ..Charge::default()
     }
 }
 
@@ -323,9 +361,9 @@ fn charge(uncached: u64, cached: u64, completion: u64, rates: Rates) -> Charge {
 /// migrate a database another build is still writing to.
 ///
 /// A model whose answers all reported no cache detail sums `cached` to zero,
-/// which is exactly how it gets billed at the input rate — an upper bound
-/// until the engine says otherwise.
-fn aggregate(tier: &str) -> String {
+/// so unclassified tokens retain the input-rate estimate.
+fn aggregate(tier: &str, writes: bool) -> String {
+    let write_sums = write_sums(writes);
     format!(
         "SELECT
     model,
@@ -335,7 +373,8 @@ fn aggregate(tier: &str) -> String {
     COALESCE(SUM(cached_tokens), 0),
     SUM(cached_tokens IS NULL),
     COALESCE(SUM(completion_tokens), 0),
-    COALESCE(SUM(reasoning_tokens), 0)
+    COALESCE(SUM(reasoning_tokens), 0),
+    {write_sums}
   FROM requests
   WHERE ts_unix >= ?1 AND ts_unix < ?2 AND prompt_tokens IS NOT NULL
   GROUP BY model, {tier}"
@@ -345,13 +384,15 @@ fn aggregate(tier: &str) -> String {
 /// The answers of one row whose prompt passed a long-context line: the same
 /// sums, over those answers alone. `tier` is what `aggregate` was given, and
 /// `IS` matches the NULL of the standard class as well as a name.
-fn long_part(tier: &str) -> String {
+fn long_part(tier: &str, writes: bool) -> String {
+    let write_sums = write_sums(writes);
     format!(
         "SELECT
     COUNT(*),
     COALESCE(SUM(prompt_tokens), 0),
     COALESCE(SUM(cached_tokens), 0),
-    COALESCE(SUM(completion_tokens), 0)
+    COALESCE(SUM(completion_tokens), 0),
+    {write_sums}
   FROM requests
   WHERE ts_unix >= ?1 AND ts_unix < ?2 AND prompt_tokens IS NOT NULL
     AND model = ?3 AND {tier} IS ?4 AND prompt_tokens > ?5"
@@ -366,6 +407,7 @@ struct Part {
     prompt: u64,
     cached: u64,
     completion: u64,
+    writes: [u64; 5],
 }
 
 impl Part {
@@ -375,6 +417,13 @@ impl Part {
             prompt: row.prompt,
             cached: row.cached,
             completion: row.completion,
+            writes: [
+                row.cache_write,
+                row.cache_write_5m,
+                row.cache_write_1h,
+                row.cache_write_30m,
+                row.cache_write_12h,
+            ],
         }
     }
 
@@ -385,16 +434,93 @@ impl Part {
             prompt: self.prompt.saturating_sub(other.prompt),
             cached: self.cached.saturating_sub(other.cached),
             completion: self.completion.saturating_sub(other.completion),
+            writes: std::array::from_fn(|i| self.writes[i].saturating_sub(other.writes[i])),
         }
     }
 
     fn charge(self, rates: Rates) -> Charge {
-        charge(
-            self.prompt.saturating_sub(self.cached),
+        let [total, m5, h1, m30, h12] = self.writes;
+        let counts = [m5, h1, m30, h12];
+        let fallback = rates.cache_write.unwrap_or(rates.input);
+        let costs: [f64; 4] = std::array::from_fn(|i| {
+            counts[i] as f64 * write_rates(rates)[i].unwrap_or(fallback) / 1e6
+        });
+        let unknown = total.saturating_sub(counts.iter().sum());
+        let mut cost = charge(
+            self.prompt
+                .saturating_sub(self.cached)
+                .saturating_sub(total),
             self.cached,
             self.completion,
             rates,
-        )
+        );
+        cost.cache_write = costs.iter().sum::<f64>() + unknown as f64 * fallback / 1e6;
+        [
+            cost.cache_write_5m,
+            cost.cache_write_1h,
+            cost.cache_write_30m,
+            cost.cache_write_12h,
+        ] = costs;
+        cost
+    }
+}
+
+fn write_rates(rates: Rates) -> [Option<f64>; 4] {
+    [
+        rates.cache_write_5m,
+        rates.cache_write_1h,
+        rates.cache_write_30m,
+        rates.cache_write_12h,
+    ]
+}
+
+const WRITE_COLUMNS: [&str; 5] = [
+    "cache_write_tokens",
+    "cache_write_5m_tokens",
+    "cache_write_1h_tokens",
+    "cache_write_30m_tokens",
+    "cache_write_12h_tokens",
+];
+
+fn unknown_writes() -> String {
+    format!(
+        "COALESCE(cache_write_tokens, 0) > {}",
+        WRITE_COLUMNS[1..]
+            .iter()
+            .map(|c| format!("COALESCE({c}, 0)"))
+            .collect::<Vec<_>>()
+            .join(" + ")
+    )
+}
+
+fn write_sums(writes: bool) -> String {
+    if !writes {
+        return "0, 0, 0, 0, 0, COUNT(*), 0".into();
+    }
+    let mut columns = WRITE_COLUMNS
+        .iter()
+        .map(|c| format!("COALESCE(SUM({c}), 0)"))
+        .collect::<Vec<_>>();
+    columns.push("COALESCE(SUM(cache_write_tokens IS NULL), 0)".into());
+    columns.push(format!("COALESCE(SUM({}), 0)", unknown_writes()));
+    columns.join(", ")
+}
+
+/// Count fallback use per request, not once per missing lifetime on the request.
+fn fallback_condition(rates: Rates) -> String {
+    let mut conditions = write_rates(rates)
+        .iter()
+        .zip(&WRITE_COLUMNS[1..])
+        .filter(|(rate, _)| rate.is_none())
+        .map(|(_, column)| format!("COALESCE({column}, 0) > 0"))
+        .collect::<Vec<_>>();
+    if rates.cache_write.is_none() {
+        conditions.push(unknown_writes());
+    }
+    if conditions.is_empty() {
+        "0".into()
+    } else {
+        conditions.join(" OR ")
     }
 }
 
@@ -438,7 +564,10 @@ pub fn load(db: &Path, since: f64, until: f64, prices: &Prices) -> Result<Table,
     } else {
         "NULL"
     };
-    let mut statement = connection.prepare(&aggregate(tier)).map_err(sqlite)?;
+    let writes = store::has_write_columns(&connection)?;
+    let mut statement = connection
+        .prepare(&aggregate(tier, writes))
+        .map_err(sqlite)?;
     let rows = statement
         .query_map(params![since, until], |row| {
             Ok(Row {
@@ -450,6 +579,15 @@ pub fn load(db: &Path, since: f64, until: f64, prices: &Prices) -> Result<Table,
                 unreported: row.get::<_, i64>(5)? as u64,
                 completion: row.get::<_, i64>(6)? as u64,
                 reasoning: row.get::<_, i64>(7)? as u64,
+                cache_write: row.get::<_, i64>(8)? as u64,
+                cache_write_5m: row.get::<_, i64>(9)? as u64,
+                cache_write_1h: row.get::<_, i64>(10)? as u64,
+                cache_write_30m: row.get::<_, i64>(11)? as u64,
+                cache_write_12h: row.get::<_, i64>(12)? as u64,
+                write_unreported: row.get::<_, i64>(13)? as u64,
+                write_unknown: row.get::<_, i64>(14)? as u64,
+                write_fallback: 0,
+
                 long: 0,
                 charge: None,
             })
@@ -457,7 +595,9 @@ pub fn load(db: &Path, since: f64, until: f64, prices: &Prices) -> Result<Table,
         .map_err(sqlite)?
         .collect::<rusqlite::Result<Vec<Row>>>()
         .map_err(sqlite)?;
-    let mut long = connection.prepare(&long_part(tier)).map_err(sqlite)?;
+    let mut long = connection
+        .prepare(&long_part(tier, writes))
+        .map_err(sqlite)?;
     for mut row in rows {
         let rates = prices
             .get(&row.model)
@@ -475,6 +615,13 @@ pub fn load(db: &Path, since: f64, until: f64, prices: &Prices) -> Result<Table,
                                 prompt: sums.get::<_, i64>(1)? as u64,
                                 cached: sums.get::<_, i64>(2)? as u64,
                                 completion: sums.get::<_, i64>(3)? as u64,
+                                writes: [
+                                    sums.get::<_, i64>(4)? as u64,
+                                    sums.get::<_, i64>(5)? as u64,
+                                    sums.get::<_, i64>(6)? as u64,
+                                    sums.get::<_, i64>(7)? as u64,
+                                    sums.get::<_, i64>(8)? as u64,
+                                ],
                             })
                         })
                         .map_err(sqlite)?;
@@ -483,6 +630,23 @@ pub fn load(db: &Path, since: f64, until: f64, prices: &Prices) -> Result<Table,
                 }
             }),
         };
+        if writes && let Some(rates) = rates {
+            let condition = if let Some(line) = rates.long_context {
+                format!(
+                    "CASE WHEN prompt_tokens > {} THEN ({}) ELSE ({}) END",
+                    line.above.min(i64::MAX as u64),
+                    fallback_condition(line.rates()),
+                    fallback_condition(rates)
+                )
+            } else {
+                fallback_condition(rates)
+            };
+            row.write_fallback = connection.query_row(
+                &format!("SELECT COUNT(*) FROM requests WHERE ts_unix >= ?1 AND ts_unix < ?2
+                    AND prompt_tokens IS NOT NULL AND model = ?3 AND {tier} IS ?4 AND ({condition})"),
+                params![since, until, row.model, row.tier], |r| r.get::<_, i64>(0)
+            ).map_err(sqlite)? as u64;
+        }
         table.absorb(&row);
         table.rows.push(row);
     }
@@ -538,6 +702,11 @@ mod tests {
                     cache_read: 0.018,
                     long_context: None,
                     tiers: BTreeMap::new(),
+                    cache_write: None,
+                    cache_write_5m: None,
+                    cache_write_1h: None,
+                    cache_write_30m: None,
+                    cache_write_12h: None,
                 },
             ),
             (
@@ -548,6 +717,11 @@ mod tests {
                     cache_read: 0.016,
                     long_context: None,
                     tiers: BTreeMap::new(),
+                    cache_write: None,
+                    cache_write_5m: None,
+                    cache_write_1h: None,
+                    cache_write_30m: None,
+                    cache_write_12h: None,
                 },
             ),
             (
@@ -558,6 +732,11 @@ mod tests {
                     cache_read: 0.05,
                     long_context: None,
                     tiers: BTreeMap::new(),
+                    cache_write: None,
+                    cache_write_5m: None,
+                    cache_write_1h: None,
+                    cache_write_30m: None,
+                    cache_write_12h: None,
                 },
             ),
             (
@@ -568,6 +747,11 @@ mod tests {
                     cache_read: 0.003,
                     long_context: None,
                     tiers: BTreeMap::new(),
+                    cache_write: None,
+                    cache_write_5m: None,
+                    cache_write_1h: None,
+                    cache_write_30m: None,
+                    cache_write_12h: None,
                 },
             ),
             (
@@ -578,6 +762,11 @@ mod tests {
                     cache_read: 0.17,
                     long_context: None,
                     tiers: BTreeMap::new(),
+                    cache_write: None,
+                    cache_write_5m: None,
+                    cache_write_1h: None,
+                    cache_write_30m: None,
+                    cache_write_12h: None,
                 },
             ),
             (
@@ -588,6 +777,11 @@ mod tests {
                     cache_read: 0.169,
                     long_context: None,
                     tiers: BTreeMap::new(),
+                    cache_write: None,
+                    cache_write_5m: None,
+                    cache_write_1h: None,
+                    cache_write_30m: None,
+                    cache_write_12h: None,
                 },
             ),
         ]
@@ -616,6 +810,7 @@ mod tests {
             reasoning: 0,
             long: 0,
             charge: rates(model).map(|rates| charge(prompt - cached, cached, completion, rates)),
+            ..Row::default()
         }
     }
 
@@ -793,6 +988,11 @@ mod tests {
                         cached,
                         completion,
                         reasoning: Some(completion / 2),
+                        cache_write: None,
+                        cache_write_5m: None,
+                        cache_write_1h: None,
+                        cache_write_30m: None,
+                        cache_write_12h: None,
                     }),
                 ))))
                 .unwrap();
@@ -882,6 +1082,11 @@ mod tests {
             cached: Some(0),
             completion: 0,
             reasoning: None,
+            cache_write: None,
+            cache_write_5m: None,
+            cache_write_1h: None,
+            cache_write_30m: None,
+            cache_write_12h: None,
         };
         for tier in [None, Some("tier-a"), Some("tier-a"), Some("tier-b")] {
             let mut answer = record("model-alpha", Some(usage));
@@ -896,6 +1101,11 @@ mod tests {
             output: 0.6,
             cache_read: 0.036,
             long_context: None,
+            cache_write: None,
+            cache_write_5m: None,
+            cache_write_1h: None,
+            cache_write_30m: None,
+            cache_write_12h: None,
         };
         prices
             .get_mut("model-alpha")
@@ -975,6 +1185,11 @@ mod tests {
                     cached: Some(cached),
                     completion,
                     reasoning: None,
+                    cache_write: None,
+                    cache_write_5m: None,
+                    cache_write_1h: None,
+                    cache_write_30m: None,
+                    cache_write_12h: None,
                 }),
             );
             answer.tier = tier.map(str::to_string);
@@ -988,6 +1203,11 @@ mod tests {
                 input,
                 output,
                 cache_read,
+                cache_write: None,
+                cache_write_5m: None,
+                cache_write_1h: None,
+                cache_write_30m: None,
+                cache_write_12h: None,
             })
         };
         let mut prices = fixture_prices();
@@ -1001,6 +1221,11 @@ mod tests {
                 output: 4.0,
                 cache_read: 0.2,
                 long_context: line(4.0, 6.0, 0.4),
+                cache_write: None,
+                cache_write_5m: None,
+                cache_write_1h: None,
+                cache_write_30m: None,
+                cache_write_12h: None,
             },
         );
         let since = crate::logfmt::epoch() - 1.0;
@@ -1083,5 +1308,144 @@ mod tests {
         // say so instead of drawing an empty day.
         let missing = load(&dir.join("nothing.sqlite3"), 0.0, 1e12);
         assert!(missing.is_err(), "{missing:?}");
+    }
+
+    #[test]
+    fn mixed_write_lifetimes_are_priced_once_and_keep_unknown_history() {
+        let dir = std::env::temp_dir().join(format!("portway-write-spend-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = store::spawn(&dir, 0).unwrap();
+        let usage = Usage {
+            prompt: 17812,
+            cached: Some(17000),
+            completion: 431,
+            cache_write: Some(800),
+            cache_write_5m: Some(500),
+            cache_write_1h: Some(300),
+            ..Usage::default()
+        };
+        let sender = store.sender();
+        sender
+            .send(Event::Request(Arc::new(record("model-alpha", Some(usage)))))
+            .unwrap();
+        store.shutdown();
+        let config: crate::config::Config = toml::from_str(
+            r#"
+            [prices.model-alpha]
+            input=4
+            output=20
+            cache_read=0.2
+            cache_write=5
+            cache_write_5m=5
+            cache_write_1h=8
+        "#,
+        )
+        .unwrap();
+        let db = dir.join(store::DB_FILE);
+        let table = super::load(&db, 0.0, f64::MAX, &config.prices).unwrap();
+        let row = &table.rows[0];
+        assert_eq!(
+            (row.cache_write, row.cache_write_5m, row.cache_write_1h),
+            (800, 500, 300)
+        );
+        assert_eq!(
+            (row.write_unreported, row.write_unknown, row.write_fallback),
+            (0, 0, 0)
+        );
+        assert!((row.cost().unwrap() - 0.016968).abs() < 1e-12);
+        let charge = row.charge.unwrap();
+        assert!((charge.input - 0.000048).abs() < 1e-12);
+        assert!((charge.cache_write - 0.0049).abs() < 1e-12);
+        // A legacy rate table falls back to input, and a single default rate
+        // applies to missing per-lifetime rates without charging input again.
+        let mut prices = config.prices.clone();
+        let price = prices.get_mut("model-alpha").unwrap();
+        price.cache_write_5m = None;
+        price.cache_write_1h = None;
+        price.cache_write = None;
+        let legacy = super::load(&db, 0.0, f64::MAX, &prices).unwrap();
+        assert_eq!(legacy.rows[0].write_fallback, 1);
+        assert!((legacy.cost().unwrap() - 0.015268).abs() < 1e-12);
+        // Simulate a v6 database: readers do not migrate it and old rows stay unknown.
+        let connection = rusqlite::Connection::open(&db).unwrap();
+        for column in WRITE_COLUMNS {
+            connection
+                .execute(&format!("ALTER TABLE requests DROP COLUMN {column}"), [])
+                .unwrap();
+        }
+        connection.pragma_update(None, "user_version", 6).unwrap();
+        let old = super::load(&db, 0.0, f64::MAX, &prices).unwrap();
+        assert_eq!(old.rows[0].write_unreported, 1);
+        assert!((old.cost().unwrap() - legacy.cost().unwrap()).abs() < 1e-12);
+        assert_eq!(
+            connection
+                .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            6
+        );
+        drop(connection);
+        store::spawn(&dir, 0).unwrap().shutdown();
+        let upgraded = super::load(&db, 0.0, f64::MAX, &prices).unwrap();
+        assert_eq!(upgraded.rows[0].write_unreported, 1);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn lifetime_rates_follow_tiers_and_long_context_thresholds() {
+        let dir =
+            std::env::temp_dir().join(format!("portway-write-threshold-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = store::spawn(&dir, 0).unwrap();
+        for (prompt, tier, known) in [
+            (100, None, true),
+            (101, None, true),
+            (101, Some("fast"), true),
+            (101, Some("fast"), false),
+        ] {
+            let usage = Usage {
+                prompt,
+                completion: 2,
+                cached: Some(20),
+                cache_write: Some(30),
+                cache_write_30m: known.then_some(10),
+                cache_write_12h: known.then_some(20),
+                ..Usage::default()
+            };
+            let mut request = record("model-alpha", Some(usage));
+            request.tier = tier.map(str::to_string);
+            store
+                .sender()
+                .send(Event::Request(Arc::new(request)))
+                .unwrap();
+        }
+        store.shutdown();
+        let config: crate::config::Config = toml::from_str(r#"
+            [prices.model-alpha]
+            input=1
+            output=2
+            cache_read=0.1
+            cache_write=1.25
+            cache_write_30m=1.25
+            cache_write_12h=2.5
+            long_context={above=100,input=2,output=3,cache_read=0.2,cache_write=2.5,cache_write_30m=2.5,cache_write_12h=5}
+            [prices.model-alpha.tiers.fast]
+            input=3
+            output=4
+            cache_read=0.3
+            cache_write=4
+            cache_write_30m=4
+            cache_write_12h=8
+        "#).unwrap();
+        let table = super::load(&dir.join(store::DB_FILE), 0.0, f64::MAX, &config.prices).unwrap();
+        let standard = table.rows.iter().find(|r| r.tier.is_none()).unwrap();
+        assert_eq!(standard.long, 1);
+        assert!((standard.cost().unwrap() - 0.0003555).abs() < 1e-12);
+        let fast = table.rows.iter().find(|r| r.tier.is_some()).unwrap();
+        assert_eq!(
+            (fast.long, fast.write_unknown, fast.write_fallback),
+            (0, 1, 0)
+        );
+        assert!((fast.cost().unwrap() - 0.000654).abs() < 1e-12);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

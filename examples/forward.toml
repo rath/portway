@@ -27,3 +27,6 @@ min_bytes = 1024
 # input = 1.0
 # output = 2.0
 # cache_read = 0.1
+# cache_write = 1.25       # Optional default when lifetime is unknown
+# cache_write_5m = 1.25
+# cache_write_1h = 2.0

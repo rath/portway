@@ -288,6 +288,9 @@ pub struct State {
     /// million tokens, which is the one thing a per-row column has no room
     /// for beside the money it produced.
     pub usage_rates: bool,
+    pub costs_scroll: Cell<usize>,
+    pub costs_scroll_max: Cell<usize>,
+    pub costs_page_height: Cell<usize>,
     pub usage: Option<spend::Table>,
     pub usage_error: Option<String>,
     usage_read: Option<Instant>,
@@ -330,6 +333,9 @@ impl State {
             usage_page_height: Cell::new(1),
             usage_range: spend::Range::Today,
             usage_rates: false,
+            costs_scroll: Cell::new(0),
+            costs_scroll_max: Cell::new(0),
+            costs_page_height: Cell::new(1),
             usage: None,
             usage_error: None,
             usage_read: None,
@@ -607,6 +613,15 @@ impl State {
                 .get()
                 .saturating_add_signed(delta)
                 .min(self.usage_scroll_max.get()),
+        );
+    }
+
+    pub fn scroll_costs(&self, delta: isize) {
+        self.costs_scroll.set(
+            self.costs_scroll
+                .get()
+                .saturating_add_signed(delta)
+                .min(self.costs_scroll_max.get()),
         );
     }
 

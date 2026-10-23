@@ -254,6 +254,11 @@ struct UsageData {
     completion: u64,
     cached: Option<u64>,
     reasoning: Option<u64>,
+    cache_write: Option<u64>,
+    cache_write_5m: Option<u64>,
+    cache_write_1h: Option<u64>,
+    cache_write_30m: Option<u64>,
+    cache_write_12h: Option<u64>,
 }
 fn optional_usage<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Usage>, D::Error> {
     Ok(Option::<UsageData>::deserialize(d)?.map(|u| Usage {
@@ -261,6 +266,11 @@ fn optional_usage<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Usage>, D::E
         completion: u.completion,
         cached: u.cached,
         reasoning: u.reasoning,
+        cache_write: u.cache_write,
+        cache_write_5m: u.cache_write_5m,
+        cache_write_1h: u.cache_write_1h,
+        cache_write_30m: u.cache_write_30m,
+        cache_write_12h: u.cache_write_12h,
     }))
 }
 
@@ -319,14 +329,13 @@ struct TableData {
     first: Option<f64>,
     #[serde(deserialize_with = "rows")]
     rows: Vec<spend::Row>,
-    #[serde(with = "RowData")]
+    #[serde(deserialize_with = "row")]
     total: spend::Row,
     unpriced: usize,
     blind: u64,
     cut: u64,
 }
 #[derive(Deserialize)]
-#[serde(remote = "spend::Row")]
 struct RowData {
     model: String,
     #[serde(default)]
@@ -341,13 +350,54 @@ struct RowData {
     long: u64,
     #[serde(deserialize_with = "charge")]
     charge: Option<spend::Charge>,
+    #[serde(default)]
+    cache_write: u64,
+    #[serde(default)]
+    cache_write_5m: u64,
+    #[serde(default)]
+    cache_write_1h: u64,
+    #[serde(default)]
+    cache_write_30m: u64,
+    #[serde(default)]
+    cache_write_12h: u64,
+    #[serde(default)]
+    write_unreported: Option<u64>,
+    #[serde(default)]
+    write_unknown: u64,
+    #[serde(default)]
+    write_fallback: u64,
+}
+impl From<RowData> for spend::Row {
+    fn from(r: RowData) -> Self {
+        Self {
+            model: r.model,
+            tier: r.tier,
+            requests: r.requests,
+            prompt: r.prompt,
+            cached: r.cached,
+            unreported: r.unreported,
+            completion: r.completion,
+            reasoning: r.reasoning,
+            long: r.long,
+            charge: r.charge,
+            cache_write: r.cache_write,
+            cache_write_5m: r.cache_write_5m,
+            cache_write_1h: r.cache_write_1h,
+            cache_write_30m: r.cache_write_30m,
+            cache_write_12h: r.cache_write_12h,
+            write_unknown: r.write_unknown,
+            write_fallback: r.write_fallback,
+            write_unreported: r.write_unreported.unwrap_or(r.requests),
+        }
+    }
+}
+fn row<'de, D: Deserializer<'de>>(d: D) -> Result<spend::Row, D::Error> {
+    Ok(RowData::deserialize(d)?.into())
 }
 fn rows<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<spend::Row>, D::Error> {
-    #[derive(Deserialize)]
-    struct Row(#[serde(with = "RowData")] spend::Row);
-    Ok(Vec::<Row>::deserialize(d)?
+    Ok(Vec::<RowData>::deserialize(d)?
         .into_iter()
-        .map(|r| r.0)
+        .map(Into::into)
         .collect())
 }
 fn charge<'de, D: Deserializer<'de>>(d: D) -> Result<Option<spend::Charge>, D::Error> {
@@ -356,10 +406,25 @@ fn charge<'de, D: Deserializer<'de>>(d: D) -> Result<Option<spend::Charge>, D::E
         input: f64,
         cache_read: f64,
         output: f64,
+        #[serde(default)]
+        cache_write: f64,
+        #[serde(default)]
+        cache_write_5m: f64,
+        #[serde(default)]
+        cache_write_1h: f64,
+        #[serde(default)]
+        cache_write_30m: f64,
+        #[serde(default)]
+        cache_write_12h: f64,
     }
     Ok(Option::<Charge>::deserialize(d)?.map(|c| spend::Charge {
         input: c.input,
         cache_read: c.cache_read,
+        cache_write: c.cache_write,
+        cache_write_5m: c.cache_write_5m,
+        cache_write_1h: c.cache_write_1h,
+        cache_write_30m: c.cache_write_30m,
+        cache_write_12h: c.cache_write_12h,
         output: c.output,
     }))
 }
