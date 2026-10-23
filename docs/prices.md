@@ -3,11 +3,13 @@
 The vendors' published list prices, written as Portway `[prices]` tables to
 copy into `portway.toml`. Checked against
 [OpenAI's API pricing](https://developers.openai.com/api/docs/pricing) on
-2026-10-02 and
+2026-10-02,
 [Anthropic's pricing](https://platform.claude.com/docs/en/about-claude/pricing)
-on 2026-10-07. Prices change, so check those pages before relying on a
-figure. Portway's costs are estimates, not a bill; behind a ChatGPT or Claude
-subscription they are what the same tokens would cost on the API.
+on 2026-10-07 and
+[Kimi's API pricing](https://platform.kimi.ai/docs/pricing/chat) on
+2026-10-23. Prices change, so check those pages before relying on a
+figure. Portway's costs are estimates, not a bill; behind a ChatGPT, Claude or
+Kimi Code subscription they are what the same tokens would cost on the API.
 
 Rates are USD per million tokens. Each table is keyed by the model name the
 client sends, and each tier by the value its request names; see
@@ -31,8 +33,9 @@ sends it stays unpriced.
 ## What these tables leave out
 
 - **Cache writes.** Portway bills a cache write at the input rate. OpenAI lists
-  cache writes at 1.25 times input; Anthropic at 1.25 times (5-minute cache) or
-  twice (1-hour cache).
+  cache writes at 1.25 times input; Anthropic at 1.25 times for a 5-minute
+  cache and twice input for 1-hour; Kimi at exactly the input rate for 5-minute
+  writes and twice input for 1-hour.
 - **Regional pricing.** OpenAI's data residency endpoints and Anthropic's
   US-only inference (`inference_geo: "us"`) cost 10% more.
 - **Unpublished models.** Codex's `codex-auto-review` is not on OpenAI's
@@ -226,7 +229,8 @@ cache_read = 0.35
 [prices."gpt-5.3-codex".tiers.fast]
 input = 3.5
 output = 28.0
-cache_read = 0.35```
+cache_read = 0.35
+```
 
 ## Anthropic
 
@@ -284,4 +288,25 @@ long_context = { above = 100000, input = 0.5, output = 2.5, cache_read = 0.05 }
 [prices."claude-haiku-4-5-20251001"]
 input = 1.0
 output = 5.0
-cache_read = 0.1```
+cache_read = 0.1
+```
+
+## Kimi
+
+Kimi Code is a subscription, but the same models are sold per token on the API
+platform, and that is what these tables use: the estimate is what the tokens
+would cost on the API, not the subscription bill. K3 models bill cache writes
+separately: 5-minute writes at the input rate (already how Portway bills a
+write) and 1-hour writes at twice input.
+
+```toml
+[prices."k3.1-pro"]
+input = 2.0
+output = 10.0
+cache_read = 0.2
+
+[prices."k3.1-pro-highspeed"]
+input = 4.0
+output = 20.0
+cache_read = 0.2
+```
