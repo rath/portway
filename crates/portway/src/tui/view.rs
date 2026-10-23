@@ -1756,7 +1756,9 @@ fn request_line(
                         Style::default().fg(t.dim),
                     ));
                 }
-                if let Some(written) = usage.cache_write {
+                // Anthropic reports a zero on every turn that wrote nothing;
+                // the popup keeps that zero, the line drops it.
+                if let Some(written) = usage.cache_write.filter(|&n| n > 0) {
                     line.glue(Span::styled(
                         format!("({} written)", human_count(written)),
                         Style::default().fg(t.dim),
@@ -2745,6 +2747,36 @@ mod tests {
             &ModelAliases::new(),
         ));
         assert!(line.ends_with(" tok 18.2K→891"), "{line}");
+
+        // A write is glued on; a reported zero is left to the popup.
+        let mut wrote = counted.clone();
+        for (written, tail) in [
+            (12_000, " tok 18.2K(99% cached)(12.0K written)→891"),
+            (0, " tok 18.2K(99% cached)→891"),
+        ] {
+            wrote.usage = counted.usage.map(|usage| Usage {
+                cache_write: Some(written),
+                ..usage
+            });
+            let line = text(&request_line(
+                &TERMINAL,
+                &wrote,
+                Columns::ALL,
+                &ModelAliases::new(),
+            ));
+            assert!(line.ends_with(tail), "{line}");
+        }
+        let popup: Vec<String> = detail_lines(&TERMINAL, &wrote, &ModelAliases::new())
+            .iter()
+            .map(text)
+            .collect();
+        assert!(
+            popup
+                .iter()
+                .any(|line| line.trim_start().starts_with("cache writes")
+                    && line.trim_end().ends_with(" 0")),
+            "{popup:#?}"
+        );
     }
 
     #[test]

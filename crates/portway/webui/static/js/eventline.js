@@ -138,7 +138,9 @@ export function requestLine(event, columns) {
         line.word(humanCount(usage.prompt), "raw");
         const cached = usage.cached == null ? null : share(usage.cached, usage.prompt);
         if (cached != null) line.glue(`(${cached} cached)`, "dim");
-        if (usage.cache_write != null) line.glue(`(${humanCount(usage.cache_write)} written)`, "dim");
+        // Anthropic reports a zero on every turn that wrote nothing; the
+        // details keep that zero, the line drops it.
+        if (usage.cache_write > 0) line.glue(`(${humanCount(usage.cache_write)} written)`, "dim");
         line.glue("→", "dim");
         line.word(humanCount(usage.completion), "wire");
         break;

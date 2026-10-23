@@ -387,6 +387,7 @@ test("cache writes preserve total, lifetimes and unknown values in details and e
   assert.equal(values[headers.indexOf("cache_write_1h_tokens")], "300");
   assert.equal(values[headers.indexOf("cache_write_12h_tokens")], "");
   assert.equal(Object.fromEntries(detailFields(request()))["cache writes"], "not reported");
-  assert.equal(Object.fromEntries(detailFields(request({ usage: { ...event.usage, cache_write: 0,
-    cache_write_5m: null, cache_write_1h: null } })))["cache writes"], "0");
+  const zero = request({ usage: { ...event.usage, cache_write: 0, cache_write_5m: null, cache_write_1h: null } });
+  assert.equal(Object.fromEntries(detailFields(zero))["cache writes"], "0");
+  assert.doesNotMatch(lineText(eventLine(zero, every)), /written/);
 });
