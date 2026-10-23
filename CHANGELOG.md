@@ -12,7 +12,14 @@ version may contain breaking changes.
 - Track cache-write tokens and reported 5-minute, 1-hour, 30-minute, and
   12-hour lifetimes in stored usage, request details, exports, and dashboards.
   Kimi's Chat Completions lifetimes are read from its
-  `Msh-Usage-Cache-Write-Tokens-5m`/`-1h` response headers.
+  `Msh-Usage-Cache-Write-Tokens-5m`/`-1h` response headers. The database
+  moves to schema v7; rows recorded earlier read as unreported, and an
+  earlier build still reads a v7 file but will not record into it.
+  Embedders (breaking): `usage::Usage` gains the public fields `cache_write`,
+  `cache_write_5m`, `cache_write_1h`, `cache_write_30m` and `cache_write_12h`,
+  so a struct literal must name them or end with `..Usage::default()` (`Usage`
+  now implements `Default`); `RelayBody::usage_headers` hands the scanner a
+  response's headers.
 - Optional cache-write prices for models, service tiers, and long contexts;
   cost estimates separate writes from ordinary input and flag missing detail
   or fallback rates. Existing configurations and historical records remain readable.
