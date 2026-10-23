@@ -1297,17 +1297,26 @@ fn cost_lines(
             ),
         ]));
         let c = row.charge.unwrap_or_default();
+        // The total's money covers the priced rows alone, so its lifetime
+        // lines count only their tokens: a count beside a sum it is not in
+        // would read as a rate.
+        let counted: Vec<&spend::Row> = if total && row.charge.is_some() {
+            table.rows.iter().filter(|r| r.charge.is_some()).collect()
+        } else {
+            vec![row]
+        };
+        let count = |part: fn(&spend::Row) -> u64| counted.iter().map(|r| part(r)).sum::<u64>();
         let periods = [
-            ("5m", row.cache_write_5m, c.cache_write_5m),
-            ("1h", row.cache_write_1h, c.cache_write_1h),
-            ("30m", row.cache_write_30m, c.cache_write_30m),
-            ("12h", row.cache_write_12h, c.cache_write_12h),
+            ("5m", count(|r| r.cache_write_5m), c.cache_write_5m),
+            ("1h", count(|r| r.cache_write_1h), c.cache_write_1h),
+            ("30m", count(|r| r.cache_write_30m), c.cache_write_30m),
+            ("12h", count(|r| r.cache_write_12h), c.cache_write_12h),
         ];
         let known: u64 = periods.iter().map(|(_, n, _)| n).sum();
         let known_cost: f64 = periods.iter().map(|(_, _, cost)| cost).sum();
         for (ttl, tokens, cost) in periods.into_iter().chain(std::iter::once((
             "unknown TTL",
-            row.cache_write.saturating_sub(known),
+            count(|r| r.cache_write).saturating_sub(known),
             (c.cache_write - known_cost).max(0.0),
         ))) {
             if tokens > 0 {
@@ -3423,6 +3432,58 @@ mod tests {
         assert!(bottom.contains("total"), "{bottom}");
         screen(120, 120, &state);
         assert_eq!(state.costs_scroll.get(), 0);
+    }
+
+    #[test]
+    fn the_cost_total_counts_the_writes_its_money_covers() {
+        let mut state = usage_state();
+        let table = state.usage.as_mut().unwrap();
+        let mut priced = table.rows[0].clone();
+        priced.cache_write = 700;
+        priced.cache_write_5m = 500;
+        let charge = priced.charge.as_mut().unwrap();
+        charge.cache_write = 0.003;
+        charge.cache_write_5m = 0.002;
+        let unpriced = spend::Row {
+            model: "model-unpriced".to_string(),
+            requests: 1,
+            cache_write: 900,
+            cache_write_5m: 900,
+            charge: None,
+            ..Default::default()
+        };
+        table.rows = vec![priced.clone(), unpriced.clone()];
+        table.total = spend::Row {
+            model: "total".to_string(),
+            charge: priced.charge,
+            cache_write: 1600,
+            cache_write_5m: 1400,
+            ..Default::default()
+        };
+        let lines: Vec<String> = cost_lines(&TERMINAL, table, &ModelAliases::new(), 90)
+            .iter()
+            .map(text)
+            .collect();
+        let total = lines
+            .iter()
+            .position(|line| line.contains("total "))
+            .unwrap();
+        let after: Vec<&str> = lines[total + 1..].iter().map(|line| line.trim()).collect();
+        assert!(
+            after.contains(&"write 5m: 500 tokens · $0.0020"),
+            "{lines:#?}"
+        );
+        assert!(
+            after.contains(&"write unknown TTL: 200 tokens · $0.0010"),
+            "{lines:#?}"
+        );
+        // The unpriced row keeps its own tokens, unpriced.
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.trim() == "write 5m: 900 tokens · unpriced"),
+            "{lines:#?}"
+        );
     }
 
     #[test]
