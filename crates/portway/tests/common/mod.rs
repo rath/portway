@@ -80,6 +80,9 @@ pub enum Reply {
     /// Mixed-lifetime Anthropic usage, buffered or in gzip SSE.
     CacheWriteJson,
     CacheWriteStream,
+    /// Kimi's Chat Completions shape: the write total in the body's last
+    /// chunk, its lifetime split in the response headers.
+    KimiCacheWriteStream,
     /// An SSE answer that ends with the no-choices chunk that carries it, the
     /// way `stream_options.include_usage` is answered.
     UsageStream,
@@ -96,11 +99,12 @@ pub const USAGE_CACHED: u64 = 18_200;
 pub const USAGE_COMPLETION: u64 = 891;
 pub const USAGE_REASONING: u64 = 742;
 
+pub const CACHE_WRITE_JSON: &str = r#"{"usage":{"input_tokens":12,"cache_read_input_tokens":17000,"cache_creation_input_tokens":800,"cache_creation":{"ephemeral_5m_input_tokens":500,"ephemeral_1h_input_tokens":300},"output_tokens":431}}"#;
+pub const KIMI_CACHE_WRITE_CHUNK: &str = r#"{"choices":[],"usage":{"prompt_tokens":12000,"prompt_tokens_details":{"cached_tokens":4000,"cache_write_tokens":7000},"completion_tokens":20}}"#;
+
 /// The buffered reply carries every number, in vLLM's layout: the cache detail
 /// under `prompt_tokens_details`, the thinking under
 /// `completion_tokens_details`.
-pub const CACHE_WRITE_JSON: &str = r#"{"usage":{"input_tokens":12,"cache_read_input_tokens":17000,"cache_creation_input_tokens":800,"cache_creation":{"ephemeral_5m_input_tokens":500,"ephemeral_1h_input_tokens":300},"output_tokens":431}}"#;
-
 fn usage_json() -> serde_json::Value {
     serde_json::json!({
         "prompt_tokens": USAGE_PROMPT,
@@ -466,6 +470,15 @@ async fn respond(
                 .body(boxed(encoder.finish().unwrap()))
                 .unwrap()
         }
+        Reply::KimiCacheWriteStream => Response::builder()
+            .status(200)
+            .header("content-type", "text/event-stream")
+            .header("Msh-Usage-Cache-Write-Tokens-5m", "3000")
+            .header("Msh-Usage-Cache-Write-Tokens-1h", "4000")
+            .body(boxed(format!(
+                "data: {KIMI_CACHE_WRITE_CHUNK}\n\ndata: [DONE]\n\n"
+            )))
+            .unwrap(),
         Reply::UsageJson => Response::builder()
             .status(200)
             .header("content-type", "application/json")

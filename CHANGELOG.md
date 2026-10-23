@@ -11,6 +11,8 @@ version may contain breaking changes.
 
 - Track cache-write tokens and reported 5-minute, 1-hour, 30-minute, and
   12-hour lifetimes in stored usage, request details, exports, and dashboards.
+  Kimi's Chat Completions lifetimes are read from its
+  `Msh-Usage-Cache-Write-Tokens-5m`/`-1h` response headers.
 - Optional cache-write prices for models, service tiers, and long contexts;
   cost estimates separate writes from ordinary input and flag missing detail
   or fallback rates. Existing configurations and historical records remain readable.

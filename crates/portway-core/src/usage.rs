@@ -69,7 +69,38 @@ impl Usage {
         }
         self
     }
+
+    /// Headers split a write total the body reported. They never invent a
+    /// total, never replace a split the body carried, and are dropped when
+    /// they do not add up to the total.
+    fn with_header_writes(mut self, [five_minutes, one_hour]: [Option<u64>; 2]) -> Self {
+        let Some(total) = self.cache_write else {
+            return self;
+        };
+        let reported = [
+            self.cache_write_5m,
+            self.cache_write_1h,
+            self.cache_write_30m,
+            self.cache_write_12h,
+        ];
+        if reported.iter().any(Option::is_some) || (five_minutes.is_none() && one_hour.is_none()) {
+            return self;
+        }
+        let sum = five_minutes.unwrap_or(0).checked_add(one_hour.unwrap_or(0));
+        let complete = five_minutes.is_some() && one_hour.is_some();
+        if sum.is_none_or(|sum| sum > total || (complete && sum != total)) {
+            return self;
+        }
+        self.cache_write_5m = five_minutes;
+        self.cache_write_1h = one_hour;
+        self
+    }
 }
+
+/// Response headers in which Kimi's Chat Completions API splits a cache write
+/// by lifetime. Its body carries only the total.
+pub const WRITE_5M_HEADER: &str = "msh-usage-cache-write-tokens-5m";
+pub const WRITE_1H_HEADER: &str = "msh-usage-cache-write-tokens-1h";
 
 /// The field the counts live under, quotes included.
 const KEY: &[u8] = b"\"usage\"";
@@ -96,6 +127,8 @@ pub struct Scanner {
     last: Option<Usage>,
     /// Anthropic streams report input and output counts in separate events.
     input_counts: InputCounts,
+    /// The 5-minute and 1-hour writes the response headers reported.
+    header_writes: [Option<u64>; 2],
 }
 
 #[derive(Default)]
@@ -235,6 +268,14 @@ impl Scanner {
     /// The latest counts, once both input and output have been reported.
     pub fn usage(&self) -> Option<Usage> {
         self.last
+            .map(|usage| usage.with_header_writes(self.header_writes))
+    }
+
+    /// The values of `WRITE_5M_HEADER` and `WRITE_1H_HEADER`, if the response
+    /// carried them. A value that is not a count is ignored.
+    pub fn header_writes(&mut self, five_minutes: Option<&str>, one_hour: Option<&str>) {
+        let count = |value: Option<&str>| value.and_then(|v| v.trim().parse::<u64>().ok());
+        self.header_writes = [count(five_minutes), count(one_hour)];
     }
 
     /// Advance by one byte, which `before` preceded.
@@ -771,6 +812,51 @@ data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"outpu
         assert_eq!(
             (overflow.cache_write_30m, overflow.cache_write_12h),
             (None, None)
+        );
+    }
+
+    #[test]
+    fn header_lifetimes_split_only_a_reported_total() {
+        const KIMI: &[u8] = br#"{"usage":{"prompt_tokens":12000,"prompt_tokens_details":{"cached_tokens":4000,"cache_write_tokens":7000},"completion_tokens":20}}"#;
+        const ANTHROPIC: &[u8] = br#"{"usage":{"input_tokens":12,"cache_read_input_tokens":17000,"cache_creation_input_tokens":800,"cache_creation":{"ephemeral_5m_input_tokens":500,"ephemeral_1h_input_tokens":300},"output_tokens":431}}"#;
+        let scan = |five: Option<&str>, hour: Option<&str>, body: &[u8]| {
+            let mut scanner = Scanner::default();
+            scanner.header_writes(five, hour);
+            scanner.push(body);
+            let usage = scanner.usage().unwrap();
+            (
+                usage.cache_write,
+                usage.cache_write_5m,
+                usage.cache_write_1h,
+            )
+        };
+        assert_eq!(
+            scan(Some("3000"), Some(" 4000 "), KIMI),
+            (Some(7000), Some(3000), Some(4000))
+        );
+        assert_eq!(
+            scan(Some("7000"), None, KIMI),
+            (Some(7000), Some(7000), None)
+        );
+        // A split that does not add up, or is not a count, stays unknown.
+        for (five, hour) in [
+            (Some("3000"), Some("3000")),
+            (Some("8000"), None),
+            (Some("18446744073709551615"), Some("1")),
+            (Some("x"), Some("-1")),
+            (None, None),
+        ] {
+            assert_eq!(
+                scan(five, hour, KIMI),
+                (Some(7000), None, None),
+                "{five:?} {hour:?}"
+            );
+        }
+        // Headers invent no total, and the body's own split wins.
+        assert_eq!(scan(Some("0"), Some("0"), ANSWER), (None, None, None));
+        assert_eq!(
+            scan(Some("800"), Some("0"), ANTHROPIC),
+            (Some(800), Some(500), Some(300))
         );
     }
 

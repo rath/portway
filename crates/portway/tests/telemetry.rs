@@ -400,3 +400,27 @@ async fn cache_writes_survive_buffered_and_compressed_streaming_relays() {
         );
     }
 }
+
+#[tokio::test]
+async fn kimi_header_lifetimes_split_the_body_total() {
+    let _guard = sink().await;
+    let up = upstream(Health::Json(vec!["zstd"]), Reply::KimiCacheWriteStream).await;
+    let fwd = forwarder(&[("model-alpha", &up.base)], &[]).await;
+    let answer = fwd
+        .post("/v1/chat/completions", chat_body("model-alpha"))
+        .await;
+    // The headers still reach the agent: they are read, not consumed.
+    assert_eq!(
+        answer.header("msh-usage-cache-write-tokens-1h"),
+        Some("4000")
+    );
+    let usage = next_request().await.usage.unwrap();
+    assert_eq!(
+        (usage.prompt, usage.cached, usage.cache_write),
+        (12000, Some(4000), Some(7000))
+    );
+    assert_eq!(
+        (usage.cache_write_5m, usage.cache_write_1h),
+        (Some(3000), Some(4000))
+    );
+}

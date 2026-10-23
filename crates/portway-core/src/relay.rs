@@ -8,7 +8,7 @@ use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
-use http::{HeaderName, HeaderValue, Method, Response, StatusCode};
+use http::{HeaderMap, HeaderName, HeaderValue, Method, Response, StatusCode};
 use http_body::{Body, Frame, SizeHint};
 use http_body_util::BodyExt;
 use hyper::body::Incoming;
@@ -322,6 +322,15 @@ impl RelayBody {
             log: Some(log),
             deadline: Box::pin(tokio::time::sleep(READ_TIMEOUT)),
         }
+    }
+
+    /// Counts the upstream reported in its response headers rather than in
+    /// the body: Kimi's lifetime split of a cache write.
+    pub fn usage_headers(mut self, headers: &HeaderMap) -> Self {
+        let value = |name: &str| headers.get(name).and_then(|v| v.to_str().ok());
+        self.usage
+            .header_writes(value(usage::WRITE_5M_HEADER), value(usage::WRITE_1H_HEADER));
+        self
     }
 
     fn finish(&mut self) {

@@ -42,12 +42,16 @@ Portway reads usage from the response, without changing the client's cache
 settings. [OpenAI](https://developers.openai.com/api/docs/guides/prompt-caching)
 reports 30-minute and 12-hour writes, and
 [Anthropic](https://platform.claude.com/docs/en/build-with-claude/prompt-caching)
-reports 5-minute and 1-hour writes. Kimi's
-[Messages API](https://platform.kimi.ai/docs/guide/context-caching) reports the
-same 5-minute/1-hour breakdown; its Chat Completions and Responses documentation
-only specifies the write total. When lifetime is unknown, the default is an
-estimate and the usage view flags it. In particular, a Kimi request's selected
-TTL is not proof of its billed TTL: an existing cache entry keeps its lifetime.
+reports 5-minute and 1-hour writes. Kimi's Messages API reports the same
+5-minute/1-hour breakdown in its body. Its Chat Completions API puts only the
+total in the body and the
+[split in two response headers](https://platform.kimi.ai/docs/guide/context-caching),
+`Msh-Usage-Cache-Write-Tokens-5m` and `Msh-Usage-Cache-Write-Tokens-1h`, which
+Portway reads when they add up to that total; its Responses API reports only
+the total. When lifetime is unknown, the default is an estimate and the usage
+view flags it. Portway never infers a lifetime from the request's cache
+options: Kimi locks an entry's lifetime at its first write, so the option a
+request names is not proof of what it was billed.
 
 Older records and responses without write counts cannot be reconstructed.
 Their existing input-rate estimates remain, with missing-write counts shown.

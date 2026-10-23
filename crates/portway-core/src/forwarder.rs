@@ -1319,13 +1319,16 @@ impl Forwarder {
             in_flight,
             Arc::clone(&self.telemetry),
         );
-        out.body(OutBody::Relay(RelayBody::new(
-            incoming,
-            decoder.unwrap_or_else(Decoder::identity),
-            encoder,
-            lease,
-            log,
-        )))
+        out.body(OutBody::Relay(
+            RelayBody::new(
+                incoming,
+                decoder.unwrap_or_else(Decoder::identity),
+                encoder,
+                lease,
+                log,
+            )
+            .usage_headers(&parts.headers),
+        ))
         .expect("relay response is well formed")
     }
 

@@ -374,8 +374,10 @@ cache_write_5m = 1.25
 cache_write_1h = 2.0
 ```
 
-A reported lifetime uses its own rate, then falls back to `cache_write`, then
-to `input` if both are absent. Unknown lifetimes use `cache_write`, or `input`.
+A lifetime is reported in the usage body, or for Kimi's Chat Completions API
+in its `Msh-Usage-Cache-Write-Tokens-5m`/`-1h` response headers. A reported
+lifetime uses its own rate, then falls back to `cache_write`, then to `input`
+if both are absent. Unknown lifetimes use `cache_write`, or `input`.
 Each selected base/tier/long-context table supplies its own fallback rates;
 none are inherited from another table. Old three-rate configurations still work.
 
