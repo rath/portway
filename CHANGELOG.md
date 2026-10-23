@@ -7,6 +7,8 @@ version may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-23
+
 ### Added
 
 - Track cache-write tokens and reported 5-minute, 1-hour, 30-minute, and
@@ -415,7 +417,8 @@ The first public release.
   FAQ; the request compression protocol; a security policy; and contribution
   guidelines.
 
-[Unreleased]: https://github.com/rath/portway/compare/v0.2.7...HEAD
+[Unreleased]: https://github.com/rath/portway/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/rath/portway/compare/v0.2.7...v0.3.0
 [0.2.7]: https://github.com/rath/portway/compare/v0.2.6...v0.2.7
 [0.2.6]: https://github.com/rath/portway/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/rath/portway/compare/v0.2.4...v0.2.5
