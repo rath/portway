@@ -3,7 +3,7 @@
 The vendors' published list prices, written as Portway `[prices]` tables to
 copy into `portway.toml`. Checked against
 [OpenAI's API pricing](https://developers.openai.com/api/docs/pricing) on
-2026-10-23,
+2026-10-26,
 [Anthropic's pricing](https://platform.claude.com/docs/en/about-claude/pricing)
 on 2026-10-23 and
 [Kimi's API pricing](https://platform.kimi.ai/docs/pricing/chat) on
@@ -186,6 +186,51 @@ cache_write = 1.25
 cache_write_30m = 1.25
 cache_write_12h = 2.5
 long_context = { above = 272000, input = 2.0, output = 7.5, cache_read = 0.1, cache_write = 2.5, cache_write_30m = 2.5, cache_write_12h = 5.0 }
+
+[prices."gpt-6.1-terra"]
+input = 1.0
+output = 5.0
+cache_read = 0.05
+cache_write = 1.25
+cache_write_30m = 1.25
+cache_write_12h = 2.5
+long_context = { above = 272000, input = 2.0, output = 7.5, cache_read = 0.1, cache_write = 2.5, cache_write_30m = 2.5, cache_write_12h = 5.0 }
+
+[prices."gpt-6.1-terra".tiers.default]
+input = 1.0
+output = 5.0
+cache_read = 0.05
+cache_write = 1.25
+cache_write_30m = 1.25
+cache_write_12h = 2.5
+long_context = { above = 272000, input = 2.0, output = 7.5, cache_read = 0.1, cache_write = 2.5, cache_write_30m = 2.5, cache_write_12h = 5.0 }
+
+[prices."gpt-6.1-terra".tiers.priority]
+input = 2.0
+output = 10.0
+cache_read = 0.1
+cache_write = 2.5
+cache_write_30m = 2.5
+cache_write_12h = 5.0
+long_context = { above = 272000, input = 4.0, output = 15.0, cache_read = 0.2, cache_write = 5.0, cache_write_30m = 5.0, cache_write_12h = 10.0 }
+
+[prices."gpt-6.1-terra".tiers.fast]
+input = 2.0
+output = 10.0
+cache_read = 0.1
+cache_write = 2.5
+cache_write_30m = 2.5
+cache_write_12h = 5.0
+long_context = { above = 272000, input = 4.0, output = 15.0, cache_read = 0.2, cache_write = 5.0, cache_write_30m = 5.0, cache_write_12h = 10.0 }
+
+[prices."gpt-6.1-terra".tiers.flex]
+input = 0.5
+output = 2.5
+cache_read = 0.025
+cache_write = 0.625
+cache_write_30m = 0.625
+cache_write_12h = 1.25
+long_context = { above = 272000, input = 1.0, output = 3.75, cache_read = 0.05, cache_write = 1.25, cache_write_30m = 1.25, cache_write_12h = 2.5 }
 
 [prices."gpt-6-sol"]
 input = 2.0
