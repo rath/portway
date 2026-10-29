@@ -14,6 +14,10 @@ version may contain breaking changes.
 
 ### Fixed
 
+- Reject foreign, malformed and repeated Origin headers on every console
+  API route; scope session cookies to the console's URL prefix and validate
+  prefix characters before embedding them in assets and headers.
+- Reset console event streams for future cursors without integer overflow.
 - Decode compressed responses in bounded 32 KiB steps, including after a
   client disconnect, so highly compressible responses respect backpressure
   without allocating their entire expansion in a single frame.

@@ -307,7 +307,9 @@ portway --daemon --web --web-host 0.0.0.0 --web-allow-host sender-host
 ```
 
 To publish the console through a reverse proxy at a subpath, pass the path
-with `--web-base-path`, such as `--web-base-path /portway`. The console then
+with `--web-base-path`, such as `--web-base-path /portway`. Prefix segments
+may contain ASCII letters, digits, `-`, `.`, `_` and `~`; empty or relative
+segments are refused. The console then
 emits its assets and API calls under that prefix and answers 404 outside it,
 so the proxy forwards the path unchanged instead of stripping it. The `Host`
 the proxy forwards must be one the console answers to: rewrite it, or name the

@@ -69,22 +69,27 @@ pub struct Auth {
     port: u16,
     /// Names allowed besides `localhost`, normalized (see `address`).
     names: Vec<String>,
+    base: String,
 }
 
 impl Auth {
     pub fn load(dir: &Path, port: u16, names: Vec<String>, base: &str) -> io::Result<Self> {
-        Self::with_credentials(port, names, credentials::load(dir, port, base)?)
+        let base = super::address::base_path(base)
+            .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
+        let credentials = credentials::load(dir, port, &base)?;
+        Self::with_credentials(port, names, credentials, base)
     }
 
     #[cfg(test)]
     pub fn new(port: u16, names: Vec<String>) -> io::Result<Self> {
-        Self::with_credentials(port, names, Credentials::generate()?)
+        Self::with_credentials(port, names, Credentials::generate()?, "/".into())
     }
 
     fn with_credentials(
         port: u16,
         names: Vec<String>,
         credentials: Credentials,
+        base: String,
     ) -> io::Result<Self> {
         let launch_code = random_hex(32)?;
         Ok(Auth {
@@ -94,6 +99,7 @@ impl Auth {
             launch_code,
             port,
             names,
+            base,
         })
     }
 
@@ -140,9 +146,10 @@ impl Auth {
 
     pub fn set_cookie(&self) -> String {
         format!(
-            "{}={}; HttpOnly; SameSite=Strict; Path=/; Max-Age=34560000",
+            "{}={}; HttpOnly; SameSite=Strict; Path={}; Max-Age=34560000",
             self.cookie_name(),
-            self.session
+            self.session,
+            self.base
         )
     }
 

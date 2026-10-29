@@ -28,6 +28,9 @@ impl Ring {
 
     /// Sequence numbers only grow.
     pub fn push(&mut self, seq: u64, json: Arc<str>) {
+        if self.capacity == 0 {
+            return;
+        }
         debug_assert!(self.items.back().is_none_or(|(last, _)| *last < seq));
         if self.items.len() == self.capacity {
             self.items.pop_front();
@@ -55,10 +58,10 @@ impl Ring {
             .collect()
     }
 
-    /// Every event after `seq`, or `Gap` when some of them were evicted.
+    /// Every event after `seq`, or `Gap` for evicted or future cursors.
     pub fn after(&self, seq: u64) -> Result<Vec<(u64, Arc<str>)>, Gap> {
         let oldest = self.oldest();
-        if oldest > 1 && seq + 1 < oldest {
+        if seq > self.newest() || seq < oldest.saturating_sub(1) {
             return Err(Gap);
         }
         let start = self.items.partition_point(|(held, _)| *held <= seq);
@@ -112,5 +115,17 @@ mod tests {
         assert_eq!(ring.after(5).unwrap().len(), 10);
         assert_eq!(ring.after(0), Err(Gap));
         assert_eq!(Ring::new(4).after(0), Ok(Vec::new()));
+    }
+
+    #[test]
+    fn future_cursors_reset_without_overflow_or_skipping_events() {
+        let ring = filled(15, 10);
+        for seq in [16, u64::MAX] {
+            assert_eq!(ring.after(seq), Err(Gap));
+        }
+        assert_eq!(Ring::new(4).after(1), Err(Gap));
+        let empty = filled(5, 0);
+        assert!(empty.tail(10).is_empty());
+        assert_eq!(empty.after(0), Ok(Vec::new()));
     }
 }

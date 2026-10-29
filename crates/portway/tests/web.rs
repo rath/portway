@@ -395,6 +395,44 @@ async fn a_live_console_guards_its_door_shows_flights_and_stops() {
 
     page.sign_in(&launched.token).await;
     assert_eq!(page.get("/api/health").await.json()["session"], true);
+    let own_origin = format!("http://127.0.0.1:{}", launched.port);
+    for origin in ["http://evil.example", "null", "\u{0080}"] {
+        assert_eq!(
+            page.send("GET", "/api/snapshot", &[("origin", origin)], "")
+                .await
+                .status,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            page.send(
+                "POST",
+                "/api/session",
+                &[("origin", origin), ("x-portway-console", "1")],
+                "{}"
+            )
+            .await
+            .status,
+            StatusCode::FORBIDDEN
+        );
+    }
+    assert_eq!(
+        page.send("GET", "/api/health", &[("origin", &own_origin)], "")
+            .await
+            .status,
+        StatusCode::OK
+    );
+    assert_eq!(
+        page.send(
+            "GET",
+            "/api/health",
+            &[("origin", &own_origin), ("origin", &own_origin)],
+            ""
+        )
+        .await
+        .status,
+        StatusCode::FORBIDDEN
+    );
+    assert!(page.stream(u64::MAX, 1).await.contains("event: reset"));
     let answer = page.get("/api/snapshot").await;
     assert_eq!(answer.status, StatusCode::OK);
     assert_eq!(answer.headers["cache-control"], "no-store");
@@ -901,6 +939,7 @@ async fn persistent_console_access_survives_restart_and_can_be_reset() {
     assert_eq!(login.status, StatusCode::NO_CONTENT);
     let cookie = login.headers["set-cookie"].to_str().unwrap();
     assert!(cookie.contains("Max-Age=34560000"));
+    assert!(cookie.contains("Path=/console;"));
     assert!(cookie.contains("HttpOnly") && cookie.contains("SameSite=Strict"));
     page.cookie = Some(cookie.split(';').next().unwrap().to_owned());
 

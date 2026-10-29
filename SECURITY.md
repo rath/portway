@@ -120,7 +120,8 @@ request and stop or reload the forwarder, so it is guarded even on loopback:
   token; the log records the address without it. `web-auth.json` stores the
   token and session secret with mode 0600, separately for each console port and
   base path. Both survive restarts and remain valid until explicitly reset.
-  Cookies use a rolling 400-day browser storage lifetime. Stop all consoles
+  Cookies use the console's URL prefix as their path and a rolling 400-day
+  browser storage lifetime. Stop all consoles
   using the data directory, delete `web-auth.json`, then restart to revoke all
   access; restarting alone no longer revokes credentials. Protect backups of
   this file as credentials. It must be user-owned, private and a regular file;

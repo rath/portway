@@ -56,7 +56,7 @@ pub fn base_or_root(base: Option<&str>) -> String {
 ///
 /// Case is preserved — a URL path is not a host name — but the value is
 /// otherwise kept to what a single path segment hierarchy can express:
-/// no empty or `.`/`..` segments, and no query, fragment or whitespace.
+/// only unreserved ASCII characters in nonempty, non-relative segments.
 pub fn base_path(text: &str) -> Result<String, String> {
     let trimmed = text.trim();
     if trimmed.is_empty() || trimmed == "/" {
@@ -64,10 +64,10 @@ pub fn base_path(text: &str) -> Result<String, String> {
     }
     if trimmed
         .chars()
-        .any(|c| c.is_whitespace() || matches!(c, '?' | '#'))
+        .any(|c| !c.is_ascii_alphanumeric() && !matches!(c, '/' | '-' | '.' | '_' | '~'))
     {
         return Err(format!(
-            "{text:?} is not a URL path prefix (no whitespace, '?' or '#')"
+            "{text:?} is not a URL path prefix (use letters, digits, '/', '-', '.', '_' or '~')"
         ));
     }
     let inner = trimmed.trim_matches('/');
@@ -278,6 +278,12 @@ mod tests {
             "/./portway",
             "/portway/./x",
             "/portway//x",
+            "/portway%2f..",
+            "/portway\\x",
+            "/portway\"x",
+            "/portway'x",
+            "/portway;x",
+            "/portway<x>",
         ] {
             assert!(base_path(bad).is_err(), "{bad}");
         }

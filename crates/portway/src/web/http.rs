@@ -142,14 +142,16 @@ pub async fn handle(app: Arc<App>, request: Request<Incoming>) -> Response<WebBo
             .iter()
             .filter_map(|value| value.to_str().ok()),
     );
-    if method == Method::POST {
-        let origin = request
-            .headers()
-            .get(header::ORIGIN)
-            .and_then(|value| value.to_str().ok());
-        if !app.auth.origin_allowed(origin, &host) || !request.headers().contains_key(CSRF_HEADER) {
-            return error(StatusCode::FORBIDDEN, "cross-site request refused");
-        }
+    let mut origins = request.headers().get_all(header::ORIGIN).iter();
+    let origin_allowed = match (origins.next(), origins.next()) {
+        (None, None) => true,
+        (Some(origin), None) => origin
+            .to_str()
+            .is_ok_and(|origin| app.auth.origin_allowed(Some(origin), &host)),
+        _ => false,
+    };
+    if !origin_allowed || (method == Method::POST && !request.headers().contains_key(CSRF_HEADER)) {
+        return error(StatusCode::FORBIDDEN, "cross-site request refused");
     }
     let mut response = match (&method, path.as_str()) {
         (&Method::GET, "/api/health") => json(
