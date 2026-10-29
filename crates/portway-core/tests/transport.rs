@@ -66,6 +66,11 @@ async fn origin() -> Origin {
                 if let Some(encoding) = encoding {
                     response = response.header("content-encoding", encoding);
                 }
+                if parts.uri.path().ends_with("/stacked") {
+                    response = response
+                        .header("content-encoding", "gzip")
+                        .header("content-encoding", "gzip");
+                }
                 response.body(OutBody::fixed(body)).unwrap()
             }
         },
@@ -77,6 +82,70 @@ fn config() -> ForwarderConfig {
         coding: CodingPreference::Off,
         ..ForwarderConfig::default()
     }
+}
+
+#[tokio::test]
+async fn repeated_encoding_headers_keep_the_whole_representation() {
+    use std::io::Write;
+    let origin = origin().await;
+    let router = Router::single(&config(), &origin.url, None).unwrap();
+    let mut wire = b"a layered response".to_vec();
+    for _ in 0..2 {
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(&wire).unwrap();
+        wire = encoder.finish().unwrap();
+    }
+    for preserve in [false, true] {
+        let mut request = Request::post("/stacked")
+            .header("accept-encoding", "gzip")
+            .header("accept-encoding", "identity");
+        if preserve {
+            request = request.header("cache-control", "no-transform");
+        }
+        let response = router
+            .clone()
+            .handle(request.body(Full::new(Bytes::from(wire.clone()))).unwrap())
+            .await;
+        let codings: Vec<_> = response
+            .headers()
+            .get_all("content-encoding")
+            .iter()
+            .map(|v| v.to_str().unwrap())
+            .collect();
+        assert_eq!(codings, ["gzip", "gzip"]);
+        assert_eq!(response.headers()["etag"], "\"example\"");
+        assert_eq!(
+            response.into_body().collect().await.unwrap().to_bytes(),
+            wire
+        );
+        if preserve {
+            let seen = origin.seen.lock().unwrap();
+            let accepted: Vec<_> = seen
+                .last()
+                .unwrap()
+                .headers
+                .get_all("accept-encoding")
+                .iter()
+                .map(|v| v.to_str().unwrap())
+                .collect();
+            assert_eq!(accepted, ["gzip", "identity"]);
+        }
+    }
+    let response = router
+        .handle(
+            Request::post("/plain")
+                .header("accept-encoding", "gzip;q=0")
+                .header("accept-encoding", "zstd;q=1")
+                .body(Full::new(Bytes::from_static(b"plain response")))
+                .unwrap(),
+        )
+        .await;
+    assert_eq!(response.headers()["content-encoding"], "zstd");
+    let wire = response.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(
+        zstd::bulk::decompress(&wire, 100).unwrap(),
+        b"plain response"
+    );
 }
 
 #[tokio::test]

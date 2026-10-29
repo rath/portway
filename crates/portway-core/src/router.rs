@@ -268,8 +268,9 @@ impl Router {
         }
         let encoded = parts
             .headers
-            .get(http::header::CONTENT_ENCODING)
-            .is_some_and(|v| !v.as_bytes().eq_ignore_ascii_case(b"identity"));
+            .get_all(http::header::CONTENT_ENCODING)
+            .iter()
+            .any(|v| !v.as_bytes().eq_ignore_ascii_case(b"identity"));
         if encoded {
             return invalid_request(
                 StatusCode::UNSUPPORTED_MEDIA_TYPE,
@@ -441,8 +442,9 @@ fn pricing_class(speed: Option<String>, service_tier: Option<String>) -> Option<
 /// body names no string.
 pub fn named(headers: &HeaderMap, body: &[u8]) -> Named {
     let encoded = headers
-        .get(http::header::CONTENT_ENCODING)
-        .is_some_and(|v| !v.as_bytes().eq_ignore_ascii_case(b"identity"));
+        .get_all(http::header::CONTENT_ENCODING)
+        .iter()
+        .any(|v| !v.as_bytes().eq_ignore_ascii_case(b"identity"));
     if encoded || body.is_empty() {
         return Named::default();
     }
@@ -534,6 +536,26 @@ fn invalid_request(status: StatusCode, message: &str, param: Option<&str>) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_second_content_encoding_cannot_hide_behind_identity() {
+        let router = router(&[], &["model-a"]).unwrap();
+        let request = Request::post("/v1/messages")
+            .header("content-encoding", "identity")
+            .header("content-encoding", "gzip")
+            .body(http_body_util::Full::new(Bytes::from_static(
+                br#"{"model":"model-a"}"#,
+            )))
+            .unwrap();
+        assert_eq!(
+            named(request.headers(), br#"{"model":"model-a"}"#),
+            Named::default()
+        );
+        assert_eq!(
+            router.handle(request).await.status(),
+            StatusCode::UNSUPPORTED_MEDIA_TYPE
+        );
+    }
 
     #[test]
     fn routing_fields_match_json_object_semantics_without_retaining_other_values() {

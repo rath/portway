@@ -16,6 +16,8 @@ version may contain breaking changes.
 
 ### Fixed
 
+- Preserve repeated Content-Encoding fields and stacked response codings
+  unchanged; honor every Accept-Encoding field rather than only the first.
 - Capture upload-timing sockets before scheduling the ACK watcher so a
   closed connection's descriptor cannot be reused before it is duplicated.
 - Reject foreign, malformed and repeated Origin headers on every console

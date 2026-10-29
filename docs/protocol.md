@@ -131,6 +131,8 @@ cancel would leave the shared connection, and the generation, running (see the
 
 Hop-by-hop headers, including those named by `Connection`, are not forwarded.
 Content length and encoding are recomputed after transformations. When the
+response uses an unsupported coding or a stack of codings, its body and all
+Content-Encoding fields pass through unchanged. When the
 response changes encoding, digests (`Content-MD5`, `Digest`, `Content-Digest`,
 `Repr-Digest`) are removed, an `ETag` is kept but weakened (`"x"` becomes
 `W/"x"`, a weak tag is unchanged), and `Vary` includes `Accept-Encoding`. HEAD, 204/304, partial responses, and `no-transform` responses

@@ -719,8 +719,8 @@ impl Forwarder {
             HeaderValue::from_str(&self.upstream.authority).expect("authority is a valid header"),
         );
         if no_transform(client) || client.contains_key(http::header::RANGE) {
-            if let Some(value) = client.get(http::header::ACCEPT_ENCODING) {
-                headers.insert(http::header::ACCEPT_ENCODING, value.clone());
+            for value in client.get_all(http::header::ACCEPT_ENCODING) {
+                headers.append(http::header::ACCEPT_ENCODING, value.clone());
             }
         } else {
             headers.insert(
@@ -1196,12 +1196,16 @@ impl Forwarder {
             .responded(response.status().as_u16(), ttfb, uploaded, coding);
 
         let (parts, incoming) = response.into_parts();
-        let upstream_encoding = parts
-            .headers
-            .get(http::header::CONTENT_ENCODING)
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("identity")
-            .to_string();
+        let encodings = parts.headers.get_all(http::header::CONTENT_ENCODING);
+        let upstream_encoding = if encodings.iter().next().is_none() {
+            "identity".to_owned()
+        } else {
+            encodings
+                .iter()
+                .map(|value| value.to_str().unwrap_or("unsupported"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
         let no_body = method == Method::HEAD
             || parts.status == StatusCode::NO_CONTENT
             || parts.status == StatusCode::NOT_MODIFIED;
@@ -1218,11 +1222,13 @@ impl Forwarder {
         // can make. An upstream coding we could not decode is relayed untouched,
         // so there is nothing to re-encode in that case.
         let encoder = if decoder.is_some() {
-            Encoder::for_accept(
-                client_headers
-                    .get(http::header::ACCEPT_ENCODING)
-                    .and_then(|value| value.to_str().ok()),
-            )
+            let accepted = client_headers
+                .get_all(http::header::ACCEPT_ENCODING)
+                .iter()
+                .filter_map(|value| value.to_str().ok())
+                .collect::<Vec<_>>()
+                .join(", ");
+            Encoder::for_accept(Some(&accepted))
         } else {
             None
         };
@@ -1288,11 +1294,9 @@ impl Forwarder {
                 // A coding we cannot decode is relayed untouched rather than
                 // silently corrupted; we only ever ask for gzip/deflate/zstd.
                 None if decoder.is_none() => {
-                    slot.insert(
-                        http::header::CONTENT_ENCODING,
-                        HeaderValue::from_str(&upstream_encoding)
-                            .expect("upstream header round-trips"),
-                    );
+                    for value in encodings {
+                        slot.append(http::header::CONTENT_ENCODING, value.clone());
+                    }
                 }
                 None => {}
             }
