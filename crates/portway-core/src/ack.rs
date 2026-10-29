@@ -5,7 +5,7 @@
 //! draining to zero proves the far end's TCP has them all. That is still the
 //! peer's *kernel*, not its application — the response proves that.
 
-use std::os::fd::{AsRawFd, BorrowedFd, OwnedFd, RawFd};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -47,17 +47,26 @@ fn unacked(fd: RawFd) -> std::io::Result<i32> {
 
 /// Watch the send queue until it hits zero, i.e. the last byte was ACKed.
 ///
-/// The socket is dup'd first: the pool may close the connection at any moment
-/// and a bare fd number could be reused for another socket.
-pub async fn watch_drain(clock: Arc<PhaseClock>) {
-    let Some(raw) = clock.fd() else { return };
-    // SAFETY: the connection that owns `raw` is alive here — the body has just
-    // been written to it — and the borrow ends with this statement.
-    let dup = match unsafe { BorrowedFd::borrow_raw(raw) }.try_clone_to_owned() {
-        Ok(dup) => dup,
-        Err(_) => return,
-    };
-    drain_loop(&dup, &clock).await;
+/// Capture the socket synchronously, while the caller still owns it. Waiting
+/// until this future is polled could instead capture a reused fd after the
+/// connection closes. Invalid descriptors simply leave the timing unset.
+pub fn watch_drain(clock: Arc<PhaseClock>) -> impl Future<Output = ()> + Send {
+    let dup = clock.fd().and_then(|raw| {
+        // SAFETY: fcntl validates the integer descriptor; it borrows no Rust
+        // object and returns a new owned descriptor on success.
+        let fd = unsafe { libc::fcntl(raw, libc::F_DUPFD_CLOEXEC, 0) };
+        if fd < 0 {
+            None
+        } else {
+            // SAFETY: this successful fcntl created a unique owned descriptor.
+            Some(unsafe { OwnedFd::from_raw_fd(fd) })
+        }
+    });
+    async move {
+        if let Some(dup) = dup {
+            drain_loop(&dup, &clock).await;
+        }
+    }
 }
 
 async fn drain_loop(dup: &OwnedFd, clock: &PhaseClock) {
@@ -81,5 +90,37 @@ async fn drain_loop(dup: &OwnedFd, clock: &PhaseClock) {
 pub fn spawn_watch(clock: Arc<PhaseClock>) {
     if clock.fd().is_some() {
         tokio::spawn(watch_drain(clock));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Read;
+    use std::net::{TcpListener, TcpStream};
+
+    #[tokio::test]
+    async fn the_socket_is_captured_before_the_watcher_is_polled() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (mut server, _) = listener.accept().unwrap();
+        server
+            .set_read_timeout(Some(Duration::from_millis(20)))
+            .unwrap();
+        let clock = Arc::new(PhaseClock::new());
+        clock.set_fd(client.as_raw_fd());
+        clock.mark_upload_started();
+        let watch = watch_drain(Arc::clone(&clock));
+        drop(client);
+        let err = server
+            .read(&mut [0])
+            .expect_err("the watcher owns the socket before its first poll");
+        assert!(matches!(
+            err.kind(),
+            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+        ));
+        watch.await;
+        assert!(clock.upload_wall().is_some());
+        assert_eq!(server.read(&mut [0]).unwrap(), 0);
     }
 }

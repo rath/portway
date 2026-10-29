@@ -14,6 +14,8 @@ version may contain breaking changes.
 
 ### Fixed
 
+- Capture upload-timing sockets before scheduling the ACK watcher so a
+  closed connection's descriptor cannot be reused before it is duplicated.
 - Reject foreign, malformed and repeated Origin headers on every console
   API route; scope session cookies to the console's URL prefix and validate
   prefix characters before embedding them in assets and headers.
