@@ -47,8 +47,13 @@ async fn origin() -> Origin {
                 } else {
                     200
                 };
-                let broken = parts.uri.path().ends_with("/broken-gzip")
-                    || parts.uri.path().ends_with("/gzip");
+                let encoding = if parts.uri.path().ends_with("/broken-gzip") {
+                    Some("gzip")
+                } else {
+                    ["gzip", "deflate", "zstd"]
+                        .into_iter()
+                        .find(|coding| parts.uri.path().ends_with(&format!("/{coding}")))
+                };
                 sink.lock().unwrap().push(Seen {
                     method: parts.method,
                     uri: parts.uri.to_string(),
@@ -58,8 +63,8 @@ async fn origin() -> Origin {
                 let mut response = Response::builder()
                     .status(status)
                     .header("etag", "\"example\"");
-                if broken {
-                    response = response.header("content-encoding", "gzip");
+                if let Some(encoding) = encoding {
+                    response = response.header("content-encoding", encoding);
                 }
                 response.body(OutBody::fixed(body)).unwrap()
             }
@@ -72,6 +77,99 @@ fn config() -> ForwarderConfig {
         coding: CodingPreference::Off,
         ..ForwarderConfig::default()
     }
+}
+
+#[tokio::test]
+async fn compressed_responses_expand_in_bounded_frames() {
+    use std::io::Write;
+    let origin = origin().await;
+    let plain = vec![b'x'; 8 << 20];
+    for coding in ["gzip", "deflate", "zstd"] {
+        let compressed = match coding {
+            "gzip" => {
+                let mut encoder =
+                    flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+                encoder.write_all(&plain).unwrap();
+                encoder.finish().unwrap()
+            }
+            "deflate" => {
+                let mut encoder =
+                    flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+                encoder.write_all(&plain).unwrap();
+                encoder.finish().unwrap()
+            }
+            _ => zstd::bulk::compress(&plain, 3).unwrap(),
+        };
+        let router = Router::single(&config(), &origin.url, None).unwrap();
+        let response = router
+            .clone()
+            .handle(
+                Request::post(format!("/{coding}"))
+                    .body(Full::new(Bytes::from(compressed)))
+                    .unwrap(),
+            )
+            .await;
+        let mut body = response.into_body();
+        let mut total = 0;
+        while let Some(frame) = body.frame().await {
+            if let Ok(data) = frame.unwrap().into_data() {
+                assert!(
+                    data.len() <= 32 * 1024,
+                    "{coding}: {} decoded bytes in one frame",
+                    data.len()
+                );
+                assert!(data.iter().all(|b| *b == b'x'));
+                total += data.len();
+            }
+        }
+        assert_eq!(total, plain.len(), "{coding}");
+        assert_eq!(router.routes()[0].1.view().idle_conns, 1);
+    }
+}
+
+#[tokio::test]
+async fn disconnect_stops_expanding_the_buffered_compressed_response() {
+    let origin = origin().await;
+    let (telemetry, events) = Telemetry::channel(16);
+    let router = Router::single(
+        &ForwarderConfig {
+            telemetry,
+            ..config()
+        },
+        &origin.url,
+        None,
+    )
+    .unwrap();
+    let wire = zstd::bulk::compress(&vec![b'x'; 8 << 20], 3).unwrap();
+    let response = router
+        .clone()
+        .handle(
+            Request::post("/zstd")
+                .body(Full::new(Bytes::from(wire)))
+                .unwrap(),
+        )
+        .await;
+    let mut body = response.into_body();
+    let first = body.frame().await.unwrap().unwrap().into_data().unwrap();
+    assert!(!first.is_empty());
+    drop(body);
+
+    let record = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            if let Some(record) = events.try_iter().find_map(|event| match event {
+                Event::Request(record) => Some(record),
+                _ => None,
+            }) {
+                break record;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(!record.complete);
+    assert!(record.received <= first.len() as u64 + 32 * 1024);
+    assert_eq!(router.routes()[0].1.view().idle_conns, 0);
 }
 async fn send(
     router: &Arc<Router>,

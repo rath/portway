@@ -53,6 +53,9 @@ storage.
   window (128 MiB by default), and rejects dictionary-compressed frames that
   carry no checksum. A compressed body that expands past the limit is refused
   with 413 before the application runs.
+- Streaming response decoding emits at most 32 KiB per step and limits zstd
+  windows to 128 MiB. A slow or disconnected client does not cause an entire
+  compressed network frame to be expanded into memory at once.
 
 ### What is recorded
 

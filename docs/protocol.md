@@ -117,7 +117,8 @@ cache scope, reload behavior, and eligibility, see
 
 Request bodies are bounded and buffered before compression or restoration.
 Responses are relayed incrementally, optionally decoded and re-encoded according
-to the client's `Accept-Encoding`. When the client disconnects, the proxy waits
+to the client's `Accept-Encoding`. Response decoders emit at most 32 KiB per
+step and accept zstd windows up to 128 MiB. When the client disconnects, the proxy waits
 up to 2 s for the upstream answer to end: an answer that ends within that grace
 is complete, with its usage, and its connection is pooled. An answer that sends
 more than 1 KiB of itself meanwhile is still generating, and is cancelled at

@@ -9,6 +9,9 @@ version may contain breaking changes.
 
 ### Fixed
 
+- Decode compressed responses in bounded 32 KiB steps, including after a
+  client disconnect, so highly compressible responses respect backpressure
+  without allocating their entire expansion in a single frame.
 - Enable 30-second request-header deadlines on both HTTP listeners, expire
   request bodies after 30 seconds without progress, and bound console login
   uploads to 10 seconds. Body timeouts return HTTP 408 before forwarding.

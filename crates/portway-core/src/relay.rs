@@ -409,30 +409,43 @@ async fn drain(
 ) {
     let rest = async {
         let mut more = 0u64;
-        while let Some(frame) = upstream.frame().await {
-            let frame = match frame {
-                Ok(frame) => frame,
-                Err(error) => {
+        loop {
+            let decoded = match decoder.next_chunk() {
+                Ok(Some(decoded)) => decoded,
+                Ok(None) => {
+                    let Some(frame) = upstream.frame().await else {
+                        break;
+                    };
+                    let frame = match frame {
+                        Ok(frame) => frame,
+                        Err(error) => {
+                            if let Some(log) = log.as_mut() {
+                                log.end_reason = Some(EndReason::upstream(&error));
+                            }
+                            return false;
+                        }
+                    };
+                    let Ok(data) = frame.into_data() else {
+                        continue;
+                    };
                     if let Some(log) = log.as_mut() {
-                        log.end_reason = Some(EndReason::upstream(&error));
+                        log.received_wire += data.len() as u64;
+                        log.stats
+                            .down_wire_bytes
+                            .fetch_add(data.len() as u64, Ordering::Relaxed);
+                    }
+                    decoder.feed(data);
+                    // Even a stream of empty compressed frames must yield to
+                    // the grace timer instead of keeping this poll alive.
+                    tokio::task::yield_now().await;
+                    continue;
+                }
+                Err(_) => {
+                    if let Some(log) = log.as_mut() {
+                        log.end_reason = Some(EndReason::DecodeError);
                     }
                     return false;
                 }
-            };
-            let Ok(data) = frame.into_data() else {
-                continue;
-            };
-            if let Some(log) = log.as_mut() {
-                log.received_wire += data.len() as u64;
-                log.stats
-                    .down_wire_bytes
-                    .fetch_add(data.len() as u64, Ordering::Relaxed);
-            }
-            let Ok(decoded) = decoder.push(data) else {
-                if let Some(log) = log.as_mut() {
-                    log.end_reason = Some(EndReason::DecodeError);
-                }
-                return false;
             };
             usage.push(&decoded);
             if let Some(log) = log.as_mut() {
@@ -446,6 +459,7 @@ async fn drain(
             if more > GRACE_BYTES {
                 return false;
             }
+            tokio::task::yield_now().await;
         }
         if decoder.finish().is_err() {
             if let Some(log) = log.as_mut() {
@@ -481,36 +495,16 @@ impl Body for RelayBody {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<Frame<Bytes>, Self::Error>>> {
-        loop {
-            let Some(upstream) = self.upstream.as_mut() else {
+        // Bound codec work per poll, including streams of empty members.
+        for _ in 0..32 {
+            if self.upstream.is_none() {
                 return Poll::Ready(None);
-            };
-            match Pin::new(upstream).poll_frame(cx) {
-                Poll::Ready(Some(Ok(frame))) => {
-                    self.deadline
-                        .as_mut()
-                        .reset(tokio::time::Instant::now() + READ_TIMEOUT);
-                    let Ok(data) = frame.into_data() else {
-                        continue; // trailers: nothing to relay on an h1 leg
-                    };
-                    if let Some(log) = self.log.as_mut() {
-                        log.received_wire += data.len() as u64;
-                        log.stats
-                            .down_wire_bytes
-                            .fetch_add(data.len() as u64, Ordering::Relaxed);
-                    }
-                    let decoded = match self.decoder.push(data) {
-                        Ok(decoded) => decoded,
-                        Err(err) => {
-                            self.fail(EndReason::DecodeError);
-                            return Poll::Ready(Some(Err(err)));
-                        }
-                    };
+            }
+            match self.decoder.next_chunk() {
+                Ok(Some(decoded)) => {
                     if decoded.is_empty() {
-                        continue; // the codec needs more input before it emits
+                        continue;
                     }
-                    // The counts and the usage object describe the answer, so
-                    // both are read before the hop re-encodes the bytes.
                     self.usage.push(&decoded);
                     if let Some(log) = self.log.as_mut() {
                         let now = Instant::now();
@@ -535,6 +529,31 @@ impl Body for RelayBody {
                     };
                     self.count_agent(payload.len());
                     return Poll::Ready(Some(Ok(Frame::data(payload))));
+                }
+                Ok(None) => {}
+                Err(err) => {
+                    self.fail(EndReason::DecodeError);
+                    return Poll::Ready(Some(Err(err)));
+                }
+            }
+            let Some(upstream) = self.upstream.as_mut() else {
+                return Poll::Ready(None);
+            };
+            match Pin::new(upstream).poll_frame(cx) {
+                Poll::Ready(Some(Ok(frame))) => {
+                    self.deadline
+                        .as_mut()
+                        .reset(tokio::time::Instant::now() + READ_TIMEOUT);
+                    let Ok(data) = frame.into_data() else {
+                        continue; // trailers: nothing to relay on an h1 leg
+                    };
+                    if let Some(log) = self.log.as_mut() {
+                        log.received_wire += data.len() as u64;
+                        log.stats
+                            .down_wire_bytes
+                            .fetch_add(data.len() as u64, Ordering::Relaxed);
+                    }
+                    self.decoder.feed(data);
                 }
                 Poll::Ready(Some(Err(err))) => {
                     self.fail(EndReason::upstream(&err));
@@ -583,6 +602,8 @@ impl Body for RelayBody {
                 }
             }
         }
+        cx.waker().wake_by_ref();
+        Poll::Pending
     }
 }
 

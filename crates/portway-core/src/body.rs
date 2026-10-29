@@ -9,7 +9,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll};
 
-use bytes::{Bytes, BytesMut};
+use bytes::{Buf, Bytes, BytesMut};
 use http::HeaderMap;
 use http_body::{Body, Frame, SizeHint};
 use hyper::body::Incoming;
@@ -224,6 +224,8 @@ pub struct Decoder {
     kind: Kind,
     scratch: Vec<u8>,
     ended: bool,
+    input: Bytes,
+    needs_drain: bool,
 }
 
 impl Decoder {
@@ -235,7 +237,15 @@ impl Decoder {
             "gzip" | "x-gzip" => Kind::Flate(flate2::Decompress::new_gzip(15), true),
             // Real-world `deflate` is overwhelmingly zlib-wrapped.
             "deflate" => Kind::Flate(flate2::Decompress::new(true), false),
-            "zstd" => Kind::Zstd(Box::new(zstd::stream::raw::Decoder::new().ok()?)),
+            "zstd" => {
+                let mut decoder = zstd::stream::raw::Decoder::new().ok()?;
+                decoder
+                    .set_parameter(zstd::zstd_safe::DParameter::WindowLogMax(
+                        crate::dict::MAX_WINDOW_BYTES.ilog2(),
+                    ))
+                    .ok()?;
+                Kind::Zstd(Box::new(decoder))
+            }
             _ => return None,
         };
         let scratch = match kind {
@@ -246,6 +256,8 @@ impl Decoder {
             kind,
             scratch,
             ended: false,
+            input: Bytes::new(),
+            needs_drain: false,
         })
     }
 
@@ -254,6 +266,8 @@ impl Decoder {
             kind: Kind::Identity,
             scratch: Vec::new(),
             ended: false,
+            input: Bytes::new(),
+            needs_drain: false,
         }
     }
 
@@ -261,22 +275,82 @@ impl Decoder {
         matches!(self.kind, Kind::Identity)
     }
 
+    /// Decode a whole input chunk for callers that explicitly want to buffer it.
+    /// The live relay uses `feed`/`next_chunk` to bound expansion and honor backpressure.
     pub fn push(&mut self, chunk: Bytes) -> io::Result<Bytes> {
-        if chunk.is_empty() {
+        if chunk.is_empty() || self.is_identity() {
             return Ok(chunk);
         }
-        match &mut self.kind {
-            Kind::Identity => Ok(chunk),
-            Kind::Flate(state, gzip) => {
-                inflate(state, *gzip, &mut self.ended, &chunk, &mut self.scratch)
-            }
-            Kind::Zstd(state) => unzstd(state, &mut self.ended, &chunk, &mut self.scratch),
+        self.feed(chunk);
+        let mut out = BytesMut::new();
+        while let Some(chunk) = self.next_chunk()? {
+            out.extend_from_slice(&chunk);
         }
+        Ok(out.freeze())
+    }
+
+    pub(crate) fn feed(&mut self, chunk: Bytes) {
+        debug_assert!(self.input.is_empty() && !self.needs_drain);
+        self.input = chunk;
+    }
+
+    /// One bounded codec step. Empty output can still have consumed a header;
+    /// `None` alone means the next input frame is needed.
+    pub(crate) fn next_chunk(&mut self) -> io::Result<Option<Bytes>> {
+        if self.input.is_empty() && !self.needs_drain {
+            return Ok(None);
+        }
+        let (read, wrote) = match &mut self.kind {
+            Kind::Identity => return Ok(Some(std::mem::take(&mut self.input))),
+            Kind::Flate(state, gzip) => {
+                if self.ended {
+                    if !*gzip {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "data after deflate stream",
+                        ));
+                    }
+                    *state = flate2::Decompress::new_gzip(15);
+                    self.ended = false;
+                }
+                let before_in = state.total_in();
+                let before_out = state.total_out();
+                let status = state
+                    .decompress(
+                        &self.input,
+                        &mut self.scratch,
+                        flate2::FlushDecompress::None,
+                    )
+                    .map_err(io::Error::other)?;
+                self.ended = status == flate2::Status::StreamEnd;
+                (
+                    (state.total_in() - before_in) as usize,
+                    (state.total_out() - before_out) as usize,
+                )
+            }
+            Kind::Zstd(state) => {
+                use zstd::stream::raw::Operation;
+                let status = state.run_on_buffers(&self.input, &mut self.scratch)?;
+                if status.bytes_read != 0 || status.bytes_written != 0 {
+                    self.ended = status.remaining == 0;
+                }
+                (status.bytes_read, status.bytes_written)
+            }
+        };
+        self.input.advance(read);
+        if read == 0 && wrote == 0 && !self.input.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "compressed response made no progress",
+            ));
+        }
+        self.needs_drain = wrote == self.scratch.len() && !self.ended;
+        Ok(Some(Bytes::copy_from_slice(&self.scratch[..wrote])))
     }
 
     /// HTTP EOF is only complete after the codec has consumed its trailer.
     pub fn finish(&self) -> io::Result<()> {
-        if self.is_identity() || self.ended {
+        if self.input.is_empty() && !self.needs_drain && (self.is_identity() || self.ended) {
             Ok(())
         } else {
             Err(io::Error::new(
@@ -285,91 +359,6 @@ impl Decoder {
             ))
         }
     }
-}
-
-fn inflate(
-    state: &mut flate2::Decompress,
-    gzip: bool,
-    ended: &mut bool,
-    input: &[u8],
-    scratch: &mut [u8],
-) -> io::Result<Bytes> {
-    let mut out = BytesMut::new();
-    let mut rest = input;
-    loop {
-        if *ended {
-            if !gzip {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "data after deflate stream",
-                ));
-            }
-            // A gzip representation can contain several members, even when
-            // the next member starts in a different HTTP frame.
-            *state = flate2::Decompress::new_gzip(15);
-            *ended = false;
-        }
-        let read_before = state.total_in();
-        let wrote_before = state.total_out();
-        let status = state
-            .decompress(rest, scratch, flate2::FlushDecompress::None)
-            .map_err(io::Error::other)?;
-        let read = (state.total_in() - read_before) as usize;
-        let wrote = (state.total_out() - wrote_before) as usize;
-        out.extend_from_slice(&scratch[..wrote]);
-        rest = &rest[read..];
-        if status == flate2::Status::StreamEnd {
-            *ended = true;
-            if !rest.is_empty() {
-                continue;
-            }
-            break;
-        }
-        if read == 0 && wrote == 0 {
-            if !rest.is_empty() {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "compressed response made no progress",
-                ));
-            }
-            break;
-        }
-        // Output window filled: go around for the rest of this input.
-        if rest.is_empty() && wrote < scratch.len() {
-            break;
-        }
-    }
-    Ok(out.freeze())
-}
-
-fn unzstd(
-    state: &mut zstd::stream::raw::Decoder<'static>,
-    ended: &mut bool,
-    input: &[u8],
-    scratch: &mut [u8],
-) -> io::Result<Bytes> {
-    use zstd::stream::raw::Operation;
-    let mut out = BytesMut::new();
-    let mut rest = input;
-    loop {
-        let status = state.run_on_buffers(rest, scratch)?;
-        out.extend_from_slice(&scratch[..status.bytes_written]);
-        rest = &rest[status.bytes_read..];
-        if status.bytes_read == 0 && status.bytes_written == 0 {
-            if !rest.is_empty() {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "compressed response made no progress",
-                ));
-            }
-            break;
-        }
-        *ended = status.remaining == 0;
-        if rest.is_empty() && status.bytes_written < scratch.len() {
-            break;
-        }
-    }
-    Ok(out.freeze())
 }
 
 enum EncKind {
