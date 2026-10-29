@@ -17,6 +17,7 @@ use bytes::Bytes;
 use http::{HeaderMap, Method, Request, Response, StatusCode};
 use http_body::Body;
 use serde::Deserialize;
+use serde::de::{IgnoredAny, MapAccess, SeqAccess, Visitor};
 use std::sync::Arc;
 
 pub const STATS_PATH: &str = "/__portway/stats";
@@ -283,16 +284,11 @@ impl Router {
         let mut model = query_model(parts.uri.query());
         let mut tier = None;
         if !body.is_empty() {
-            let Ok(serde_json::Value::Object(mut payload)) =
-                serde_json::from_slice::<serde_json::Value>(&body)
-            else {
+            let Ok(fields) = serde_json::from_slice::<NamedFields>(&body) else {
                 return invalid_request(StatusCode::BAD_REQUEST, "Expected a JSON object.", None);
             };
-            model = string(payload.remove("model"));
-            tier = pricing_class(
-                string(payload.remove("speed")),
-                string(payload.remove("service_tier")),
-            );
+            model = fields.model;
+            tier = pricing_class(fields.speed, fields.service_tier);
         }
         let Some(forwarder) = model
             .as_deref()
@@ -329,14 +325,95 @@ impl Router {
 
 /// Only the recorded fields are kept; every other value is skipped as it is
 /// read.
-#[derive(Deserialize)]
+#[derive(Default)]
 struct NamedFields {
-    #[serde(default)]
-    model: Option<serde_json::Value>,
-    #[serde(default)]
-    service_tier: Option<serde_json::Value>,
-    #[serde(default)]
-    speed: Option<serde_json::Value>,
+    model: Option<String>,
+    service_tier: Option<String>,
+    speed: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for NamedFields {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(field_identifier, rename_all = "snake_case")]
+        enum Field {
+            Model,
+            ServiceTier,
+            Speed,
+            #[serde(other)]
+            Ignore,
+        }
+        struct Fields;
+        impl<'de> Visitor<'de> for Fields {
+            type Value = NamedFields;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a JSON object")
+            }
+            fn visit_map<M: MapAccess<'de>>(self, mut map: M) -> Result<Self::Value, M::Error> {
+                let mut fields = NamedFields::default();
+                while let Some(key) = map.next_key::<Field>()? {
+                    // Preserve the old JSON object's last-value-wins behavior,
+                    // including a non-string replacing an earlier string.
+                    match key {
+                        Field::Model => fields.model = map.next_value::<StringField>()?.0,
+                        Field::ServiceTier => {
+                            fields.service_tier = map.next_value::<StringField>()?.0
+                        }
+                        Field::Speed => fields.speed = map.next_value::<StringField>()?.0,
+                        Field::Ignore => {
+                            map.next_value::<IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(fields)
+            }
+        }
+        deserializer.deserialize_map(Fields)
+    }
+}
+
+/// Keep strings but skip every other JSON value without building its tree.
+struct StringField(Option<String>);
+impl<'de> Deserialize<'de> for StringField {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct StringOrIgnored;
+        impl<'de> Visitor<'de> for StringOrIgnored {
+            type Value = StringField;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("any JSON value")
+            }
+            fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<Self::Value, E> {
+                Ok(StringField(Some(value.to_owned())))
+            }
+            fn visit_string<E: serde::de::Error>(self, value: String) -> Result<Self::Value, E> {
+                Ok(StringField(Some(value)))
+            }
+            fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+                Ok(StringField(None))
+            }
+            fn visit_bool<E: serde::de::Error>(self, _: bool) -> Result<Self::Value, E> {
+                self.visit_unit()
+            }
+            fn visit_i64<E: serde::de::Error>(self, _: i64) -> Result<Self::Value, E> {
+                self.visit_unit()
+            }
+            fn visit_u64<E: serde::de::Error>(self, _: u64) -> Result<Self::Value, E> {
+                self.visit_unit()
+            }
+            fn visit_f64<E: serde::de::Error>(self, _: f64) -> Result<Self::Value, E> {
+                self.visit_unit()
+            }
+            fn visit_seq<S: SeqAccess<'de>>(self, seq: S) -> Result<Self::Value, S::Error> {
+                IgnoredAny.visit_seq(seq)?;
+                self.visit_unit()
+            }
+            fn visit_map<M: MapAccess<'de>>(self, map: M) -> Result<Self::Value, M::Error> {
+                IgnoredAny.visit_map(map)?;
+                self.visit_unit()
+            }
+        }
+        deserializer.deserialize_any(StringOrIgnored)
+    }
 }
 
 /// What a request names in its JSON body and is recorded under. Neither
@@ -373,15 +450,8 @@ pub fn named(headers: &HeaderMap, body: &[u8]) -> Named {
         return Named::default();
     };
     Named {
-        model: string(fields.model),
-        tier: pricing_class(string(fields.speed), string(fields.service_tier)),
-    }
-}
-
-fn string(value: Option<serde_json::Value>) -> Option<String> {
-    match value? {
-        serde_json::Value::String(text) => Some(text),
-        _ => None,
+        model: fields.model,
+        tier: pricing_class(fields.speed, fields.service_tier),
     }
 }
 
@@ -464,6 +534,39 @@ fn invalid_request(status: StatusCode, message: &str, param: Option<&str>) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn routing_fields_match_json_object_semantics_without_retaining_other_values() {
+        for text in [
+            r#"{"model":"first","model":"last","speed":"fast","speed":null,"service_tier":"priority"}"#,
+            r#"{"model":"first","model":{"nested":[null,false,4,{"a":"b"}]},"speed":true}"#,
+            r#"{"model":"m\u0031","service_tier":["ignored"],"speed":1.2,"messages":[{"content":"skipped"}]}"#,
+            r#"{"model":-1,"speed":false,"service_tier":null}"#,
+            r#"{}"#,
+        ] {
+            let value: serde_json::Value = serde_json::from_str(text).unwrap();
+            let string = |key| value.get(key).and_then(|v| v.as_str()).map(str::to_owned);
+            assert_eq!(
+                named(&HeaderMap::new(), text.as_bytes()),
+                Named {
+                    model: string("model"),
+                    tier: string("speed").or_else(|| string("service_tier")),
+                },
+                "{text}"
+            );
+        }
+        for invalid in [
+            "[]",
+            "null",
+            r#"{"model":"ok","messages":[1,]}"#,
+            r#"{"model":"ok"} trailing"#,
+        ] {
+            assert!(
+                serde_json::from_str::<NamedFields>(invalid).is_err(),
+                "{invalid}"
+            );
+        }
+    }
 
     fn router(mounts: &[&str], models: &[&str]) -> Result<Arc<Router>, String> {
         let pair = |name: &&str| ((*name).to_owned(), "http://example.test".to_owned());

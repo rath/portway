@@ -7,6 +7,11 @@ version may contain breaking changes.
 
 ## [Unreleased]
 
+### Changed
+
+- Reuse single-frame request bodies without copying and read only routing
+  and pricing fields from JSON instead of allocating the full message tree.
+
 ### Fixed
 
 - Decode compressed responses in bounded 32 KiB steps, including after a

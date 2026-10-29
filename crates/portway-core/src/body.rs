@@ -643,26 +643,84 @@ where
     if body.size_hint().lower() > limit as u64 {
         return Err(BodyReadError::TooLarge);
     }
-    let mut out = bytes::BytesMut::new();
+    let mut first = None;
+    let mut out = Vec::new();
+    let mut len = 0;
     while let Some(frame) = tokio::time::timeout(REQUEST_BODY_IDLE_TIMEOUT, body.frame())
         .await
         .map_err(|_| BodyReadError::Timeout)?
     {
         let frame = frame.map_err(|e| BodyReadError::Read(e.to_string()))?;
         if let Ok(data) = frame.into_data() {
-            if data.len() > limit.saturating_sub(out.len()) {
+            if data.len() > limit.saturating_sub(len) {
                 return Err(BodyReadError::TooLarge);
             }
-            out.extend_from_slice(&data);
+            if data.is_empty() {
+                continue;
+            }
+            len += data.len();
+            if first.is_none() && out.is_empty() {
+                first = Some(data);
+            } else {
+                if let Some(data) = first.take() {
+                    out.reserve(len);
+                    out.extend_from_slice(&data);
+                }
+                out.extend_from_slice(&data);
+            }
         }
     }
-    Ok(out.freeze())
+    // A receiver hands its already-decoded body to the router as one frame.
+    // Keep that allocation; multiple frames are joined without retaining the
+    // growth buffer's spare capacity in a dictionary.
+    Ok(first.unwrap_or_else(|| Bytes::from(out.into_boxed_slice())))
 }
 
 #[cfg(test)]
 mod read_tests {
     use super::*;
     use std::time::Duration;
+
+    #[tokio::test]
+    async fn an_already_buffered_body_keeps_its_allocation() {
+        let bytes = Bytes::from(vec![b'x'; 1 << 20]);
+        let pointer = bytes.as_ptr();
+        let read = collect_raw(http_body_util::Full::new(bytes), 1 << 20)
+            .await
+            .unwrap();
+        assert_eq!(read.len(), 1 << 20);
+        assert_eq!(read.as_ptr(), pointer);
+    }
+
+    #[tokio::test]
+    async fn multiple_frames_preserve_order_and_enforce_the_total_limit() {
+        struct Frames(std::collections::VecDeque<Bytes>);
+        impl Body for Frames {
+            type Data = Bytes;
+            type Error = std::convert::Infallible;
+            fn poll_frame(
+                mut self: Pin<&mut Self>,
+                _: &mut Context<'_>,
+            ) -> Poll<Option<Result<Frame<Bytes>, Self::Error>>> {
+                Poll::Ready(self.0.pop_front().map(|bytes| Ok(Frame::data(bytes))))
+            }
+        }
+        let body = || {
+            Frames(
+                [
+                    Bytes::from_static(b"ab"),
+                    Bytes::new(),
+                    Bytes::from_static(b"cde"),
+                ]
+                .into(),
+            )
+        };
+        assert_eq!(collect_raw(body(), 5).await.unwrap(), "abcde");
+        assert_eq!(
+            collect_raw(body(), 4).await.unwrap_err().status(),
+            http::StatusCode::PAYLOAD_TOO_LARGE
+        );
+    }
 
     struct Drip {
         left: usize,
