@@ -89,7 +89,8 @@ replace control over who can rename its entries.
 Remote TUI attach stores its console session cookie separately in
 `<data-dir>/remote-sessions.json`, with mode 0600. It does not persist the
 console token entered at the hidden prompt. Sessions are scoped to the console's
-scheme, host, port and URL prefix, and become invalid when that daemon restarts.
+scheme, host, port and URL prefix, and remain valid across daemon restarts until
+the console's persistent access credentials are explicitly reset.
 The saved cookie grants console access, including its control API, even though
 the remote TUI only reads data. See [remote attach](docs/operations.md#remote-terminal-dashboard)
 for authentication and removing saved sessions.
