@@ -202,7 +202,11 @@ pub fn spawn(
     });
     // Whatever is already queued — an attached console starts with an hour of
     // it — and a first sample are in place before the first page asks.
-    for event in events.try_iter() {
+    for event in events.try_iter().take(if recorded {
+        usize::MAX
+    } else {
+        crate::telemetry::VIEWER_BATCH
+    }) {
         push(&shared, event);
     }
     sample(&shared, &feed);
@@ -227,7 +231,7 @@ fn run(shared: &Shared, feed: &Feed, events: &Receiver<Event>) {
         match events.recv_timeout(TICK.saturating_sub(last_sample.elapsed())) {
             Ok(event) => {
                 push(shared, event);
-                for event in events.try_iter() {
+                for event in events.try_iter().take(crate::telemetry::VIEWER_BATCH - 1) {
                     push(shared, event);
                 }
             }

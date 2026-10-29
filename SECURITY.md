@@ -70,6 +70,12 @@ Request recording never stores request or response bodies, header values,
 credentials, cookies, query strings, or dictionary contents. A URL path is recorded as
 sent, so do not put secrets or personal identifiers in paths.
 
+Live dashboards and the recorder each queue at most 4,096 events. Queue
+overload never blocks forwarding: the recorder counts drops, and a live
+dashboard shows a warning after it can accept events again. Its event-based
+totals may then be incomplete. Database-attached viewers preserve their
+historical backfill rather than dropping rows.
+
 When Portway creates the data directory, it creates it with mode 0700. A
 serving process creates the database file with mode 0600, or narrows an
 existing one to 0600, even inside a directory it did not create; the WAL

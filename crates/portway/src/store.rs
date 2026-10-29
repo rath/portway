@@ -425,16 +425,14 @@ fn writer(
 }
 
 /// The first event, waiting up to `timeout`, then whatever else is already
-/// queued.
+/// queued, bounded even when producers refill the queue while it is drained.
 fn collect(rx: &Receiver<Event>, timeout: Duration) -> Vec<Event> {
     let mut batch = Vec::new();
     match rx.recv_timeout(timeout) {
         Ok(event) => batch.push(event),
         Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => return batch,
     }
-    while let Ok(event) = rx.try_recv() {
-        batch.push(event);
-    }
+    batch.extend(rx.try_iter().take(QUEUE - 1));
     batch
 }
 
@@ -558,6 +556,22 @@ mod tests {
     use crate::forwarder::Coding;
     use crate::telemetry::RequestRecord;
     use crate::usage::Usage;
+
+    #[test]
+    fn recording_batches_leave_excess_events_for_the_next_transaction() {
+        let (sender, receiver) = sync_channel(QUEUE * 2);
+        for _ in 0..QUEUE + 7 {
+            sender
+                .send(Event::Log {
+                    stamp: "00:00:00".into(),
+                    level: Level::Info,
+                    message: "event".into(),
+                })
+                .unwrap();
+        }
+        assert_eq!(collect(&receiver, Duration::ZERO).len(), QUEUE);
+        assert_eq!(collect(&receiver, Duration::ZERO).len(), 7);
+    }
 
     /// One directory per test: the writer thread and the assertions never
     /// share a file with another test. `spawn` creates it.

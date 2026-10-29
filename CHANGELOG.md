@@ -9,6 +9,8 @@ version may contain breaking changes.
 
 ### Changed
 
+- Bound live dashboard queues and recorder transactions; overloaded viewers
+  report skipped events and keep sampling and responding to input.
 - Reuse single-frame request bodies without copying and read only routing
   and pricing fields from JSON instead of allocating the full message tree.
 

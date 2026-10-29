@@ -28,7 +28,7 @@ fn events() -> &'static Mutex<Receiver<Event>> {
         let (sender, receiver) = std::sync::mpsc::channel();
         assert!(
             telemetry::install(Sinks {
-                tui: Some(sender),
+                tui: Some(sender.into()),
                 ..Sinks::default()
             }),
             "the sink installs once"

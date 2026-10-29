@@ -230,7 +230,7 @@ async fn run(
         #[cfg(feature = "web")]
         let (web_sender, web_events) = match args.web {
             true => {
-                let (sender, receiver) = std::sync::mpsc::channel();
+                let (sender, receiver) = telemetry::viewer_channel();
                 (Some(sender), Some(receiver))
             }
             false => (None, None),
@@ -351,7 +351,7 @@ async fn run(
     {
         // The dashboard styles its own spans, so the records must arrive plain.
         logfmt::set_color(false);
-        let (sender, receiver) = std::sync::mpsc::channel();
+        let (sender, receiver) = telemetry::viewer_channel();
         telemetry::install(Sinks {
             tui: Some(sender),
             store: Some(store),
@@ -395,7 +395,7 @@ fn watching(
     logfmt::set_color(false);
     let (sender, receiver) = std::sync::mpsc::channel();
     telemetry::install(Sinks {
-        tui: Some(sender.clone()),
+        tui: Some(sender.clone().into()),
         ..Sinks::default()
     });
     let watch = watch::spawn(&dir.join(store::DB_FILE), sender)?;
@@ -467,7 +467,7 @@ fn web_watching(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (sender, receiver) = std::sync::mpsc::channel();
     telemetry::install(Sinks {
-        web: Some(sender.clone()),
+        web: Some(sender.clone().into()),
         ..Sinks::default()
     });
     let db = dir.join(store::DB_FILE);

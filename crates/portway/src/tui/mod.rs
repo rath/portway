@@ -330,7 +330,11 @@ fn run(
     }
     // Whatever is already queued — a watching dashboard starts with an hour of
     // it — is on the first frame rather than the one after it.
-    for event in events.try_iter() {
+    for event in events.try_iter().take(if state.recorded {
+        usize::MAX
+    } else {
+        crate::telemetry::VIEWER_BATCH
+    }) {
         state.push(event);
     }
     if state.remote.is_none() {
@@ -341,7 +345,7 @@ fn run(
     let mut dirty = true;
 
     while !stop.load(Ordering::Relaxed) {
-        for event in events.try_iter() {
+        for event in events.try_iter().take(crate::telemetry::VIEWER_BATCH) {
             state.push(event);
             dirty = true;
         }
