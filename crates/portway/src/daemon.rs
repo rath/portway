@@ -15,7 +15,7 @@ use std::cell::Cell;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, ErrorKind, Read, Seek, SeekFrom, Write};
 use std::os::fd::{AsRawFd, RawFd};
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -67,14 +67,10 @@ pub fn start(dir: &Path) -> Result<Daemon, String> {
     unsafe { libc::close(read_fd) };
     detach();
 
-    let mut pid_file = match OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .mode(0o600)
-        .open(&pid_path)
-    {
+    let mut pid_file = match crate::private_file::open(
+        &pid_path,
+        OpenOptions::new().read(true).write(true).create(true),
+    ) {
         Ok(file) => file,
         Err(err) => fail_bare(write_fd, &format!("{}: {err}", pid_path.display())),
     };
@@ -155,7 +151,7 @@ impl Daemon {
     /// Drop the pid file on the way out. The lock goes with the process either
     /// way; what this removes is a file that would only ever read as stale.
     pub fn remove_pid_file(&self) {
-        let _ = fs::remove_file(&self.pid_path);
+        crate::private_file::remove_if_same(&self.pid_file, &self.pid_path);
     }
 
     fn write_pid(&self) -> Result<(), String> {
@@ -281,7 +277,7 @@ enum Liveness {
 /// open file description, so a second open in this same process conflicts with
 /// the first — which is what makes this testable without a second process.
 fn liveness(pid_file: &Path) -> Result<Liveness, String> {
-    let mut file = match OpenOptions::new().read(true).write(true).open(pid_file) {
+    let mut file = match crate::private_file::open(pid_file, OpenOptions::new().read(true)) {
         Ok(file) => file,
         Err(err) if err.kind() == ErrorKind::NotFound => return Ok(Liveness::Absent),
         Err(err) => return Err(format!("{}: {err}", pid_file.display())),
@@ -318,7 +314,7 @@ fn read_pid(file: &mut File) -> Option<i32> {
     let mut text = String::new();
     file.rewind().ok()?;
     file.take(64).read_to_string(&mut text).ok()?;
-    text.trim().parse().ok()
+    text.trim().parse().ok().filter(|pid| *pid > 1)
 }
 
 /// The launcher's side of `start`. Diverges: it is the parent process.
@@ -450,11 +446,7 @@ fn pipe() -> Result<(RawFd, RawFd), String> {
 }
 
 fn open_log(log: &Path) -> Result<File, String> {
-    OpenOptions::new()
-        .append(true)
-        .create(true)
-        .mode(0o600)
-        .open(log)
+    crate::private_file::open(log, OpenOptions::new().append(true).create(true))
         .map_err(|err| format!("{}: {err}", log.display()))
 }
 
@@ -512,5 +504,19 @@ mod tests {
         let stopped = stop(&dir).unwrap_err();
         assert!(stopped.contains("stale pid file"), "{stopped}");
         assert!(!path.exists(), "the stale pid file was left behind");
+    }
+
+    #[test]
+    fn private_runtime_pid_never_names_a_process_group_or_init() {
+        let dir = dir("invalid-pid");
+        let path = dir.join(store::PID_FILE);
+        for value in ["-1", "0", "1", "-42", "2147483648", "invalid"] {
+            fs::write(&path, value).unwrap();
+            let mut file = File::open(&path).unwrap();
+            assert_eq!(read_pid(&mut file), None, "{value}");
+        }
+        fs::write(&path, "42\n").unwrap();
+        assert_eq!(read_pid(&mut File::open(path).unwrap()), Some(42));
+        fs::remove_dir_all(dir).unwrap();
     }
 }

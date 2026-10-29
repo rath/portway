@@ -12,7 +12,7 @@
 
 use std::fs;
 use std::io;
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -259,10 +259,21 @@ pub fn open_existing(db: &Path) -> Result<Option<Connection>, String> {
 }
 
 fn open_create(db: &Path) -> Result<Connection, String> {
-    restrict(db).map_err(|err| format!("{}: {err}", db.display()))?;
+    // SQLite's NOFOLLOW rejects links in any component. Resolve the directory
+    // first (macOS /var is a link), while leaving the filename untrusted.
+    let directory = db
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let actual = fs::canonicalize(directory)
+        .map_err(|err| format!("{}: {err}", db.display()))?
+        .join(db.file_name().ok_or("database path has no filename")?);
+    restrict(&actual).map_err(|err| format!("{}: {err}", db.display()))?;
     let mut connection = Connection::open_with_flags(
-        db,
-        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE,
+        &actual,
+        OpenFlags::SQLITE_OPEN_READ_WRITE
+            | OpenFlags::SQLITE_OPEN_CREATE
+            | OpenFlags::SQLITE_OPEN_NOFOLLOW,
     )
     .map_err(|err| format!("{}: {err}", db.display()))?;
     connection
@@ -323,18 +334,11 @@ fn open_create(db: &Path) -> Result<Connection, String> {
 /// `-shm` files it creates the database file's mode, so only sidecars left by
 /// an earlier build need the second step.
 fn restrict(db: &Path) -> io::Result<()> {
-    fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .mode(0o600)
-        .open(db)?;
-    let owner_only = fs::Permissions::from_mode(0o600);
-    fs::set_permissions(db, owner_only.clone())?;
+    crate::private_file::open(db, fs::OpenOptions::new().write(true).create(true))?;
     for suffix in ["-wal", "-shm"] {
         let mut sidecar = db.as_os_str().to_owned();
         sidecar.push(suffix);
-        match fs::set_permissions(&sidecar, owner_only.clone()) {
+        match crate::private_file::open(Path::new(&sidecar), fs::OpenOptions::new().read(true)) {
             Err(err) if err.kind() != io::ErrorKind::NotFound => return Err(err),
             _ => {}
         }
@@ -545,6 +549,7 @@ fn failure(err: &rusqlite::Error) {
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::fs::PermissionsExt;
     use std::sync::Arc;
 
     use http::Method;
@@ -796,6 +801,28 @@ mod tests {
         }
         store.shutdown();
         drop(reader);
+    }
+
+    #[test]
+    fn private_runtime_database_refuses_linked_files_and_sidecars() {
+        let dir = dir("linked-db");
+        fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("target");
+        fs::write(&target, "keep me").unwrap();
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o644)).unwrap();
+        for suffix in ["", "-wal", "-shm"] {
+            let path = dir.join(format!("{DB_FILE}{suffix}"));
+            let _ = fs::remove_file(&path);
+            std::os::unix::fs::symlink(&target, &path).unwrap();
+            assert!(open_create(&dir.join(DB_FILE)).is_err(), "{suffix}");
+            assert_eq!(fs::read_to_string(&target).unwrap(), "keep me");
+            assert_eq!(
+                fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+                0o644
+            );
+            fs::remove_file(path).unwrap();
+        }
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

@@ -7,6 +7,13 @@ version may contain breaking changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- Refuse symlinks, hard links, foreign-owned files and special files for the
+  database and daemon runtime files; restrict existing files to mode 0600
+  before writing console tokens or logs. Daemon control also rejects process
+  group IDs and PID 1 in pid files.
+
 ## [0.3.0] - 2026-10-23
 
 ### Added

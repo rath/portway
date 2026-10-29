@@ -70,7 +70,10 @@ serving process creates the database file with mode 0600, or narrows an
 existing one to 0600, even inside a directory it did not create; the WAL
 sidecar files share that mode. The daemon's pid and log files are created with
 mode 0600, and so is `portway.web`, which holds the web console's address and
-token while it runs.
+token while it runs. Writers reject symlinks, hard links, foreign-owned files
+and special files, and restrict existing runtime files to mode 0600 before
+writing. Keep the data directory private as well: these file checks do not
+replace control over who can rename its entries.
 
 Remote TUI attach stores its console session cookie separately in
 `<data-dir>/remote-sessions.json`, with mode 0600. It does not persist the

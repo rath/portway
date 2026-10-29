@@ -5,10 +5,9 @@
 //! exclusive `flock` for as long as the console runs: the lock is the
 //! liveness check, and a file left by a killed process reads as nothing.
 
-use std::fs::{self, File, OpenOptions};
+use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::os::fd::AsRawFd;
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 pub const WEB_FILE: &str = "portway.web";
@@ -26,14 +25,11 @@ impl WebFile {
     pub fn claim(dir: &Path, urls: &[String]) -> Result<Option<WebFile>, String> {
         let path = dir.join(WEB_FILE);
         let error = |err: io::Error| format!("{}: {err}", path.display());
-        let mut file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .mode(0o600)
-            .open(&path)
-            .map_err(error)?;
+        let mut file = crate::private_file::open(
+            &path,
+            OpenOptions::new().read(true).write(true).create(true),
+        )
+        .map_err(error)?;
         if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
             let err = io::Error::last_os_error();
             if err.raw_os_error() == Some(libc::EWOULDBLOCK) {
@@ -52,18 +48,21 @@ impl WebFile {
 
 impl Drop for WebFile {
     fn drop(&mut self) {
-        let _ = fs::remove_file(&self.path);
+        crate::private_file::remove_if_same(&self._file, &self.path);
     }
 }
 
 /// The URLs of the console running on `dir`; none when none is.
 pub fn console_urls(dir: &Path) -> Vec<String> {
-    let mut file = match File::open(dir.join(WEB_FILE)) {
-        Ok(file) => file,
-        Err(_) => return Vec::new(),
-    };
+    let mut file =
+        match crate::private_file::open(&dir.join(WEB_FILE), OpenOptions::new().read(true)) {
+            Ok(file) => file,
+            Err(_) => return Vec::new(),
+        };
     // Taking the lock means nobody held it: what is in the file is stale.
-    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_SH | libc::LOCK_NB) } == 0 {
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_SH | libc::LOCK_NB) } == 0
+        || io::Error::last_os_error().raw_os_error() != Some(libc::EWOULDBLOCK)
+    {
         return Vec::new();
     }
     let mut text = String::new();
@@ -83,6 +82,7 @@ pub fn console_urls(dir: &Path) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::os::unix::fs::PermissionsExt;
 
     use super::*;
@@ -115,5 +115,43 @@ mod tests {
         fs::write(dir.join(WEB_FILE), "1\nhttp://stale/\n").unwrap();
         assert!(console_urls(&dir).is_empty());
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn private_runtime_file_restricts_existing_permissions() {
+        let dir = std::env::temp_dir().join(format!("portway-web-mode-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(WEB_FILE);
+        fs::write(&path, "stale").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        let file = WebFile::claim(&dir, &["http://localhost/#token=test".into()])
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        drop(file);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn private_runtime_file_refuses_links_without_touching_the_target() {
+        let dir = std::env::temp_dir().join(format!("portway-web-links-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("target");
+        fs::write(&target, "keep me").unwrap();
+        let path = dir.join(WEB_FILE);
+        for hard_link in [false, true] {
+            if hard_link {
+                fs::hard_link(&target, &path).unwrap();
+            } else {
+                std::os::unix::fs::symlink(&target, &path).unwrap();
+            }
+            assert!(WebFile::claim(&dir, &["secret".into()]).is_err());
+            assert_eq!(fs::read_to_string(&target).unwrap(), "keep me");
+            fs::remove_file(&path).unwrap();
+        }
+        fs::remove_dir_all(dir).unwrap();
     }
 }

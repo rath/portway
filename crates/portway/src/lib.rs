@@ -19,6 +19,7 @@ pub mod control;
 pub mod daemon;
 pub mod live;
 pub mod logfmt;
+mod private_file;
 #[cfg(feature = "tui")]
 pub mod remote;
 pub mod report;
