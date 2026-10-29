@@ -132,6 +132,24 @@ fn viewers(sinks: &Sinks, event: &Event) {
     }
 }
 
+/// The CLI owns a single runtime. Embedders use their own Telemetry instead.
+pub fn core() -> Arc<Telemetry> {
+    static CORE: OnceLock<Arc<Telemetry>> = OnceLock::new();
+    Arc::clone(CORE.get_or_init(|| {
+        Arc::new(Telemetry::new(|event: Event| {
+            if !tui_installed() {
+                match &event {
+                    Event::Request(record) => {
+                        logfmt::console(Level::Info, &crate::request_log::render(record))
+                    }
+                    Event::Log { level, message, .. } => logfmt::console(*level, message),
+                }
+            }
+            emit(event);
+        }))
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -155,22 +173,4 @@ mod tests {
         );
         assert_eq!(recovered.len(), 2);
     }
-}
-
-/// The CLI owns a single runtime. Embedders use their own Telemetry instead.
-pub fn core() -> Arc<Telemetry> {
-    static CORE: OnceLock<Arc<Telemetry>> = OnceLock::new();
-    Arc::clone(CORE.get_or_init(|| {
-        Arc::new(Telemetry::new(|event: Event| {
-            if !tui_installed() {
-                match &event {
-                    Event::Request(record) => {
-                        logfmt::console(Level::Info, &crate::request_log::render(record))
-                    }
-                    Event::Log { level, message, .. } => logfmt::console(*level, message),
-                }
-            }
-            emit(event);
-        }))
-    }))
 }
