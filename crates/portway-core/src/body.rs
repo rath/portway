@@ -616,16 +616,20 @@ mod tests {
     }
 }
 
-/// A bounded, byte-preserving request read. Content-Encoding is not interpreted.
+/// Maximum silence while buffering an inbound request body.
+pub const REQUEST_BODY_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 #[derive(Debug)]
 pub enum BodyReadError {
     TooLarge,
+    Timeout,
     Read(String),
 }
 impl BodyReadError {
     pub fn status(&self) -> http::StatusCode {
         match self {
             Self::TooLarge => http::StatusCode::PAYLOAD_TOO_LARGE,
+            Self::Timeout => http::StatusCode::REQUEST_TIMEOUT,
             Self::Read(_) => http::StatusCode::BAD_REQUEST,
         }
     }
@@ -634,11 +638,13 @@ impl std::fmt::Display for BodyReadError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::TooLarge => write!(f, "request body exceeds configured limit"),
+            Self::Timeout => write!(f, "request body read timed out"),
             Self::Read(_) => write!(f, "could not read request body"),
         }
     }
 }
 impl std::error::Error for BodyReadError {}
+/// A bounded, byte-preserving request read. Content-Encoding is not interpreted.
 pub async fn collect_raw<B>(mut body: B, limit: usize) -> Result<Bytes, BodyReadError>
 where
     B: Body<Data = Bytes> + Unpin,
@@ -649,7 +655,10 @@ where
         return Err(BodyReadError::TooLarge);
     }
     let mut out = bytes::BytesMut::new();
-    while let Some(frame) = body.frame().await {
+    while let Some(frame) = tokio::time::timeout(REQUEST_BODY_IDLE_TIMEOUT, body.frame())
+        .await
+        .map_err(|_| BodyReadError::Timeout)?
+    {
         let frame = frame.map_err(|e| BodyReadError::Read(e.to_string()))?;
         if let Ok(data) = frame.into_data() {
             if data.len() > limit.saturating_sub(out.len()) {
@@ -659,4 +668,54 @@ where
         }
     }
     Ok(out.freeze())
+}
+
+#[cfg(test)]
+mod read_tests {
+    use super::*;
+    use std::time::Duration;
+
+    struct Drip {
+        left: usize,
+        interval: Duration,
+        next: Pin<Box<tokio::time::Sleep>>,
+    }
+    impl Drip {
+        fn new(seconds: u64, count: usize) -> Self {
+            let interval = Duration::from_secs(seconds);
+            Self {
+                left: count,
+                interval,
+                next: Box::pin(tokio::time::sleep(interval)),
+            }
+        }
+    }
+    impl Body for Drip {
+        type Data = Bytes;
+        type Error = std::convert::Infallible;
+        fn poll_frame(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+        ) -> Poll<Option<Result<Frame<Bytes>, Self::Error>>> {
+            if self.left == 0 {
+                return Poll::Ready(None);
+            }
+            if self.next.as_mut().poll(cx).is_pending() {
+                return Poll::Pending;
+            }
+            self.left -= 1;
+            let next = tokio::time::Instant::now() + self.interval;
+            self.next.as_mut().reset(next);
+            Poll::Ready(Some(Ok(Frame::data(Bytes::from_static(b"x")))))
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_idle_upload_times_out_but_progress_renews_the_budget() {
+        let error = collect_raw(Drip::new(31, 1), 8).await.unwrap_err();
+        assert_eq!(error.status(), http::StatusCode::REQUEST_TIMEOUT);
+        let started = tokio::time::Instant::now();
+        assert_eq!(collect_raw(Drip::new(20, 3), 8).await.unwrap(), "xxx");
+        assert!(started.elapsed() >= Duration::from_secs(60));
+    }
 }

@@ -15,7 +15,7 @@ use http::{Method, Request, Response, StatusCode};
 use http_body_util::{BodyExt, Limited};
 use hyper::body::Incoming;
 use hyper::service::service_fn;
-use hyper_util::rt::TokioIo;
+use hyper_util::rt::{TokioIo, TokioTimer};
 use serde_json::{Value, json};
 use tokio::net::TcpListener;
 use tokio::sync::{broadcast, mpsc, watch};
@@ -36,6 +36,7 @@ use crate::web::{Control, ring::Gap};
 const MAX_STREAMS: usize = 16;
 /// The largest body the console reads: a token and its braces.
 const MAX_BODY: usize = 1024;
+const SESSION_TIMEOUT: Duration = Duration::from_secs(10);
 /// Events one `/api/events` page carries at most.
 const MAX_PAGE: usize = 1000;
 const PING: Duration = Duration::from_secs(15);
@@ -97,6 +98,8 @@ pub async fn serve(listener: TcpListener, app: Arc<App>, mut closing: watch::Rec
                         async move { Ok::<_, Infallible>(handle(app, request).await) }
                     });
                     let _ = hyper::server::conn::http1::Builder::new()
+                        .timer(TokioTimer::new())
+                        .header_read_timeout(Duration::from_secs(30))
                         .serve_connection(TokioIo::new(stream), service)
                         .await;
                 });
@@ -238,9 +241,15 @@ pub async fn handle(app: Arc<App>, request: Request<Incoming>) -> Response<WebBo
 /// opened was handed, for the session cookie. Either is checked, never stored
 /// by the page, and never needed again.
 async fn open_session(app: &App, request: Request<Incoming>) -> Response<WebBody> {
-    let body = match Limited::new(request.into_body(), MAX_BODY).collect().await {
-        Ok(collected) => collected.to_bytes(),
-        Err(_) => return error(StatusCode::PAYLOAD_TOO_LARGE, "body too large"),
+    let body = match tokio::time::timeout(
+        SESSION_TIMEOUT,
+        Limited::new(request.into_body(), MAX_BODY).collect(),
+    )
+    .await
+    {
+        Ok(Ok(collected)) => collected.to_bytes(),
+        Ok(Err(_)) => return error(StatusCode::PAYLOAD_TOO_LARGE, "body too large"),
+        Err(_) => return error(StatusCode::REQUEST_TIMEOUT, "session body read timed out"),
     };
     let token = serde_json::from_slice::<Value>(&body)
         .ok()

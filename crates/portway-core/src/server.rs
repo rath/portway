@@ -4,7 +4,7 @@ use std::convert::Infallible;
 use std::sync::Arc;
 
 use hyper::service::service_fn;
-use hyper_util::rt::TokioIo;
+use hyper_util::rt::{TokioIo, TokioTimer};
 use tokio::net::TcpListener;
 
 use crate::router::Router;
@@ -79,7 +79,10 @@ where
                 let _=stream.set_nodelay(true); let handler=Arc::clone(&handler);
                 connections.spawn(async move {
                     let service=service_fn(move |request| {let handler=Arc::clone(&handler); async move {Ok::<_,Infallible>(handler(request).await)}});
-                    let _=hyper::server::conn::http1::Builder::new().serve_connection(TokioIo::new(stream),service).await;
+                    let _=hyper::server::conn::http1::Builder::new()
+                        .timer(TokioTimer::new())
+                        .header_read_timeout(std::time::Duration::from_secs(30))
+                        .serve_connection(TokioIo::new(stream),service).await;
                 });
             }
             _=connections.join_next(), if !connections.is_empty()=>{}

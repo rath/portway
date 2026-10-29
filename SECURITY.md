@@ -34,7 +34,9 @@ storage.
 ### Request bodies and dictionaries
 
 - Each request body is buffered in memory while it is forwarded, up to a
-  configurable limit (256 MiB by default).
+  configurable limit (256 MiB by default). Incomplete headers expire after
+  30 seconds; body reads expire after 30 seconds without progress. Console
+  login bodies have a separate 10-second total deadline.
 - A dictionary is a complete earlier request body. The sender and the receiver
   each hold dictionaries in memory only. They are never written to disk and
   are dropped on restart, after one idle hour on the receiver by default, or

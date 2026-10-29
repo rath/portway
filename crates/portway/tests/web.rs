@@ -271,6 +271,49 @@ fn recorded_text(dir: &Path) -> String {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_stalled_console_login_expires_without_blocking_other_clients() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let origin = upstream(Health::Json(vec!["zstd"]), Reply::Ok).await;
+    let dir = data_dir("login-timeout");
+    let config = config(&dir, &origin.base);
+    let (child, console) = spawn_console(
+        &dir,
+        &[
+            "--config",
+            config.to_str().unwrap(),
+            "--port",
+            &free_port().to_string(),
+        ],
+    );
+    let mut socket = tokio::net::TcpStream::connect(("127.0.0.1", console.port))
+        .await
+        .unwrap();
+    socket.write_all(format!(
+        "POST /api/session HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nx-portway-console: 1\r\nContent-Length: 100\r\nConnection: close\r\n\r\n{{",
+        console.port
+    ).as_bytes()).await.unwrap();
+    assert_eq!(
+        Page::new(console.port).get("/api/health").await.status,
+        StatusCode::OK
+    );
+    let mut reply = Vec::new();
+    tokio::time::timeout(Duration::from_secs(15), socket.read_to_end(&mut reply))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        reply.starts_with(b"HTTP/1.1 408"),
+        "{}",
+        String::from_utf8_lossy(&reply)
+    );
+    let mut page = Page::new(console.port);
+    page.sign_in(&console.token).await;
+    assert_eq!(page.get("/api/snapshot").await.status, StatusCode::OK);
+    drop(child);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_live_console_guards_its_door_shows_flights_and_stops() {
     let upstream = upstream(Health::Json(vec!["zstd"]), Reply::Endless).await;
     let dir = data_dir("live");

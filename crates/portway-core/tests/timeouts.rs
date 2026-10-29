@@ -166,6 +166,94 @@ fn failed_record(events: &Events<Event>, status: u16, upstream: &str) -> Vec<Str
 }
 
 #[tokio::test]
+async fn incomplete_client_headers_are_closed() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let router = Router::single(
+        &ForwarderConfig {
+            coding: CodingPreference::Off,
+            ..Default::default()
+        },
+        "http://127.0.0.1:9",
+        None,
+    )
+    .unwrap();
+    let task = tokio::spawn(server::serve(listener, router));
+    let mut client = TcpStream::connect(address).await.unwrap();
+    client
+        .write_all(b"POST / HTTP/1.1\r\nHost: unfinished")
+        .await
+        .unwrap();
+    // Let the socket register its header timer before advancing virtual time.
+    sleep(Duration::from_millis(20)).await;
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(31)).await;
+    tokio::time::resume();
+    let mut reply = Vec::new();
+    timeout(Duration::from_secs(1), client.read_to_end(&mut reply))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(reply.is_empty() || reply.starts_with(b"HTTP/1.1 408"));
+    task.abort();
+}
+
+#[tokio::test]
+async fn stalled_client_bodies_expire_before_forwarding_or_decoding() {
+    for receive in [false, true] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let router = Router::single(
+            &ForwarderConfig {
+                coding: CodingPreference::Off,
+                ..Default::default()
+            },
+            "http://127.0.0.1:9",
+            None,
+        )
+        .unwrap();
+        let task = if receive {
+            tokio::spawn(server::serve_receiver(
+                listener,
+                router.clone(),
+                Receiver::new(Default::default()).unwrap(),
+            ))
+        } else {
+            tokio::spawn(server::serve(listener, router.clone()))
+        };
+        let mut client = TcpStream::connect(address).await.unwrap();
+        client.write_all(b"POST / HTTP/1.1\r\nHost: localhost\r\nContent-Length: 100\r\nExpect: 100-continue\r\nConnection: close\r\n\r\n").await.unwrap();
+        let mut interim = Vec::new();
+        timeout(Duration::from_secs(1), async {
+            while !interim.ends_with(b"\r\n\r\n") {
+                interim.push(client.read_u8().await.unwrap());
+            }
+        })
+        .await
+        .unwrap();
+        assert!(interim.starts_with(b"HTTP/1.1 100"));
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(31)).await;
+        tokio::time::resume();
+        let mut reply = Vec::new();
+        timeout(Duration::from_secs(1), client.read_to_end(&mut reply))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            reply.starts_with(b"HTTP/1.1 408"),
+            "{}",
+            String::from_utf8_lossy(&reply)
+        );
+        assert_eq!(router.routes()[0].1.view().requests, 0);
+        if receive {
+            assert!(String::from_utf8_lossy(&reply).contains("x-portway-decode-error: 1"));
+        }
+        task.abort();
+    }
+}
+
+#[tokio::test]
 async fn stalled_headers_close_the_socket_without_replaying_the_post() {
     let (closed, mut closure) = mpsc::unbounded_channel();
     let up = origin(move |mut socket, index| {

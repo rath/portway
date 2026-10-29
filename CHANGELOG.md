@@ -9,6 +9,9 @@ version may contain breaking changes.
 
 ### Fixed
 
+- Enable 30-second request-header deadlines on both HTTP listeners, expire
+  request bodies after 30 seconds without progress, and bound console login
+  uploads to 10 seconds. Body timeouts return HTTP 408 before forwarding.
 - Update rustls-webpki to 0.103.16 to reject distrusted intermediate
   certificates (RUSTSEC-2026-0382).
 - Refuse symlinks, hard links, foreign-owned files and special files for the

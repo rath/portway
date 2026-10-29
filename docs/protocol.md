@@ -73,6 +73,7 @@ The following decoder-marker contract governs the sender-to-receiver leg.
 | Missing dictionary | 412 + `X-Dict-Miss: 1`; no decompression or application invocation |
 | Bad magic, truncation, checksum mismatch, trailing frame/member | 400 + decoder marker |
 | Encoded or decoded body too large | 413 + decoder marker |
+| Request body idle for 30 seconds | 408 + decoder marker; no application invocation or automatic replay |
 | Unknown/multiple coding, or DCZ disabled | 415 + decoder marker and `Accept-Encoding: zstd, gzip` |
 | Application returns an error | Preserve the application's status/body; no decoder marker |
 
