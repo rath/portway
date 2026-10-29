@@ -9,6 +9,8 @@ version may contain breaking changes.
 
 ### Fixed
 
+- Update rustls-webpki to 0.103.16 to reject distrusted intermediate
+  certificates (RUSTSEC-2026-0382).
 - Refuse symlinks, hard links, foreign-owned files and special files for the
   database and daemon runtime files; restrict existing files to mode 0600
   before writing console tokens or logs. Daemon control also rejects process
