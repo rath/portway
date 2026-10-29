@@ -7,12 +7,23 @@ version may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-29
+
 ### Changed
 
+- Embedders (breaking): `body::BodyReadError` gains a `Timeout` variant;
+  exhaustive matches must handle it. The CLI library's `telemetry::Sinks`
+  now uses `ViewerSender` for its `tui` and `web` fields. Use
+  `telemetry::viewer_channel()` for bounded live queues, or convert an
+  existing `Sender<Event>` with `.into()` for recorded backfill.
+- `--web-base-path` now accepts only slash-separated segments containing
+  ASCII letters, digits, `-`, `.`, `_` and `~`; percent escapes and other
+  punctuation are refused.
 - Bound live dashboard queues and recorder transactions; overloaded viewers
   report skipped events and keep sampling and responding to input.
 - Reuse single-frame request bodies without copying and read only routing
   and pricing fields from JSON instead of allocating the full message tree.
+- Update Tokio, Rustls and the bundled Mozilla root certificates.
 
 ### Fixed
 
@@ -447,7 +458,8 @@ The first public release.
   FAQ; the request compression protocol; a security policy; and contribution
   guidelines.
 
-[Unreleased]: https://github.com/rath/portway/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/rath/portway/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/rath/portway/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/rath/portway/compare/v0.2.7...v0.3.0
 [0.2.7]: https://github.com/rath/portway/compare/v0.2.6...v0.2.7
 [0.2.6]: https://github.com/rath/portway/compare/v0.2.5...v0.2.6
