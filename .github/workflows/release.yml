@@ -80,7 +80,7 @@ jobs:
           python-version: "3.13"
       - name: Install cargo-zigbuild
         if: matrix.zig_target
-        run: python -m pip install cargo-zigbuild==0.23.4 ziglang==0.16.0
+        run: python -m pip install cargo-zigbuild==0.24.1 ziglang==0.16.0
       - name: Build
         run: |
           if [ -n "${{ matrix.zig_target }}" ]; then

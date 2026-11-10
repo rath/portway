@@ -7,6 +7,15 @@ version may contain breaking changes.
 
 ## [Unreleased]
 
+### Changed
+
+- Update flate2 to 1.1.11 for gzip buffering, flush and error-handling fixes.
+- Update rusqlite to 0.41.1 and its bundled SQLite bindings.
+- Refresh compatible dependencies, including AWS-LC, TOML parsing and
+  editing, and terminal layout support; retain Rust 1.97 compatibility.
+- Update the plugin security scanner to 1.2.816.
+- Update cargo-zigbuild to 0.24.1 for cross-linker argument handling fixes.
+
 ## [0.4.0] - 2026-10-29
 
 ### Changed
