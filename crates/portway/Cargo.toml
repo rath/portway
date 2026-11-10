@@ -23,7 +23,7 @@ libc = "0.2.189"
 ratatui = { optional = true, version = "0.30.2", default-features = false, features = ["crossterm", "layout-cache"] }
 # No `cache` feature (statement caching is not used here) and no wasm backend;
 # `bundled` compiles the SQLite C sources once into target/.
-rusqlite = { version = "0.40.2", default-features = false, features = ["bundled"] }
+rusqlite = { version = "0.41.1", default-features = false, features = ["bundled"] }
 # The remote viewer's client certificate, on the forwarder's TLS client config.
 rustls = { optional = true, version = "0.23.45" }
 serde_json = "1.0.151"
