@@ -5,7 +5,7 @@ copy into `portway.toml`. Checked against
 [OpenAI's API pricing](https://developers.openai.com/api/docs/pricing) on
 2026-10-26,
 [Anthropic's pricing](https://platform.claude.com/docs/en/about-claude/pricing)
-on 2026-10-23 and
+on 2026-11-10 and
 [Kimi's API pricing](https://platform.kimi.ai/docs/pricing/chat) on
 2026-10-23. Prices change, so check those pages before relying on a
 figure. Portway's costs are estimates, not a bill; behind a ChatGPT, Claude or
@@ -395,12 +395,29 @@ later models (except Claude Haiku 5.5) … include the full 1M token context
 window at standard pricing", and fast mode's rates apply across the whole
 window too. Claude Haiku 5.5 is the exception: a prompt of over 100,000 tokens
 pays five times the rates on every line, so its table carries
-`above = 100000`. Fast mode is a research preview for Opus models. Its cache
-reads use the model's cache multiplier on the fast input rate (0.05 times on
-Opus 5.5, 0.1 times on Opus 5). The other models on Anthropic's page take the
-same shape.
+`above = 100000`. [Fast mode](https://platform.claude.com/docs/en/build-with-claude/fast-mode#pricing)
+is available for Fable 5.2 and Opus 5.5, and remains a research preview for
+Opus 5. Its cache reads use the model's cache multiplier on the fast input
+rate (0.025 times on Fable 5.2, 0.05 times on Opus 5.5, 0.1 times on Opus 5).
+The other models on Anthropic's page take the same shape.
 
 ```toml
+[prices."claude-fable-5-2"]
+input = 8.0
+output = 40.0
+cache_read = 0.2
+cache_write = 10.0
+cache_write_5m = 10.0
+cache_write_1h = 16.0
+
+[prices."claude-fable-5-2".tiers.fast]
+input = 16.0
+output = 80.0
+cache_read = 0.4
+cache_write = 20.0
+cache_write_5m = 20.0
+cache_write_1h = 32.0
+
 [prices."claude-fable-5-1"]
 input = 10.0
 output = 50.0
