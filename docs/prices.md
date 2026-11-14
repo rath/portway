@@ -63,8 +63,26 @@ keep the original three-rate table.
 - **Regional pricing.** OpenAI's data residency endpoints and Anthropic's
   US-only inference (`inference_geo: "us"`) cost 10% more.
 - **Unpublished models.** Codex's `codex-auto-review` is not on OpenAI's
-  pricing page. Price it yourself or leave it unpriced.
+  pricing page. Use an explicit estimate such as the one below, or leave it
+  unpriced.
 - **Batch.** Batch API discounts are a separate API, not a request tier.
+
+### Optional estimate for `codex-auto-review`
+
+OpenAI's pricing page, checked on 2026-11-14, does not identify this model's
+token rates or underlying model. For local accounting, one comparison is
+GPT-5.4 Standard for requests with no tier and GPT-5.4 Fast for `priority`:
+
+| Configuration table | Input | Output | Cache read |
+| --- | --- | --- | --- |
+| `prices."codex-auto-review"` | $2.50 | $15.00 | $0.25 |
+| `prices."codex-auto-review".tiers.priority` | $5.00 | $30.00 | $0.50 |
+
+These are USD per million tokens, used as an accounting estimate, not an
+official reviewer price or evidence that the reviewer is GPT-5.4. Set
+`input`, `output`, and `cache_read` in each table explicitly: an untiered
+price alone leaves `priority` requests unpriced. Keep this estimate separate
+from the published vendor tables when updating prices.
 
 ## OpenAI
 
