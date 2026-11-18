@@ -3,7 +3,8 @@
 The vendors' published list prices, written as Portway `[prices]` tables to
 copy into `portway.toml`. Checked against
 [OpenAI's API pricing](https://developers.openai.com/api/docs/pricing) on
-2026-10-26,
+2026-11-18 for GPT-6.2 Astra and GPT-6.2 Sol and on 2026-10-26 for the
+other OpenAI models,
 [Anthropic's pricing](https://platform.claude.com/docs/en/about-claude/pricing)
 on 2026-11-10 and
 [Kimi's API pricing](https://platform.kimi.ai/docs/pricing/chat) on
@@ -95,8 +96,100 @@ and the API accepts either since OpenAI renamed Priority processing to Fast
 mode. `default` repeats the standard rates for clients that name it.
 Ultrafast is published for `gpt-6-astra` and `gpt-6.1-sol`, and `gpt-5.6-sol`'s rates are
 promotional "at least through November 21, 2026".
+The GPT-6.2 Ultrafast tables use the promotional rate of 3× Standard through
+February 28, 2027. OpenAI lists 6× Standard from March 1, 2027 (Pacific time).
 
 ```toml
+[prices."gpt-6.2-astra"]
+input = 8.0
+output = 40.0
+cache_read = 0.4
+cache_write = 10.0
+cache_write_30m = 10.0
+cache_write_12h = 20.0
+long_context = { above = 272000, input = 16.0, output = 60.0, cache_read = 0.8, cache_write = 20.0, cache_write_30m = 20.0, cache_write_12h = 40.0 }
+
+[prices."gpt-6.2-astra".tiers.default]
+input = 8.0
+output = 40.0
+cache_read = 0.4
+cache_write = 10.0
+cache_write_30m = 10.0
+cache_write_12h = 20.0
+long_context = { above = 272000, input = 16.0, output = 60.0, cache_read = 0.8, cache_write = 20.0, cache_write_30m = 20.0, cache_write_12h = 40.0 }
+
+[prices."gpt-6.2-astra".tiers.priority]
+input = 16.0
+output = 80.0
+cache_read = 0.8
+cache_write = 20.0
+cache_write_30m = 20.0
+cache_write_12h = 40.0
+long_context = { above = 272000, input = 32.0, output = 120.0, cache_read = 1.6, cache_write = 40.0, cache_write_30m = 40.0, cache_write_12h = 80.0 }
+
+[prices."gpt-6.2-astra".tiers.fast]
+input = 16.0
+output = 80.0
+cache_read = 0.8
+cache_write = 20.0
+cache_write_30m = 20.0
+cache_write_12h = 40.0
+long_context = { above = 272000, input = 32.0, output = 120.0, cache_read = 1.6, cache_write = 40.0, cache_write_30m = 40.0, cache_write_12h = 80.0 }
+
+[prices."gpt-6.2-astra".tiers.ultrafast]
+input = 24.0
+output = 120.0
+cache_read = 1.2
+cache_write = 30.0
+cache_write_30m = 30.0
+cache_write_12h = 60.0
+long_context = { above = 272000, input = 48.0, output = 180.0, cache_read = 2.4, cache_write = 60.0, cache_write_30m = 60.0, cache_write_12h = 120.0 }
+
+[prices."gpt-6.2-sol"]
+input = 2.0
+output = 10.0
+cache_read = 0.1
+cache_write = 2.5
+cache_write_30m = 2.5
+cache_write_12h = 5.0
+long_context = { above = 272000, input = 4.0, output = 15.0, cache_read = 0.2, cache_write = 5.0, cache_write_30m = 5.0, cache_write_12h = 10.0 }
+
+[prices."gpt-6.2-sol".tiers.default]
+input = 2.0
+output = 10.0
+cache_read = 0.1
+cache_write = 2.5
+cache_write_30m = 2.5
+cache_write_12h = 5.0
+long_context = { above = 272000, input = 4.0, output = 15.0, cache_read = 0.2, cache_write = 5.0, cache_write_30m = 5.0, cache_write_12h = 10.0 }
+
+[prices."gpt-6.2-sol".tiers.priority]
+input = 4.0
+output = 20.0
+cache_read = 0.2
+cache_write = 5.0
+cache_write_30m = 5.0
+cache_write_12h = 10.0
+long_context = { above = 272000, input = 8.0, output = 30.0, cache_read = 0.4, cache_write = 10.0, cache_write_30m = 10.0, cache_write_12h = 20.0 }
+
+[prices."gpt-6.2-sol".tiers.fast]
+input = 4.0
+output = 20.0
+cache_read = 0.2
+cache_write = 5.0
+cache_write_30m = 5.0
+cache_write_12h = 10.0
+long_context = { above = 272000, input = 8.0, output = 30.0, cache_read = 0.4, cache_write = 10.0, cache_write_30m = 10.0, cache_write_12h = 20.0 }
+
+[prices."gpt-6.2-sol".tiers.ultrafast]
+input = 6.0
+output = 30.0
+cache_read = 0.3
+cache_write = 7.5
+cache_write_30m = 7.5
+cache_write_12h = 15.0
+long_context = { above = 272000, input = 12.0, output = 45.0, cache_read = 0.6, cache_write = 15.0, cache_write_30m = 15.0, cache_write_12h = 30.0 }
+
 [prices."gpt-6-astra"]
 input = 10.0
 output = 50.0
