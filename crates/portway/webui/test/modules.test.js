@@ -193,6 +193,9 @@ test("search terms, phrases and negation", () => {
   assert.deepEqual(run("tok:>90K"), [1, 3]);
   assert.deepEqual(run("completions"), [1, 3]);
   assert.deepEqual(compile("status:abc").errors.length, 1);
+  assert.deepEqual(compile("status:").errors.length, 1);
+  assert.deepEqual(compile("status:>").errors.length, 1);
+  assert.deepEqual(compile("is:>cut").errors.length, 1);
   assert.deepEqual(run('route:"POST /v1/chat"'), [1, 3]);
   assert.deepEqual(tokenize('route:"a b" http://x').map((t) => t.text), ["route:a b", "http://x"]);
 });
@@ -293,6 +296,11 @@ test("flights age locally and leave when their record arrives", () => {
   assert.equal(stream.warn, "stalled");
   assert.ok(flights.finish(1));
   assert.equal(flights.total, 1);
+  // Monotonic receipt time decouples local aging from server/browser clock skew.
+  flights.load({ at_unix: 99999, total: 1, more: 0, list: [
+    { id: 3, phase: "prefill", age_s: 2, idle_s: 2, status: null, ttfb: null, received: 0, retries: 0 },
+  ] }, 50);
+  assert.equal(flights.times(flights.list[0], 55).age, 7);
   flights.load(null);
   assert.equal(flights.available, false);
 });
@@ -302,10 +310,12 @@ test("CSV quotes, and keeps spreadsheets from running cells", () => {
   assert.equal(cell('say "hi"'), '"say ""hi"""');
   assert.equal(cell("=1+1"), "'=1+1");
   assert.equal(cell("-cmd"), "'-cmd");
+  assert.equal(cell(" =1+1"), "' =1+1");
+  assert.equal(cell("\n=1+1"), "\"'\n=1+1\"");
   assert.equal(cell(-5), "-5");
-  const csv = toCsv([request(), log()]);
+  const csv = toCsv([request(), log(), request({ ts: NaN })]);
   assert.ok(csv.startsWith("seq,time,kind,"));
-  assert.equal(csv.split("\r\n").length, 4);
+  assert.equal(csv.split("\r\n").length, 5);
 });
 
 test("tokens.css holds exactly the palettes themes.js lists", () => {

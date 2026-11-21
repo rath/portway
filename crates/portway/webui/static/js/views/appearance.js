@@ -18,7 +18,7 @@ export class AppearanceView {
 
   hide() {}
 
-  card(entry, index, all) {
+  card(entry, index, all, fallbackFocus) {
     const chosen = this.ctx.theme() === entry.id;
     const previewTheme = entry.id === "system" ? this.ctx.resolved() : entry.id;
     const card = h("button", {
@@ -26,12 +26,14 @@ export class AppearanceView {
       class: "card",
       role: "radio",
       "aria-checked": chosen ? "true" : "false",
-      tabindex: chosen ? "0" : "-1",
+      tabindex: chosen || (fallbackFocus && index === 0) ? "0" : "-1",
       "data-theme": previewTheme,
       "data-index": String(index),
       onclick: () => this.pick(entry.id),
       onkeydown: (event) => {
-        const columns = Math.max(1, Math.round(this.root.querySelector(".gallery").clientWidth / 222));
+        const gallery = this.root.querySelector(".gallery");
+        const tracks = gallery ? getComputedStyle(gallery).gridTemplateColumns.trim().split(/\s+/).filter(Boolean).length : 0;
+        const columns = Math.max(1, tracks || Math.floor(((gallery?.clientWidth ?? 210) + 12) / 222));
         const moves = { ArrowRight: 1, ArrowDown: columns, ArrowLeft: -1, ArrowUp: -columns };
         if (!(event.key in moves)) return;
         event.preventDefault();
@@ -65,22 +67,26 @@ export class AppearanceView {
 
   option(label, key, choices) {
     const current = document.documentElement.dataset[key];
+    const buttons = choices.map(([value, text]) => h("button", {
+      type: "button",
+      "aria-pressed": current === value ? "true" : "false",
+      onclick: (event) => {
+        this.ctx.setLook(key, value);
+        for (const other of buttons) {
+          other.setAttribute("aria-pressed", other === event.currentTarget ? "true" : "false");
+        }
+      },
+      text,
+    }));
     return [
       h("span", { text: label }),
-      h("div", { class: "segmented", role: "group", "aria-label": label }, choices.map(([value, text]) => h("button", {
-        type: "button",
-        "aria-pressed": current === value ? "true" : "false",
-        onclick: () => {
-          this.ctx.setLook(key, value);
-          this.render();
-        },
-        text,
-      }))),
+      h("div", { class: "segmented", role: "group", "aria-label": label }, buttons),
     ];
   }
 
   render() {
     const all = [SYSTEM, ...THEMES];
+    const fallbackFocus = !all.some((entry) => entry.id === this.ctx.theme());
     const { state } = this.ctx;
     const notify = h("input", {
       type: "checkbox",
@@ -108,7 +114,7 @@ export class AppearanceView {
             text: "Revert",
           })),
         h("p", { class: "note", text: "Arrow keys move through the gallery and apply as they go. Phosphor and Amber are one-hue themes: raw and wire differ by lightness and a hatch." }),
-        h("div", { class: "gallery", role: "radiogroup", "aria-label": "Theme" }, all.map((entry, index) => this.card(entry, index, all)))),
+        h("div", { class: "gallery", role: "radiogroup", "aria-label": "Theme" }, all.map((entry, index) => this.card(entry, index, all, fallbackFocus)))),
       h("section", { class: "panel" },
         h("h2", { class: "panel-head", text: "Layout" }),
         h("div", { class: "options" },

@@ -18,12 +18,12 @@ export class Flights {
   }
 
   /** A `flights` frame, or the snapshot's (null when the console is attached). */
-  load(frame) {
+  load(frame, receivedAt = null) {
     this.available = frame != null;
     this.list = frame ? frame.list : [];
     this.total = frame ? frame.total : 0;
     this.more = frame ? frame.more : 0;
-    this.at = frame ? frame.at_unix : 0;
+    this.at = frame ? (receivedAt ?? frame.at_unix) : 0;
     this.version++;
   }
 

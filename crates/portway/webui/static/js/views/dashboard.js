@@ -155,11 +155,19 @@ export function renderModels(ctx) {
       [model.status, "dim"],
     ];
     const selected = state.filterMode === model.name;
+    const toggle = () => ctx.setMode(selected ? "all" : model.name);
     return h("tr", {
       class: "clickable",
+      tabindex: "0",
       "aria-selected": selected ? "true" : "false",
       title: selected ? "Show every upstream" : `Show only ${model.name}`,
-      onclick: () => ctx.setMode(selected ? "all" : model.name),
+      onclick: toggle,
+      onkeydown: (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          toggle();
+        }
+      },
     }, cells.map(([text, tone], at) => h("td", {
       class: [columnClass(MODEL_COLUMNS[at]), tone ? `t-${tone}` : ""].filter(Boolean).join(" "),
       "data-label": MODEL_COLUMNS[at].name,
@@ -188,12 +196,18 @@ export function renderCharts(ctx) {
   drawTraffic(trafficCanvas, series);
   const peak = (data) => human(data.reduce((max, value) => Math.max(max, value), 0));
   trafficCanvas.setAttribute("aria-label", `Socket bytes per second in ${state.scale}s buckets: peak up ${peak(series.up)}, peak down ${peak(series.down)}`);
-  fill($("#scale"), SCALES.map((scale) => h("button", {
-    type: "button",
-    "aria-pressed": state.scale === scale ? "true" : "false",
-    onclick: () => ctx.setScale(scale),
-    text: `${scale}s`,
-  })));
+  const scaleGroup = $("#scale");
+  if (!scaleGroup.childElementCount) {
+    fill(scaleGroup, SCALES.map((scale) => h("button", {
+      type: "button",
+      dataset: { scale: String(scale) },
+      onclick: () => ctx.setScale(scale),
+      text: `${scale}s`,
+    })));
+  }
+  for (const button of scaleGroup.children) {
+    button.setAttribute("aria-pressed", Number(button.dataset.scale) === state.scale ? "true" : "false");
+  }
 }
 
 // ------------------------------------------------------------------ events
@@ -218,6 +232,8 @@ export class EventList {
     this.spacer = $("#events-spacer");
     this.rows = $("#events-rows");
     this.ignoreScrollUntil = 0;
+    this.lastScrollTop = 0;
+    this.endResize = null;
     this.widths = new Widths();
     this.epoch = -1;
     this.measured = { low: Infinity, high: -Infinity };
@@ -315,14 +331,18 @@ export class EventList {
     if (Math.abs(this.list.scrollTop - value) < 1) return;
     this.ignoreScrollUntil = performance.now() + 80;
     this.list.scrollTop = value;
+    this.lastScrollTop = this.list.scrollTop;
   }
 
   onScroll() {
+    const top = this.list.scrollTop;
+    if (top === this.lastScrollTop) return;
+    this.lastScrollTop = top;
     if (performance.now() < this.ignoreScrollUntil) {
       this.draw();
       return;
     }
-    const atBottom = this.list.scrollTop + this.list.clientHeight >= this.list.scrollHeight - 2;
+    const atBottom = top + this.list.clientHeight >= this.list.scrollHeight - 2;
     const { state } = this.ctx;
     if (atBottom && !state.follow) {
       state.follow = true;
@@ -381,25 +401,35 @@ export class EventList {
       const grip = event.target.closest(".grip");
       if (!grip || event.button !== 0) return;
       event.preventDefault();
+      this.endResize?.();
       const key = grip.dataset.key;
       const unit = this.probe.getBoundingClientRect().width / 20 || 8;
       const from = event.clientX;
       const start = grip.parentElement.getBoundingClientRect().width / unit;
       document.body.classList.add("resizing");
+      try {
+        grip.setPointerCapture?.(event.pointerId);
+      } catch {
+        // Ignore capture failure on synthetic or detached pointers.
+      }
       const move = (moved) => {
         this.hand[key] = handWidth(start + (moved.clientX - from) / unit);
         this.columns();
       };
       const end = () => {
+        this.endResize = null;
         window.removeEventListener("pointermove", move);
         window.removeEventListener("pointerup", end);
         window.removeEventListener("pointercancel", end);
+        window.removeEventListener("blur", end);
         document.body.classList.remove("resizing");
         this.saveHand();
       };
+      this.endResize = end;
       window.addEventListener("pointermove", move);
       window.addEventListener("pointerup", end);
       window.addEventListener("pointercancel", end);
+      window.addEventListener("blur", end);
     });
     this.head.addEventListener("dblclick", (event) => {
       const grip = event.target.closest(".grip");
@@ -461,11 +491,17 @@ export class EventList {
     const count = Math.ceil(Math.max(0, this.list.clientHeight - height) / height) + 1;
     const last = Math.min(length, first + count);
     this.rows.style.transform = `translateY(${first * height}px)`;
-    const selected = state.follow ? null : state.cursor;
+    let selected = state.follow ? null : state.cursor;
+    if (selected != null && !this.store.get(selected)) {
+      state.cursor = null;
+      selected = null;
+    }
+    let activeRendered = false;
     const rows = [];
     for (let at = first; at < last; at++) {
       const event = this.store.get(filtered[at]);
       if (!event) continue;
+      if (event.seq === selected) activeRendered = true;
       rows.push(h("div", {
         // Stripes follow the row's place in the list, not in the drawn slice.
         class: `row ${event.kind}${at % 2 ? " alt" : ""}`,
@@ -482,7 +518,7 @@ export class EventList {
       }));
     }
     fill(this.rows, rows);
-    if (selected != null) this.list.setAttribute("aria-activedescendant", `ev-${selected}`);
+    if (selected != null && activeRendered) this.list.setAttribute("aria-activedescendant", `ev-${selected}`);
     else this.list.removeAttribute("aria-activedescendant");
 
     // Lines hidden under the viewport: what scrolling back down would reveal.
@@ -516,7 +552,7 @@ export function renderFlights(ctx) {
   const { state } = ctx;
   const flights = state.flights;
   const rows = $("#flights-rows");
-  const now = ctx.now();
+  const now = ctx.mono();
   const open = state.flightsOpen;
   $("#flights-toggle").setAttribute("aria-expanded", open ? "true" : "false");
   rows.hidden = !open;
@@ -548,7 +584,10 @@ export function renderFlights(ctx) {
       title: "Follow this request",
       onclick: () => ctx.openDetail({ type: "flight", id: flight.id }),
       onkeydown: (event) => {
-        if (event.key === "Enter") ctx.openDetail({ type: "flight", id: flight.id });
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          ctx.openDetail({ type: "flight", id: flight.id });
+        }
       },
     },
     h("span", { class: "flight-model", title: flight.model || flight.upstream, text: displayModel(flight.model || flight.upstream) }),

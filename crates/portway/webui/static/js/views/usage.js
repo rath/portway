@@ -24,7 +24,9 @@ export class UsageView {
     this.load();
     clearInterval(this.timer);
     this.timer = setInterval(() => {
-      if (!document.hidden) this.load();
+      if (!document.hidden && !this.ctx.state?.stopped && document.querySelector("#gate")?.hidden !== false) {
+        this.load();
+      }
     }, REFRESH_MS);
   }
 
@@ -40,16 +42,18 @@ export class UsageView {
   }
 
   costs() {
-    if (this.table) openCosts(this.table);
+    if (this.table?.rows?.length) openCosts(this.table);
   }
 
   async load() {
     if (this.loading?.range === this.range) return;
     const request = { range: this.range };
     this.loading = request;
-    if (this.table?.range !== this.range) this.table = null;
-    this.error = null;
-    this.render();
+    const switching = this.table?.range !== this.range;
+    if (switching) {
+      this.table = null;
+      if (!this.error) this.render();
+    }
     try {
       const table = await this.ctx.api.usage(request.range);
       if (this.loading !== request) return;
@@ -58,36 +62,64 @@ export class UsageView {
     } catch (err) {
       if (this.loading !== request) return;
       this.error = err.message;
-      if (err.status === 401) this.ctx.expired();
+      if (err.status === 401) {
+        this.hide();
+        this.ctx.expired?.();
+      }
     } finally {
       if (this.loading === request) this.loading = null;
     }
     this.render();
   }
 
-  render() {
-    const table = this.table;
-    const ranges = (table?.ranges ?? RANGES.map((key) => ({ key, label: key }))).map((range) =>
+  ensureShell() {
+    if (this.shell) return;
+    this.rangeButtons = RANGES.map((key) =>
       h("button", {
         type: "button",
-        "aria-pressed": range.key === this.range ? "true" : "false",
+        dataset: { range: key },
         onclick: () => {
-          this.range = range.key;
+          this.range = key;
           this.load();
         },
-        text: range.label,
+        text: key,
       }));
+    this.costsButton = h("button", {
+      type: "button",
+      class: "ghost",
+      onclick: () => this.costs(),
+      text: "Costs (p)",
+    });
     const head = h("div", { class: "controls" },
-      h("div", { class: "segmented", role: "group", "aria-label": "Window" }, ranges),
+      h("div", { class: "segmented", role: "group", "aria-label": "Window" }, this.rangeButtons),
       h("span", { class: "note", text: "←→ window" }),
       h("div", { class: "grow" }),
-      h("button", { type: "button", class: "ghost", onclick: () => this.costs(), disabled: !table, text: "Costs (p)" }));
+      this.costsButton);
+    this.mainBody = h("div");
+    this.notesPanel = h("section", { class: "panel", hidden: true });
+    this.shell = [h("section", { class: "panel" }, head, this.mainBody), this.notesPanel];
+    fill(this.root, this.shell);
+  }
+
+  render() {
+    this.ensureShell();
+    const table = this.table;
+    const labels = new Map((table?.ranges ?? []).map((range) => [range.key, range.label]));
+    for (const button of this.rangeButtons) {
+      const key = button.dataset.range;
+      button.setAttribute("aria-pressed", key === this.range ? "true" : "false");
+      const labelText = labels.get(key);
+      if (labelText && button.textContent !== labelText) button.textContent = labelText;
+    }
+    this.costsButton.disabled = !table?.rows?.length;
     if (this.error) {
-      fill(this.root, h("section", { class: "panel" }, head, h("p", { class: "error-box", text: this.error })));
+      this.notesPanel.hidden = true;
+      fill(this.mainBody, h("p", { class: "error-box", text: this.error }));
       return;
     }
     if (!table) {
-      fill(this.root, h("section", { class: "panel" }, head, h("p", { class: "note", text: "reading…" })));
+      this.notesPanel.hidden = true;
+      fill(this.mainBody, h("p", { class: "note", text: "reading…" }));
       return;
     }
     const names = ["model", "reqs", "prompt", "cached", "written", "hit", "output", "in$", "read$", "write$", "out$", "total$"];
@@ -97,15 +129,12 @@ export class UsageView {
         h("thead", {}, h("tr", {}, names.map((name) => h("th", { class: roomy.has(name) ? "roomy" : "", scope: "col", text: name })))),
         h("tbody", {}, table.rows.map((row) => usageRow(row, false)), usageRow(table.total, true))))
       : h("p", { class: "note", text: "no usage recorded in this window" });
-    fill(this.root,
-      h("section", { class: "panel" },
-        head,
-        h("h2", { class: "window-title", text: table.title }),
-        body),
-      h("section", { class: "panel" },
-        h("h2", { class: "panel-head", text: "What these numbers are not" }),
-        h("ul", { class: "notes" }, displayNotes(table).map((note) => h("li", { text: note }))),
-        h("p", { class: "note", text: `re-read every ${REFRESH_MS / 1000}s while this view is open` })));
+    fill(this.mainBody, h("h2", { class: "window-title", text: table.title }), body);
+    this.notesPanel.hidden = false;
+    fill(this.notesPanel,
+      h("h2", { class: "panel-head", text: "What these numbers are not" }),
+      h("ul", { class: "notes" }, displayNotes(table).map((note) => h("li", { text: note }))),
+      h("p", { class: "note", text: `re-read every ${REFRESH_MS / 1000}s while this view is open` }));
   }
 }
 

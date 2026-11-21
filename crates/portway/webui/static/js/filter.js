@@ -85,38 +85,39 @@ function term({ text, phrase }) {
   if (colon > 0) {
     const key = text.slice(0, colon).toLowerCase();
     const raw = text.slice(colon + 1);
-    const [op, value] = comparison(raw);
     const request = (test) => (event) => event.kind === "request" && test(event);
     switch (key) {
       case "status": {
+        const [op, value] = comparison(raw);
         const cls = /^([1-5])xx$/i.exec(value);
         if (cls && op === "=") {
           const low = Number(cls[1]) * 100;
           return request((event) => event.status >= low && event.status < low + 100);
         }
+        if (!/^\d+$/.test(value)) return `status: wants 5xx, 404 or >=400, not "${raw}"`;
         const code = Number(value);
-        if (!Number.isInteger(code)) return `status: wants 5xx, 404 or >=400, not "${raw}"`;
         return request((event) => compare(op, event.status, code));
       }
       case "model": {
-        const needle = value.toLowerCase();
+        const needle = raw.toLowerCase();
         return request((event) => [event.model, displayModel(event.model)].some((name) => name.toLowerCase().includes(needle)));
       }
       case "upstream": {
-        const needle = value.toLowerCase();
+        const needle = raw.toLowerCase();
         return request((event) => [event.upstream, displayModel(event.upstream)].some((name) => name.toLowerCase().includes(needle)));
       }
       case "route": {
-        const needle = value.toLowerCase();
+        const needle = raw.toLowerCase();
         return request((event) => `${event.method} ${event.path}`.toLowerCase().includes(needle));
       }
       case "level": {
+        const [op, value] = comparison(raw);
         const level = LEVELS[value.toUpperCase()];
         if (level === undefined) return `level: wants info, warning or error, not "${raw}"`;
         return (event) => event.kind === "log" && compare(op, LEVELS[event.level], level);
       }
       case "is":
-        switch (value.toLowerCase()) {
+        switch (raw.toLowerCase()) {
           case "cut": return request((event) => !event.complete);
           case "trouble": return (event) => event.trouble;
           case "log": return (event) => event.kind === "log";
@@ -125,30 +126,35 @@ function term({ text, phrase }) {
           case "reused": return request((event) => event.reused);
           case "coded": return request((event) => event.coding != null);
           case "catalog": return request((event) => event.catalog === true);
-          default: return `is: wants cut, trouble, log, request, fresh, reused, coded or catalog, not "${value}"`;
+          default: return `is: wants cut, trouble, log, request, fresh, reused, coded or catalog, not "${raw}"`;
         }
       case "ttfb": {
+        const [op, value] = comparison(raw);
         const limit = seconds(value);
         if (limit === null) return `ttfb: wants a time like >2s or <300ms, not "${raw}"`;
         return request((event) => compare(op === "=" ? ">=" : op, event.ttfb, limit));
       }
       case "gap": {
+        const [op, value] = comparison(raw);
         const limit = seconds(value);
         if (limit === null) return `gap: wants a time like >20s or <1s, not "${raw}"`;
         return request((event) => event.max_gap != null &&
           compare(op === "=" ? ">=" : op, event.max_gap, limit));
       }
       case "size": {
+        const [op, value] = comparison(raw);
         const limit = bytes(value);
         if (limit === null) return `size: wants a size like >1MB, not "${raw}"`;
         return request((event) => compare(op === "=" ? ">=" : op, event.body_len, limit));
       }
       case "down": {
+        const [op, value] = comparison(raw);
         const limit = bytes(value);
         if (limit === null) return `down: wants a size like >10KB, not "${raw}"`;
         return request((event) => compare(op === "=" ? ">=" : op, event.received, limit));
       }
       case "tok": {
+        const [op, value] = comparison(raw);
         const limit = count(value);
         if (limit === null) return `tok: wants a count like >50K, not "${raw}"`;
         return request((event) => event.usage != null &&

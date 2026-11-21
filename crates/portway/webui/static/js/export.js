@@ -2,7 +2,7 @@
 
 const FIELDS = [
   ["seq", (e) => e.seq],
-  ["time", (e) => new Date(e.ts * 1000).toISOString()],
+  ["time", (e) => (Number.isFinite(e.ts) ? new Date(e.ts * 1000).toISOString() : "")],
   ["kind", (e) => e.kind],
   ["level", (e) => e.level ?? ""],
   ["status", (e) => e.status ?? ""],
@@ -40,7 +40,7 @@ const FIELDS = [
  */
 export function cell(value) {
   let text = String(value);
-  if (typeof value === "string" && /^[=+\-@\t\r]/.test(text)) text = `'${text}`;
+  if (typeof value === "string" && (/^[\t\r\n]/.test(text) || /^\s*[=+\-@]/.test(text))) text = `'${text}`;
   return /[",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
 }
 

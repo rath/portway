@@ -18,10 +18,11 @@ export class HistoryView {
     this.report = null;
     this.error = null;
     this.request = 0;
+    this.knownModels = new Set();
   }
 
   show() {
-    if (!this.report && !this.error) this.load();
+    if (!this.report) this.load();
     else this.render();
   }
 
@@ -35,6 +36,10 @@ export class HistoryView {
       const report = await this.ctx.api.report(this.since, this.model, true);
       if (request !== this.request) return;
       this.report = report;
+      if (!this.model) this.knownModels.clear();
+      for (const row of report?.rows ?? []) {
+        if (row.model) this.knownModels.add(row.model);
+      }
     } catch (err) {
       if (request !== this.request) return;
       this.report = null;
@@ -55,8 +60,13 @@ export class HistoryView {
         if (event.key === "Enter") apply();
       },
     });
-    const models = new Set(this.ctx.state.models.map((model) => model.name));
-    for (const row of this.report?.rows ?? []) models.add(row.model);
+    const models = new Set(this.knownModels);
+    for (const event of this.ctx.state?.events?.items ?? []) {
+      if (event.kind === "request" && event.model) models.add(event.model);
+    }
+    for (const row of this.report?.rows ?? []) {
+      if (row.model) models.add(row.model);
+    }
     if (this.model) models.add(this.model);
     const select = h("select", { "aria-label": "Model", onchange: (event) => {
       this.model = event.target.value;
@@ -91,7 +101,10 @@ export class HistoryView {
         type: "button",
         class: "ghost",
         disabled: !this.report,
-        onclick: async () => this.ctx.toast(await copy(this.report.text) ? "copied the --report text" : "the clipboard refused", "good"),
+        onclick: async () => {
+          const ok = await copy(this.report.text);
+          this.ctx.toast(ok ? "copied the --report text" : "the clipboard refused", ok ? "good" : "bad");
+        },
         text: "Copy as --report",
       }));
   }

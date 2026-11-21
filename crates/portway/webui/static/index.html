@@ -13,7 +13,7 @@
   <script type="module" src="/js/app.js"></script>
 </head>
 <body>
-  <a class="skip" href="#events-list">Skip to events</a>
+  <a class="skip" href="#main">Skip to content</a>
 
   <header class="topbar">
     <div class="brand">
@@ -47,7 +47,7 @@
     <a href="#/appearance" data-view="appearance">Appearance</a>
   </nav>
 
-  <div class="banner" id="banner" hidden></div>
+  <div class="banner" id="banner" role="status" aria-live="polite" hidden></div>
 
   <main id="main">
     <section id="view-dashboard" class="view" aria-label="Dashboard">
@@ -133,7 +133,7 @@
   <dialog id="detail" class="drawer" aria-labelledby="detail-title"></dialog>
   <dialog id="help" aria-labelledby="help-title"></dialog>
   <dialog id="columns" aria-labelledby="columns-title"></dialog>
-  <dialog id="stop-dialog" aria-labelledby="stop-title"></dialog>
+  <dialog id="stop-dialog" aria-labelledby="stop-dialog-title"></dialog>
   <dialog id="costs" aria-labelledby="costs-title"></dialog>
   <dialog id="palette" class="palette" aria-label="Commands"></dialog>
 

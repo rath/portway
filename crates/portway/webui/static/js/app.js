@@ -112,6 +112,7 @@ const ctx = {
   api,
   invalidate,
   now: () => Date.now() / 1000,
+  mono: () => performance.now() / 1000,
   uptime() {
     const live = state.header.mode !== "attached" && !state.stopped;
     return state.uptime.value + (live ? (performance.now() - state.uptime.at) / 1000 : 0);
@@ -131,6 +132,7 @@ const ctx = {
     applyFilter();
   },
   setQuery(text) {
+    clearTimeout(queryTimer);
     state.query = text;
     $("#query").value = text;
     applyFilter();
@@ -156,6 +158,7 @@ const ctx = {
     document.documentElement.dataset.theme = resolve(choice, darkQuery.matches);
     prefs.set("theme", choice);
     renderAll();
+    if (state.view === "appearance") views.appearance.render();
   },
   setLook(key, value) {
     document.documentElement.dataset[key] = value;
@@ -165,6 +168,7 @@ const ctx = {
   setShortcuts(on) {
     state.shortcuts = on;
     prefs.setFlag("shortcuts", on);
+    if (state.view === "appearance") views.appearance.render();
   },
   async setNotify(on) {
     if (on && "Notification" in window && Notification.permission === "default") {
@@ -173,12 +177,20 @@ const ctx = {
     const granted = "Notification" in window && Notification.permission === "granted";
     state.notify = on && granted;
     prefs.setFlag("notify", state.notify);
+    if (!state.notify) clearPendingNotification();
     if (on && !granted) toast("the browser did not allow notifications", "bad");
     if (state.view === "appearance") views.appearance.render();
   },
 };
 
 const darkQuery = window.matchMedia("(prefers-color-scheme: dark)");
+// Normalize any stale/removed theme choice left in localStorage.
+{
+  const saved = document.documentElement.dataset.themeChoice || "system";
+  const choice = saved === "system" || byId(saved) ? saved : "system";
+  document.documentElement.dataset.themeChoice = choice;
+  document.documentElement.dataset.theme = resolve(choice, darkQuery.matches);
+}
 darkQuery.addEventListener("change", () => {
   if (ctx.theme() === "system") ctx.setTheme("system");
 });
@@ -206,17 +218,22 @@ function banner(text, bad = false) {
   element.textContent = text || "";
 }
 
-function gate(text) {
-  $("#gate").hidden = false;
-  $("#gate-text").textContent = text;
+function setGate(open, text = "") {
+  $("#gate").hidden = !open;
+  if (open) $("#gate-text").textContent = text;
+  for (const selector of ["header.topbar", "nav.tabs", "main#main"]) {
+    const element = $(selector);
+    if (element) element.inert = open;
+  }
 }
 
 function expired() {
   setConn("expired");
   source?.close();
   connection.stop();
+  views[state.view]?.hide();
   banner("");
-  gate("Sign in with the console link ending in #token=… (available from portway --status on the server). " +
+  setGate(true, "Sign in with the console link ending in #token=… (available from portway --status on the server). " +
     "This browser will stay signed in across restarts. If access was reset, use the new link.");
 }
 
@@ -265,7 +282,7 @@ function applyTotals(frame) {
   if (names !== used()) renderModes();
   state.uptime = { value: frame.uptime_s ?? frame.header?.uptime_s ?? 0, at: performance.now() };
   const saved = frame.totals.body_bytes > 0
-    ? ((frame.totals.body_bytes - frame.totals.wire_bytes) * 100) / frame.totals.body_bytes
+    ? Math.max(0, ((frame.totals.body_bytes - frame.totals.wire_bytes) * 100) / frame.totals.body_bytes)
     : null;
   state.history.add(Date.now() / 1000, { p50: frame.latency.ttfb?.p50 ?? null, p95: frame.latency.ttfb?.p95 ?? null, saved });
 }
@@ -276,7 +293,7 @@ function applySnapshot(snapshot) {
   applyTotals({ ...snapshot, uptime_s: snapshot.header.uptime_s });
   state.bars.load(snapshot.bars, snapshot.bars_total);
   state.traffic.load(snapshot.traffic);
-  state.flights.load(snapshot.flights);
+  state.flights.load(snapshot.flights, ctx.mono());
   state.events.reset(snapshot.events);
   state.noOlder = snapshot.oldest === 0 || (snapshot.events[0]?.seq ?? 0) <= snapshot.oldest;
   $("#load-older").disabled = state.noOlder;
@@ -307,6 +324,14 @@ function setConn(conn) {
   pill.textContent = conn;
 }
 
+function parseFrame(message, handle) {
+  try {
+    handle(JSON.parse(message.data));
+  } catch {
+    onStreamError();
+  }
+}
+
 function openStream() {
   source?.close();
   source = new EventSource(api.streamUrl(state.events.newest));
@@ -314,14 +339,14 @@ function openStream() {
     state.lastFrame = performance.now();
     if (!state.stopped) setConn("live");
   });
-  source.addEventListener("ev", (message) => onEvent(JSON.parse(message.data)));
-  source.addEventListener("tick", (message) => onTick(JSON.parse(message.data)));
-  source.addEventListener("flights", (message) => {
+  source.addEventListener("ev", (message) => parseFrame(message, onEvent));
+  source.addEventListener("tick", (message) => parseFrame(message, onTick));
+  source.addEventListener("flights", (message) => parseFrame(message, (data) => {
     state.lastFrame = performance.now();
-    state.flights.load(JSON.parse(message.data));
+    state.flights.load(data, ctx.mono());
     invalidate("flights", "detail");
-  });
-  source.addEventListener("control", (message) => onControl(JSON.parse(message.data)));
+  }));
+  source.addEventListener("control", (message) => parseFrame(message, onControl));
   source.addEventListener("reset", () => {
     source.close();
     resync();
@@ -394,12 +419,20 @@ function noticeTrouble(event) {
   else if (!notifyTimer) notifyTimer = setTimeout(sendNotification, wait);
 }
 
+function clearPendingNotification() {
+  if (notifyTimer) {
+    clearTimeout(notifyTimer);
+    notifyTimer = 0;
+  }
+  pendingTrouble = null;
+}
+
 function sendNotification() {
   notifyTimer = 0;
   const event = pendingTrouble;
-  if (!event || !document.hidden) return;
-  lastNotified = Date.now();
   pendingTrouble = null;
+  if (!event || !document.hidden || !state.notify || state.unread === 0) return;
+  lastNotified = Date.now();
   const note = new Notification(`portway: ${state.unread} trouble event(s)`, {
     body: lineText(eventLine(event, new Set(ALL_COLUMNS))),
     tag: "portway-trouble",
@@ -426,6 +459,7 @@ function renderTitle() {
 document.addEventListener("visibilitychange", () => {
   if (!document.hidden) {
     state.unread = 0;
+    clearPendingNotification();
     renderTitle();
     renderAll();
     flush();
@@ -451,6 +485,7 @@ async function stopForwarder() {
     state.stopped = true;
     connection.stop();
     source?.close();
+    views[state.view]?.hide();
     setConn("stopped");
   }
   try {
@@ -462,22 +497,35 @@ async function stopForwarder() {
     if (err.status === 401) expired();
     else if (stopsConsole) {
       state.stopped = false;
+      views[state.view]?.show();
       resync();
     }
   }
 }
 
+let loadingOlder = false;
+
 async function loadOlder() {
-  if (state.noOlder) return;
+  if (state.noOlder || loadingOlder) return;
+  loadingOlder = true;
+  $("#load-older").disabled = true;
   try {
+    const beforeCount = state.events.filtered.length;
     const answer = await api.events(state.events.oldest || undefined, 1000);
     const added = state.events.prepend(answer.events);
+    const addedVisible = Math.max(0, state.events.filtered.length - beforeCount);
+    if (!state.follow && addedVisible > 0) {
+      list.setScroll(list.list.scrollTop + addedVisible * list.rowHeight());
+    }
     state.noOlder = added === 0 || answer.events.length === 0 || (answer.events[0]?.seq ?? 0) <= answer.oldest;
-    $("#load-older").disabled = state.noOlder;
     toast(added ? `${added} older event(s)` : "nothing older is held", added ? "good" : "");
     invalidate("events");
   } catch (err) {
     toast(err.message, "bad");
+    if (err.status === 401) expired();
+  } finally {
+    loadingOlder = false;
+    $("#load-older").disabled = state.noOlder;
   }
 }
 
@@ -492,6 +540,7 @@ function exportEvents(kind) {
 // ------------------------------------------------------------------ routing
 
 const VIEWS = ["dashboard", "usage", "history", "insights", "appearance"];
+let routed = false;
 
 function go(view) {
   const hash = view === "dashboard" ? "#/" : `#/${view}`;
@@ -502,14 +551,16 @@ function go(view) {
 function route() {
   const name = location.hash.replace(/^#\/?/, "") || "dashboard";
   const view = VIEWS.includes(name) ? name : "dashboard";
-  if (state.view !== view) views[state.view]?.hide();
+  const changed = !routed || state.view !== view;
+  if (routed && state.view !== view) views[state.view]?.hide();
   state.view = view;
+  routed = true;
   for (const other of VIEWS) $(`#view-${other}`).hidden = other !== view;
   for (const link of document.querySelectorAll(".tabs a")) {
     if (link.dataset.view === view) link.setAttribute("aria-current", "page");
     else link.removeAttribute("aria-current");
   }
-  views[view]?.show();
+  if (changed) views[view]?.show();
   renderAll();
 }
 
@@ -582,6 +633,7 @@ function anyDialogOpen() {
 }
 
 document.addEventListener("keydown", (event) => {
+  if (!$("#gate").hidden) return;
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
     event.preventDefault();
     openPalette(paletteCommands());
@@ -611,8 +663,8 @@ document.addEventListener("keydown", (event) => {
     if (keys[event.key]) {
       event.preventDefault();
       keys[event.key]();
+      return;
     }
-    return;
   }
   const dashboard = state.view === "dashboard";
   const global = {
@@ -635,7 +687,7 @@ document.addEventListener("keydown", (event) => {
     Enter: () => {
       const seq = state.follow ? null : state.cursor;
       const event = seq != null ? state.events.get(seq) : null;
-      if (event?.kind === "request") ctx.openDetail({ type: "event", seq });
+      if (event) ctx.openDetail({ type: "event", seq });
     },
     e: () => ctx.setMode(state.filterMode === "trouble" ? "all" : "trouble"),
     m: () => ctx.setMode(nextMode(state.filterMode, inUse(state.models).map((model) => model.name))),
@@ -689,7 +741,7 @@ const connection = new Connection({
     return api.snapshot();
   },
   connected(snapshot) {
-    $("#gate").hidden = true;
+    setGate(false);
     applySnapshot(snapshot);
     route();
     openStream();
@@ -697,7 +749,10 @@ const connection = new Connection({
   retrying() {
     source?.close();
     setConn("reconnecting");
-    state.flights.load({ at_unix: Date.now() / 1000, total: 0, more: 0, list: [] });
+    state.flights.load(
+      state.header.mode === "attached" ? null : { at_unix: Date.now() / 1000, total: 0, more: 0, list: [] },
+      ctx.mono(),
+    );
     invalidate("flights", "detail");
     banner("Connection interrupted. Reconnecting automatically; displayed data may be out of date.");
   },
@@ -705,7 +760,7 @@ const connection = new Connection({
 });
 
 function boot() {
-  $("#gate").hidden = true;
+  setGate(false);
   state.stopped = false;
   setConn("connecting");
   resync();

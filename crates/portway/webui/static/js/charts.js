@@ -44,7 +44,7 @@ export function drawBars(canvas, bars, monochrome) {
   const slot = 5;
   const count = Math.max(1, Math.floor(width / slot));
   const shown = bars.slice(Math.max(0, bars.length - count));
-  const peak = shown.reduce((max, [raw]) => Math.max(max, raw), 0);
+  const peak = shown.reduce((max, [raw, wire]) => Math.max(max, raw, wire), 0);
   context.fillStyle = token("grid");
   context.fillRect(0, height - 1, width, 1);
   if (!peak) return shown;
@@ -53,12 +53,16 @@ export function drawBars(canvas, bars, monochrome) {
   const start = width - shown.length * slot;
   shown.forEach(([rawBytes, wireBytes], at) => {
     const x = start + at * slot;
-    const tall = Math.max(1, (rawBytes / peak) * (height - 4));
-    const low = Math.max(wireBytes ? 1 : 0, (wireBytes / peak) * (height - 4));
-    context.fillStyle = raw;
-    context.fillRect(x, height - tall, slot - 1, tall - low);
-    context.fillStyle = wire;
-    context.fillRect(x, height - low, slot - 1, low);
+    const tall = rawBytes ? Math.max(1, (rawBytes / peak) * (height - 4)) : 0;
+    const low = wireBytes ? Math.max(1, (wireBytes / peak) * (height - 4)) : 0;
+    if (tall > low) {
+      context.fillStyle = raw;
+      context.fillRect(x, height - tall, slot - 1, tall - low);
+    }
+    if (low > 0) {
+      context.fillStyle = wire;
+      context.fillRect(x, height - low, slot - 1, low);
+    }
   });
   return shown;
 }
@@ -76,12 +80,13 @@ export function drawTraffic(canvas, series) {
   context.textBaseline = "bottom";
   for (const row of rows) {
     const peak = row.data.reduce((max, value) => Math.max(max, value), 0);
-    const plot = width - label;
+    const plot = Math.max(0, width - label);
     const step = row.data.length ? plot / row.data.length : plot;
     context.fillStyle = row.color;
     context.fillText(row.name, 0, row.top + half - 4);
     context.fillStyle = token("text-dim");
     context.fillText(human(peak), 44, row.top + half - 4);
+    if (plot <= 0) continue;
     context.fillStyle = token("grid");
     context.fillRect(label, row.top + half - 1, plot, 1);
     if (!peak) continue;
@@ -131,16 +136,28 @@ export function drawLines(canvas, times, series, format, hover, ceiling = null) 
     context.setLineDash(line.dash ? [5, 4] : []);
     context.beginPath();
     let drawing = false;
+    const isolated = [];
     line.values.forEach((value, index) => {
       if (value == null) {
         drawing = false;
         return;
       }
       if (drawing) context.lineTo(x(index), y(value));
-      else context.moveTo(x(index), y(value));
+      else {
+        context.moveTo(x(index), y(value));
+        if (line.values[index + 1] == null) isolated.push([x(index), y(value)]);
+      }
       drawing = true;
     });
     context.stroke();
+    if (isolated.length) {
+      context.fillStyle = line.color;
+      for (const [px, py] of isolated) {
+        context.beginPath();
+        context.arc(px, py, 2.5, 0, Math.PI * 2);
+        context.fill();
+      }
+    }
   }
   context.setLineDash([]);
   if (hover != null && times.length) {

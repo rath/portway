@@ -33,7 +33,7 @@
 @media (prefers-reduced-motion: reduce) { :root { --ease: 0ms linear; } }
 
 * { box-sizing: border-box; }
-html, body { height: 100%; }
+html { height: 100%; }
 body {
   margin: 0;
   background: var(--bg);
@@ -99,6 +99,7 @@ button.ghost:hover { background: var(--hover); color: var(--text); }
 button.danger { color: var(--bad); }
 button.danger:hover { background: color-mix(in srgb, var(--bad) 10%, var(--surface)); border-color: color-mix(in srgb, var(--bad) 40%, var(--border)); }
 button.danger.solid { background: var(--bad); color: var(--bg); border-color: var(--bad); }
+button.danger.solid:hover { background: color-mix(in srgb, var(--bad) 86%, var(--text)); border-color: color-mix(in srgb, var(--bad) 86%, var(--text)); }
 button.icon { min-width: 30px; padding: 0; border-color: transparent; background: transparent; color: var(--text-dim); }
 button.icon:hover { background: var(--hover); color: var(--text); }
 button.link { border: 0; background: none; color: var(--accent); padding: 0 4px; min-height: 0; font-weight: 500; }

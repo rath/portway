@@ -12,29 +12,45 @@ function open(dialog) {
   if (!dialog.open) dialog.showModal();
 }
 
+function similarQuery(event) {
+  const quote = (key, value) => {
+    const clean = String(value).replaceAll('"', "");
+    return /\s/.test(clean) ? `${key}:"${clean}"` : `${key}:${clean}`;
+  };
+  const parts = [];
+  if (event.model) parts.push(quote("model", event.model));
+  const route = `${event.method} ${event.path}`.replaceAll('"', "");
+  parts.push(`route:"${route}"`);
+  return parts.join(" ");
+}
+
 // ------------------------------------------------------------------ detail
 
 export function renderDetail(ctx) {
   const dialog = $("#detail");
   const target = ctx.state.detail;
   if (!target) {
+    dialog.dataset.detailKey = "";
     if (dialog.open) dialog.close();
     return;
   }
   if (target.type === "flight") {
     const flight = ctx.state.flights.get(target.id);
     if (!flight) {
+      dialog.dataset.detailKey = `flight-gone:${target.id}`;
       fill(dialog);
       dialogFrame(dialog, "Request in flight", h("p", { class: "note", text: "This request has finished; its record will appear in the list." }));
       open(dialog);
       return;
     }
-    const times = ctx.state.flights.times(flight, ctx.now());
+    const times = ctx.state.flights.times(flight, ctx.mono());
     const described = describe(flight, times);
+    const model = flight.model ? displayModel(flight.model) : "-";
     const fields = [
       ["flight", `#${flight.id}`],
-      ["model", displayModel(flight.model)],
-      ...(displayModel(flight.model) !== flight.model ? [["model ID", flight.model]] : []),
+      ...(flight.upstream && flight.upstream !== flight.model ? [["upstream", flight.upstream]] : []),
+      ["model", model],
+      ...(flight.model && model !== flight.model ? [["model ID", flight.model]] : []),
       ["request", `${flight.method} ${flight.path}`],
       ["phase", described.text],
       ["warning", described.warn ?? "none"],
@@ -47,6 +63,17 @@ export function renderDetail(ctx) {
       ["received", `${human(flight.received_wire)} on the wire -> ${human(flight.received)} decoded`],
       ["retries", String(flight.retries)],
     ];
+    const key = `flight:${flight.id}:${fields.length}`;
+    if (dialog.open && dialog.dataset.detailKey === key) {
+      const values = dialog.querySelectorAll("dl.fields dd");
+      if (values.length === fields.length) {
+        fields.forEach(([, value], index) => {
+          if (values[index].textContent !== value) values[index].textContent = value;
+        });
+        return;
+      }
+    }
+    dialog.dataset.detailKey = key;
     dialogFrame(dialog, "Request in flight", fieldList(fields), [
       h("span", { class: "note", text: "live · becomes the finished record when it ends" }),
     ]);
@@ -56,9 +83,11 @@ export function renderDetail(ctx) {
   const event = ctx.state.events.get(target.seq);
   if (!event) {
     ctx.state.detail = null;
+    dialog.dataset.detailKey = "";
     if (dialog.open) dialog.close();
     return;
   }
+  dialog.dataset.detailKey = `event:${target.seq}`;
   if (event.kind !== "request") {
     dialogFrame(dialog, "Log record", fieldList([["when", event.stamp], ["level", event.level], ["message", event.message]]));
     open(dialog);
@@ -69,13 +98,27 @@ export function renderDetail(ctx) {
     fieldList(detailFields(event)),
     h("pre", { class: "trouble-list", "aria-label": "The line as printed" }, segments(eventLine(event, ctx.state.columns))),
   ], [
-    h("button", { type: "button", onclick: async () => ctx.toast(await copy(JSON.stringify(event, null, 1)) ? "copied as JSON" : "the clipboard refused", "good"), text: "Copy JSON" }),
-    h("button", { type: "button", onclick: async () => ctx.toast(await copy(line) ? "copied the line" : "the clipboard refused", "good"), text: "Copy line" }),
+    h("button", {
+      type: "button",
+      onclick: async () => {
+        const ok = await copy(JSON.stringify(event, null, 1));
+        ctx.toast(ok ? "copied as JSON" : "the clipboard refused", ok ? "good" : "bad");
+      },
+      text: "Copy JSON",
+    }),
+    h("button", {
+      type: "button",
+      onclick: async () => {
+        const ok = await copy(line);
+        ctx.toast(ok ? "copied the line" : "the clipboard refused", ok ? "good" : "bad");
+      },
+      text: "Copy line",
+    }),
     h("button", {
       type: "button",
       onclick: () => {
         ctx.closeDetail();
-        ctx.setQuery(`model:${event.model} route:"${event.method} ${event.path}"`);
+        ctx.setQuery(similarQuery(event));
       },
       text: "Show similar",
     }),
@@ -161,7 +204,7 @@ export function openStop(ctx) {
       if (flights.available) {
         body.push(h("ul", {}, flights.list.slice(0, 12).map((flight) =>
           h("li", {}, h("span", { class: "t-model", title: flight.model || flight.upstream, text: displayModel(flight.model || flight.upstream) }), ` ${flight.route} · `,
-            describe(flight, flights.times(flight, ctx.now())).text))));
+            describe(flight, flights.times(flight, ctx.mono())).text))));
       }
     }
   }
@@ -178,10 +221,13 @@ export function openStop(ctx) {
   });
   dialogFrame(dialog, attached ? "Stop the daemon" : "Stop the forwarder", body, [cancel, confirm]);
   dialog.onkeydown = (event) => {
-    if (event.key === "q" && !event.metaKey && !event.ctrlKey) {
+    if (event.metaKey || event.ctrlKey || event.altKey) return;
+    if (event.key === "q") {
       event.preventDefault();
       confirm.click();
-    } else if (event.key.length === 1 && !event.metaKey && !event.ctrlKey) {
+    } else if (event.key === " " && event.target instanceof HTMLButtonElement) {
+      return;
+    } else if (event.key.length === 1) {
       event.preventDefault();
       dialog.close();
     }
@@ -203,21 +249,24 @@ export function openCosts(table) {
       h("td", { class: "t-good", text: "total" }),
       ["input", "cache_read", "cache_write", "output", "total"].map((part) => h("td", { class: "t-good", text: money(table.total.charge, part) }))));
   }
+  const cacheWriteRows = table.rows.filter((row) => row.cache_write > 0);
   dialogFrame(dialog, "Costs", [
     h("p", { class: "note", text: "cost by source: what the window cost, not the rates that produced it" }),
     h("div", { class: "table-wrap" }, h("table", { class: "data" },
       h("thead", {}, h("tr", {}, ["model", "input", "read", "write", "output", "total$"].map((name) => h("th", { text: name })))),
       h("tbody", {}, rows))),
-    h("h3", { text: "Cache writes by lifetime" }),
-    ...table.rows.filter((row) => row.cache_write > 0).map((row) => {
-      const periods = ["5m", "1h", "30m", "12h"];
-      const known = periods.reduce((n, ttl) => n + (row[`cache_write_${ttl}`] ?? 0), 0);
-      const knownCost = periods.reduce((n, ttl) => n + (row.charge?.[`cache_write_${ttl}`] ?? 0), 0);
-      const parts = periods.filter((ttl) => row[`cache_write_${ttl}`] > 0)
-        .map((ttl) => `${ttl}: ${row[`cache_write_${ttl}`]} tokens · ${money(row.charge, `cache_write_${ttl}`)}`);
-      if (row.cache_write > known) parts.push(`unknown TTL: ${row.cache_write - known} tokens · ${row.charge ? dollars(Math.max(0, row.charge.cache_write - knownCost)) : "-"}`);
-      return h("p", { class: "note", text: `${label(displayModel(row.model), row.tier)} — ${parts.join("; ")}` });
-    }),
+    ...(cacheWriteRows.length ? [
+      h("h3", { text: "Cache writes by lifetime" }),
+      ...cacheWriteRows.map((row) => {
+        const periods = ["5m", "1h", "30m", "12h"];
+        const known = periods.reduce((n, ttl) => n + (row[`cache_write_${ttl}`] ?? 0), 0);
+        const knownCost = periods.reduce((n, ttl) => n + (row.charge?.[`cache_write_${ttl}`] ?? 0), 0);
+        const parts = periods.filter((ttl) => row[`cache_write_${ttl}`] > 0)
+          .map((ttl) => `${ttl}: ${row[`cache_write_${ttl}`]} tokens · ${money(row.charge, `cache_write_${ttl}`)}`);
+        if (row.cache_write > known) parts.push(`unknown TTL: ${row.cache_write - known} tokens · ${row.charge ? dollars(Math.max(0, row.charge.cache_write - knownCost)) : "-"}`);
+        return h("p", { class: "note", text: `${label(displayModel(row.model), row.tier)} — ${parts.join("; ")}` });
+      }),
+    ] : []),
   ]);
   open(dialog);
 }
@@ -232,6 +281,9 @@ export function openPalette(commands) {
   const list = h("ul", { role: "listbox", id: "palette-list", "aria-label": "Commands" });
   const input = h("input", {
     type: "text",
+    role: "combobox",
+    "aria-expanded": "true",
+    "aria-autocomplete": "list",
     placeholder: "type a command, a theme, a model…",
     "aria-controls": "palette-list",
     "aria-label": "Command",
@@ -248,7 +300,8 @@ export function openPalette(commands) {
         run(index);
       },
     }, h("span", { text: command.name }), h("span", { class: "hint", text: command.hint || "" }))));
-    input.setAttribute("aria-activedescendant", matches.length ? `palette-${at}` : "");
+    if (matches.length) input.setAttribute("aria-activedescendant", `palette-${at}`);
+    else input.removeAttribute("aria-activedescendant");
     list.children[at]?.scrollIntoView({ block: "nearest" });
   };
   const run = (index) => {

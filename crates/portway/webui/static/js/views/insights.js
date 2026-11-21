@@ -30,6 +30,7 @@ export class InsightsView {
   }
 
   hide() {
+    this.hover = { latency: null, saved: null };
     this.tooltip.hidden = true;
   }
 
@@ -39,7 +40,17 @@ export class InsightsView {
     this.latency = h("canvas", { tabindex: "0", role: "img", "aria-label": "time to first byte" });
     this.saved = h("canvas", { tabindex: "0", role: "img", "aria-label": "upload saved" });
     this.share = h("div", { class: "share" });
-    this.shareControls = h("div", { class: "segmented", role: "group", "aria-label": "Measure" });
+    this.shareButtons = METRICS.map(([key, label]) => h("button", {
+      type: "button",
+      dataset: { metric: key },
+      "aria-pressed": key === this.metric ? "true" : "false",
+      onclick: () => {
+        this.metric = key;
+        this.renderShare();
+      },
+      text: label,
+    }));
+    this.shareControls = h("div", { class: "segmented", role: "group", "aria-label": "Measure" }, this.shareButtons);
     const panel = (title, legend, body) => h("section", { class: "panel" },
       h("div", { class: "controls" }, h("h2", { text: title }), h("div", { class: "grow" }), legend), body);
     fill(this.root,
@@ -68,8 +79,12 @@ export class InsightsView {
         ? `${clock(point.at)}  p50 ${point.p50 == null ? "-" : humanTime(point.p50)}  p95 ${point.p95 == null ? "-" : humanTime(point.p95)}`
         : `${clock(point.at)}  saved ${point.saved == null ? "-" : `${point.saved.toFixed(1)}%`}`;
       this.tooltip.hidden = false;
-      this.tooltip.style.left = `${Math.min(x + 12, window.innerWidth - 260)}px`;
-      this.tooltip.style.top = `${y + 12}px`;
+      const tipW = this.tooltip.offsetWidth || 240;
+      const tipH = this.tooltip.offsetHeight || 28;
+      const left = Math.max(8, Math.min(x + 12, window.innerWidth - tipW - 8));
+      const top = Math.max(8, Math.min(y + 12, window.innerHeight - tipH - 8));
+      this.tooltip.style.left = `${left}px`;
+      this.tooltip.style.top = `${top}px`;
     };
     canvas.addEventListener("pointermove", (event) => {
       const count = points().length;
@@ -98,6 +113,7 @@ export class InsightsView {
     canvas.addEventListener("blur", () => {
       this.hover[name] = null;
       this.tooltip.hidden = true;
+      this.render();
     });
   }
 
@@ -124,15 +140,9 @@ export class InsightsView {
 
   renderShare() {
     const metric = METRICS.find(([key]) => key === this.metric);
-    fill(this.shareControls, METRICS.map(([key, label]) => h("button", {
-      type: "button",
-      "aria-pressed": key === this.metric ? "true" : "false",
-      onclick: () => {
-        this.metric = key;
-        this.renderShare();
-      },
-      text: label,
-    })));
+    for (const button of this.shareButtons) {
+      button.setAttribute("aria-pressed", button.dataset.metric === this.metric ? "true" : "false");
+    }
     const models = this.ctx.state.models;
     const values = models.map((model) => metric[2](model));
     const total = values.reduce((sum, value) => sum + value, 0);

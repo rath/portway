@@ -28,13 +28,18 @@ async function call(method, path, body) {
   }
   if (response.status === 204) return null;
   let data = null;
+  let parsed = true;
   try {
     data = await response.json();
   } catch {
     data = null;
+    parsed = false;
   }
   if (!response.ok) {
     throw new ApiError(response.status, data?.error ?? `${response.status} ${response.statusText}`);
+  }
+  if (!parsed) {
+    throw new ApiError(response.status, "unexpected response from console");
   }
   return data;
 }
@@ -61,22 +66,30 @@ export const api = {
   streamUrl: (after) => `/api/stream${query({ after })}`,
 };
 
+let pendingToken = null;
+
 /**
  * Take `#token=` off the address before anything else runs, so it is never
  * in history, a bookmark or a screenshot, and trade it for the cookie.
+ * Keeps the stripped token in memory across transient non-401 retries.
  * Returns false when there is neither a token nor a session.
  */
 export async function signIn() {
   const hash = window.location.hash;
   const match = /(?:^#|&)token=([0-9a-f]{16,128})/.exec(hash);
   if (match) {
-    const rest = hash.replace(/(?:^#|&)token=[0-9a-f]{16,128}/, "").replace(/^&/, "");
+    pendingToken = match[1];
+    const rest = hash.replace(/^#/, "").replace(/(?:^|&)token=[0-9a-f]{16,128}/, "").replace(/^&/, "");
     history.replaceState(null, "", `${location.pathname}${location.search}${rest ? `#${rest}` : ""}`);
+  }
+  if (pendingToken) {
     try {
-      await api.session(match[1]);
+      await api.session(pendingToken);
+      pendingToken = null;
       return true;
     } catch (err) {
       if (err.status !== 401) throw err;
+      pendingToken = null;
     }
   }
   const health = await api.health();
