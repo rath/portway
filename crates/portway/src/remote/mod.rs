@@ -92,16 +92,30 @@ async fn attach(
 
 async fn interrupted() {
     use tokio::signal::unix::{SignalKind, signal};
-    let mut term = signal(SignalKind::terminate()).expect("SIGTERM handler");
-    let mut interrupt = signal(SignalKind::interrupt()).expect("SIGINT handler");
-    tokio::select! { _ = term.recv() => {}, _ = interrupt.recv() => {} }
+    async fn wait(kind: SignalKind) {
+        match signal(kind) {
+            Ok(mut stream) => {
+                stream.recv().await;
+            }
+            Err(_) => std::future::pending::<()>().await,
+        }
+    }
+    tokio::select! {
+        () = wait(SignalKind::terminate()) => {}
+        () = wait(SignalKind::interrupt()) => {}
+        () = wait(SignalKind::hangup()) => {}
+    }
 }
 
 async fn snapshot(client: &Client) -> Result<Snapshot, Error> {
+    const MAX_PAGES: usize = 16;
     let mut snapshot: Snapshot = client.get("/api/snapshot").await?;
     // Snapshot carries the newest 1000. Page backward to the same bounded
     // backlog the local TUI holds; the initial stream replays anything newer.
-    while snapshot.events.len() < tui::state::EVENT_CAPACITY {
+    for _ in 0..MAX_PAGES {
+        if snapshot.events.len() >= tui::state::EVENT_CAPACITY {
+            break;
+        }
         let Some(first) = snapshot.events.first().map(|event| event.seq) else {
             break;
         };
@@ -153,10 +167,12 @@ async fn follow(
                 )
                 .await?
             }
-            Ok(()) => {
+            Ok(()) if started.elapsed() >= Duration::from_secs(10) => {
+                // Stable connection ended with a reset or reload: resnapshot immediately.
                 delay = 2;
                 continue;
-            } // reset/reload: resnapshot immediately
+            }
+            Ok(()) => {}
         }
         if started.elapsed() >= Duration::from_secs(10) {
             delay = 2;

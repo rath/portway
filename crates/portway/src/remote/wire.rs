@@ -43,7 +43,7 @@ pub struct Header {
 }
 #[derive(Deserialize)]
 pub struct Snapshot {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::aliases::deserialize")]
     pub model_aliases: crate::aliases::ModelAliases,
     pub header: Header,
     pub seq: u64,
@@ -59,7 +59,7 @@ pub struct Snapshot {
 }
 #[derive(Deserialize)]
 pub struct Tick {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::aliases::deserialize")]
     pub model_aliases: crate::aliases::ModelAliases,
     pub generation: u64,
     pub uptime_s: f64,
@@ -473,8 +473,9 @@ impl RemoteState {
         if replace || tail.end < self.traffic_end {
             self.traffic.clear();
         }
-        let count = tail.up.len().min(tail.down.len()).min(TRAFFIC_SECONDS);
-        let first = tail.end.saturating_sub(count.saturating_sub(1) as u64);
+        let len = tail.up.len().min(tail.down.len());
+        let count = len.min(TRAFFIC_SECONDS);
+        let skip = len - count;
         if !replace && tail.end > self.traffic_end {
             for _ in 0..(tail.end - self.traffic_end).min(TRAFFIC_SECONDS as u64) {
                 self.traffic.push_back((0, 0));
@@ -483,9 +484,16 @@ impl RemoteState {
         if self.traffic.len() < count {
             self.traffic.resize(count, (0, 0));
         }
-        for (offset, pair) in tail.up.into_iter().zip(tail.down).take(count).enumerate() {
-            let age = tail.end - (first + offset as u64);
-            let index = self.traffic.len().saturating_sub(age as usize + 1);
+        for (offset, pair) in tail
+            .up
+            .into_iter()
+            .zip(tail.down)
+            .skip(skip)
+            .take(count)
+            .enumerate()
+        {
+            let age = count - 1 - offset;
+            let index = self.traffic.len().saturating_sub(age + 1);
             if let Some(slot) = self.traffic.get_mut(index) {
                 *slot = pair;
             }
@@ -568,5 +576,22 @@ mod tests {
         append_bars(&mut bars, 1, 2, vec![(100, 50), (200, 80)]);
         append_bars(&mut bars, 2, 2, vec![(200, 80)]);
         assert_eq!(bars, VecDeque::from([(100, 50), (200, 80)]));
+    }
+
+    #[test]
+    fn traffic_tail_with_end_below_bucket_count_never_underflows() {
+        let mut remote = RemoteState::default();
+        remote.traffic(
+            Traffic {
+                end: 0,
+                up: vec![1, 2, 3, 4, 5],
+                down: vec![10, 20, 30, 40, 50],
+            },
+            true,
+        );
+        assert_eq!(
+            remote.traffic.iter().copied().collect::<Vec<_>>(),
+            [(1, 10), (2, 20), (3, 30), (4, 40), (5, 50)]
+        );
     }
 }

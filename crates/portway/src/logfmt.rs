@@ -83,6 +83,9 @@ pub fn human(size: u64) -> String {
 
 /// Duration for the log: ms below one second, then seconds, then minutes.
 pub fn human_time(seconds: f64) -> String {
+    if !seconds.is_finite() || seconds < 0.0 {
+        return "0ms".to_string();
+    }
     if seconds < 1.0 {
         format!("{:.0}ms", seconds * 1000.0)
     } else if seconds < 60.0 {
@@ -126,11 +129,15 @@ fn capture() -> &'static Mutex<Option<Vec<String>>> {
 }
 
 pub fn start_capture() {
-    *capture().lock().unwrap() = Some(Vec::new());
+    *capture().lock().unwrap_or_else(|e| e.into_inner()) = Some(Vec::new());
 }
 
 pub fn take_capture() -> Vec<String> {
-    capture().lock().unwrap().take().unwrap_or_default()
+    capture()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take()
+        .unwrap_or_default()
 }
 
 /// `YYYY-MM-DD HH:mm:ss [LEVEL ]message`, with a dim stamp. INFO stays bare.
@@ -151,7 +158,7 @@ pub fn format_record(level: Level, message: &str) -> String {
 /// A log record: the sinks see it, and the console prints it unless the
 /// dashboard owns the terminal.
 pub fn log(level: Level, message: &str) {
-    let mut held = capture().lock().unwrap();
+    let mut held = capture().lock().unwrap_or_else(|e| e.into_inner());
     if let Some(lines) = held.as_mut() {
         lines.push(format_record(level, message));
         return;
@@ -172,7 +179,7 @@ pub fn log(level: Level, message: &str) {
 /// the sinks as an `Event::Request`, and a `log` record here would put it in
 /// the database twice.
 pub fn console(level: Level, message: &str) {
-    let mut held = capture().lock().unwrap();
+    let mut held = capture().lock().unwrap_or_else(|e| e.into_inner());
     if let Some(lines) = held.as_mut() {
         lines.push(format_record(level, message));
         return;
@@ -187,7 +194,7 @@ pub fn console(level: Level, message: &str) {
 /// not, because feeding a write failure back into the queue it failed on is a
 /// loop.
 pub fn from_store(level: Level, message: &str) {
-    let mut held = capture().lock().unwrap();
+    let mut held = capture().lock().unwrap_or_else(|e| e.into_inner());
     if let Some(lines) = held.as_mut() {
         lines.push(format_record(level, message));
         return;
@@ -233,7 +240,7 @@ fn dated_stamp() -> String {
 
 fn cached_stamp(cache: &Mutex<(i64, String)>, date: bool) -> String {
     let now = epoch() as i64;
-    let mut cached = cache.lock().unwrap();
+    let mut cached = cache.lock().unwrap_or_else(|e| e.into_inner());
     if cached.0 != now {
         cached.0 = now;
         cached.1 = format_epoch(now, date);

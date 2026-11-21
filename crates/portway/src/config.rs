@@ -189,11 +189,17 @@ impl Config {
             config.port = port;
         }
         args.apply_compression(&mut config.compression);
-        if (args.tui || args.web) && !config.has_destination() {
+        if args.mode == Mode::Receive
+            && let Some(limit) = args.max_body_bytes
+        {
+            config.receiver.max_body_bytes = limit;
+        }
+        if (args.tui || (args.web && !args.daemon)) && !config.has_destination() {
             config.compression.validate()?;
             config.timeouts.validate()?;
             config.timeouts.validate_routes(std::iter::empty())?;
             config.receiver.validate()?;
+            config.validate_prices()?;
         } else {
             config.validate(args.mode)?;
         }
@@ -204,33 +210,7 @@ impl Config {
     pub fn has_destination(&self) -> bool {
         self.upstream.is_some() || !self.upstreams.is_empty() || !self.models.is_empty()
     }
-    pub fn validate(&self, mode: Mode) -> Result<(), String> {
-        self.compression.validate()?;
-        self.timeouts.validate()?;
-        self.timeouts.validate_routes(
-            self.upstream
-                .iter()
-                .map(|_| portway_core::router::SINGLE_ROUTE)
-                .chain(self.upstreams.keys().map(String::as_str))
-                .chain(self.models.keys().map(String::as_str)),
-        )?;
-        self.receiver.validate()?;
-        if self.upstream.is_some() && (!self.upstreams.is_empty() || !self.models.is_empty()) {
-            return Err(
-                "upstream is the one destination for everything: remove it to route by \
-                 [upstreams] or [models]"
-                    .into(),
-            );
-        }
-        if !self.has_destination() {
-            return Err(match mode {
-                Mode::Receive => {
-                    "receive requires an upstream, an [upstreams] table or a [models] table"
-                }
-                Mode::Forward => "configure an upstream, an [upstreams] table or a [models] table",
-            }
-            .into());
-        }
+    fn validate_prices(&self) -> Result<(), String> {
         // Every set of rates the table holds, each tier's and each
         // long-context set included.
         let rates = self
@@ -264,6 +244,35 @@ impl Config {
             }
         }
         Ok(())
+    }
+    pub fn validate(&self, mode: Mode) -> Result<(), String> {
+        self.compression.validate()?;
+        self.timeouts.validate()?;
+        self.timeouts.validate_routes(
+            self.upstream
+                .iter()
+                .map(|_| portway_core::router::SINGLE_ROUTE)
+                .chain(self.upstreams.keys().map(String::as_str))
+                .chain(self.models.keys().map(String::as_str)),
+        )?;
+        self.receiver.validate()?;
+        if self.upstream.is_some() && (!self.upstreams.is_empty() || !self.models.is_empty()) {
+            return Err(
+                "upstream is the one destination for everything: remove it to route by \
+                 [upstreams] or [models]"
+                    .into(),
+            );
+        }
+        if !self.has_destination() {
+            return Err(match mode {
+                Mode::Receive => {
+                    "receive requires an upstream, an [upstreams] table or a [models] table"
+                }
+                Mode::Forward => "configure an upstream, an [upstreams] table or a [models] table",
+            }
+            .into());
+        }
+        self.validate_prices()
     }
     pub fn router(&self, mode: Mode) -> Result<Arc<Router>, String> {
         let mut compression = self.compression.clone();
@@ -697,5 +706,45 @@ mod tests {
                 toml::from_str(&format!("upstream='http://example.test'\n{toml}")).unwrap();
             config.validate(Mode::Forward).unwrap();
         }
+    }
+
+    #[test]
+    fn watching_mode_validates_prices_and_receive_applies_max_body_bytes() {
+        let dir = std::env::temp_dir().join(format!("portway-cfg-watch-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("portway.toml");
+        std::fs::write(
+            &path,
+            "[prices.m]\ninput=-1.0\noutput=2.0\ncache_read=0.1\n",
+        )
+        .unwrap();
+        #[cfg(feature = "tui")]
+        {
+            let args = Args::parse_from(["portway", "--tui", "--config", path.to_str().unwrap()]);
+            assert!(Config::load(&args).is_err());
+        }
+        #[cfg(feature = "web")]
+        {
+            let args = Args::parse_from([
+                "portway",
+                "--web",
+                "--daemon",
+                "--config",
+                path.to_str().unwrap(),
+            ]);
+            assert!(Config::load(&args).is_err());
+        }
+        let args = Args::parse_from([
+            "portway",
+            "receive",
+            "--upstream",
+            "http://example.test",
+            "--max-body-bytes",
+            "67108864",
+        ]);
+        let config = Config::load(&args).unwrap();
+        assert_eq!(config.receiver.max_body_bytes, 67_108_864);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

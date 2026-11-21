@@ -82,17 +82,14 @@ fn main() {
 
     println!("cargo:rustc-env=PORTWAY_VERSION={version}");
     // A new commit or a new tag must re-run this, or the stamped version goes
-    // stale. A path that does not exist would re-run it on every build, so
-    // only the ones this checkout has are watched.
-    for path in [
-        "../../.git/HEAD",
-        "../../.git/refs/heads",
-        "../../.git/refs/tags",
-        "../../.git/packed-refs",
-    ] {
-        if Path::new(path).exists() {
+    // stale. Resolving via `git rev-parse --git-path` works in linked worktrees
+    // as well as normal clones. Only existing paths are watched so missing
+    // files (such as packed-refs in a fresh repo) do not re-run every build.
+    for entry in ["HEAD", "refs/heads", "refs/tags", "packed-refs"] {
+        if let Some(path) = git(&["rev-parse", "--git-path", entry])
+            && Path::new(&path).exists()
+        {
             println!("cargo:rerun-if-changed={path}");
         }
     }
-    println!("cargo:rerun-if-env-changed=PORTWAY_VERSION");
 }

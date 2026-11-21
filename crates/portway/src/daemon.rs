@@ -14,7 +14,7 @@
 use std::cell::Cell;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, ErrorKind, Read, Seek, SeekFrom, Write};
-use std::os::fd::{AsRawFd, RawFd};
+use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, RawFd};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -27,9 +27,11 @@ const READY_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long `--stop` gives the daemon to flush the recorder and go.
 const STOP_TIMEOUT: Duration = Duration::from_secs(10);
 const STOP_POLL: Duration = Duration::from_millis(100);
-/// A reason longer than a pipe buffer cannot be read in one go; the message is
-/// a diagnosis, not a document.
-const REASON_MAX: usize = 512;
+/// Enough for a startup reason or a wildcard console's full address list.
+const REASON_MAX: usize = 8192;
+const LOCK_ATTEMPTS: usize = 8;
+const PID_READ_ATTEMPTS: usize = 20;
+const PID_READ_RETRY: Duration = Duration::from_millis(10);
 
 pub struct Daemon {
     /// Held for the exclusive lock, which is the whole point of the file.
@@ -67,28 +69,7 @@ pub fn start(dir: &Path) -> Result<Daemon, String> {
     unsafe { libc::close(read_fd) };
     detach();
 
-    let mut pid_file = match crate::private_file::open(
-        &pid_path,
-        OpenOptions::new().read(true).write(true).create(true),
-    ) {
-        Ok(file) => file,
-        Err(err) => fail_bare(write_fd, &format!("{}: {err}", pid_path.display())),
-    };
-
-    // The lock lives as long as this process does; whoever else holds it is
-    // the daemon already running here.
-    if unsafe { libc::flock(pid_file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
-        let err = io::Error::last_os_error();
-        let reason = if err.raw_os_error() == Some(libc::EWOULDBLOCK) {
-            match read_pid(&mut pid_file) {
-                Some(pid) => format!("{}: already running (pid {pid})", pid_path.display()),
-                None => format!("{} is locked by another process", pid_path.display()),
-            }
-        } else {
-            format!("{}: {err}", pid_path.display())
-        };
-        fail_bare(write_fd, &reason);
-    }
+    let pid_file = claim_pid_file(&pid_path, write_fd);
 
     let daemon = Daemon {
         pid_file,
@@ -105,6 +86,44 @@ pub fn start(dir: &Path) -> Result<Daemon, String> {
     Ok(daemon)
 }
 
+fn claim_pid_file(pid_path: &Path, write_fd: RawFd) -> File {
+    for _ in 0..LOCK_ATTEMPTS {
+        let opened = match crate::private_file::open(
+            pid_path,
+            OpenOptions::new().read(true).write(true).create(true),
+        ) {
+            Ok(file) => file,
+            Err(err) => fail_bare(write_fd, &format!("{}: {err}", pid_path.display())),
+        };
+        let mut pid_file = match move_file_above_stdio(opened) {
+            Ok(file) => file,
+            Err(err) => fail_bare(write_fd, &format!("{}: {err}", pid_path.display())),
+        };
+        // The lock lives as long as this process does; whoever else holds it is
+        // the daemon already running here.
+        if let Err(err) = flock_nb(pid_file.as_raw_fd()) {
+            let reason = if err.raw_os_error() == Some(libc::EWOULDBLOCK) {
+                match read_pid_retry(&mut pid_file) {
+                    Some(pid) => format!("{}: already running (pid {pid})", pid_path.display()),
+                    None => format!("{} is locked by another process", pid_path.display()),
+                }
+            } else {
+                format!("{}: {err}", pid_path.display())
+            };
+            fail_bare(write_fd, &reason);
+        }
+        match same_inode(&pid_file, pid_path) {
+            Ok(true) => return pid_file,
+            Ok(false) => continue,
+            Err(err) => fail_bare(write_fd, &format!("{}: {err}", pid_path.display())),
+        }
+    }
+    fail_bare(
+        write_fd,
+        &format!("{}: pid file changed while locking", pid_path.display()),
+    )
+}
+
 impl Daemon {
     /// The listener is bound and the banner is logged: let the launcher go.
     pub fn ready(&self) {
@@ -114,10 +133,10 @@ impl Daemon {
     /// The same, handing the launcher the web console's token and addresses
     /// to print: the one terminal that may see the token is the one that
     /// started it. The token goes once, so the addresses a wildcard lists
-    /// still fit the one read the launcher makes.
+    /// still fit the readiness message.
     pub fn ready_with(&self, console: Option<(&str, &[String])>) {
         if let Some(fd) = self.ready.replace(None) {
-            let mut message = "k".to_string();
+            let mut message = "ok".to_string();
             if let Some((token, urls)) = console {
                 message.push('\n');
                 message.push_str(token);
@@ -130,7 +149,7 @@ impl Daemon {
                 }
             }
             let bytes = message.as_bytes();
-            unsafe { libc::write(fd, bytes.as_ptr().cast(), bytes.len().min(REASON_MAX)) };
+            write_all_fd(fd, &bytes[..bytes.len().min(REASON_MAX)]);
             unsafe { libc::close(fd) };
         }
     }
@@ -141,6 +160,7 @@ impl Daemon {
     pub fn fail(&self, message: &str) -> ! {
         let fd = self.ready.replace(None);
         eprintln!("portway: {message}");
+        self.remove_pid_file();
         std::process::exit(fail_now(fd, message));
     }
 
@@ -167,12 +187,16 @@ impl Daemon {
     /// is off because stderr is a file now, whatever `init_color` saw on the
     /// terminal the daemon was launched from.
     fn attach_log(&self) -> Result<(), String> {
-        let log = open_log(&self.log)?;
-        let null = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open("/dev/null")
-            .map_err(|err| format!("/dev/null: {err}"))?;
+        let log = move_file_above_stdio(open_log(&self.log)?)
+            .map_err(|err| format!("{}: {err}", self.log.display()))?;
+        let null = move_file_above_stdio(
+            OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open("/dev/null")
+                .map_err(|err| format!("/dev/null: {err}"))?,
+        )
+        .map_err(|err| format!("/dev/null: {err}"))?;
         if unsafe { libc::dup2(null.as_raw_fd(), libc::STDIN_FILENO) } < 0
             || unsafe { libc::dup2(null.as_raw_fd(), libc::STDOUT_FILENO) } < 0
             || unsafe { libc::dup2(log.as_raw_fd(), libc::STDERR_FILENO) } < 0
@@ -190,7 +214,7 @@ pub fn status(dir: &Path) -> Result<String, String> {
     match liveness(&path)? {
         Liveness::Running(pid, _) => Ok(format!("running (pid {pid})")),
         Liveness::Absent => Err(not_running("no pid file at", &path)),
-        Liveness::Stale => Err(not_running("stale pid file", &path)),
+        Liveness::Stale(_) => Err(not_running("stale pid file", &path)),
     }
 }
 
@@ -205,8 +229,8 @@ pub fn stop(dir: &Path) -> Result<String, String> {
     let (pid, file) = match liveness(&path)? {
         Liveness::Running(pid, file) => (pid, file),
         Liveness::Absent => return Err(not_running("no pid file at", &path)),
-        Liveness::Stale => {
-            let _ = fs::remove_file(&path);
+        Liveness::Stale(file) => {
+            crate::private_file::remove_if_same(&file, &path);
             return Err(not_running("stale pid file", &path));
         }
     };
@@ -227,11 +251,7 @@ pub fn stop(dir: &Path) -> Result<String, String> {
     // A daemon that died before it could unlink its file leaves it behind. The
     // path is removed only while it still names the file this process locked:
     // a daemon started since has a file of its own there.
-    let ours = match (file.metadata(), fs::metadata(&path)) {
-        (Ok(held), Ok(now)) => (held.dev(), held.ino()) == (now.dev(), now.ino()),
-        (_, Err(err)) if err.kind() == ErrorKind::NotFound => false,
-        (Err(err), _) | (_, Err(err)) => return Err(format!("{}: {err}", path.display())),
-    };
+    let ours = same_inode(&file, &path).map_err(|err| format!("{}: {err}", path.display()))?;
     if ours
         && let Err(err) = fs::remove_file(&path)
         && err.kind() != ErrorKind::NotFound
@@ -252,14 +272,15 @@ pub fn reload(dir: &Path) -> Result<String, String> {
             Ok(format!("reloaded (pid {pid})"))
         }
         Liveness::Absent => Err(not_running("no pid file at", &path)),
-        Liveness::Stale => Err(not_running("stale pid file", &path)),
+        Liveness::Stale(_) => Err(not_running("stale pid file", &path)),
     }
 }
 
 /// Point fd 2 at `<dir>/portway.log` again, for a rotation that moved
 /// the old file aside. The daemon calls this on SIGHUP.
 pub fn reopen_log(log: &Path) -> Result<(), String> {
-    let file = open_log(log)?;
+    let file =
+        move_file_above_stdio(open_log(log)?).map_err(|err| format!("{}: {err}", log.display()))?;
     if unsafe { libc::dup2(file.as_raw_fd(), libc::STDERR_FILENO) } < 0 {
         return Err(format!("{}: {}", log.display(), io::Error::last_os_error()));
     }
@@ -270,7 +291,9 @@ enum Liveness {
     /// The pid, and the pid file opened to find it: its lock outlives the path.
     Running(i32, File),
     Absent,
-    Stale,
+    /// Unlocked when probed; this handle now holds the lock so cleanup stays
+    /// scoped to the exact inode that was stale.
+    Stale(File),
 }
 
 /// Open the pid file and ask the kernel who holds it. `flock` belongs to the
@@ -283,11 +306,11 @@ fn liveness(pid_file: &Path) -> Result<Liveness, String> {
         Err(err) => return Err(format!("{}: {err}", pid_file.display())),
     };
     if !held(&file, pid_file)? {
-        // Nobody holds it, so no daemon is running here. Closing the file
-        // releases the probe's own lock.
-        return Ok(Liveness::Stale);
+        // Nobody holds it, so no daemon is running here. Keeping the handle
+        // lets `--stop` unlink the exact stale inode while still locked.
+        return Ok(Liveness::Stale(file));
     }
-    match read_pid(&mut file) {
+    match read_pid_retry(&mut file) {
         Some(pid) => Ok(Liveness::Running(pid, file)),
         None => Err(format!(
             "{} is locked but holds no pid; remove it if no daemon is running",
@@ -299,15 +322,23 @@ fn liveness(pid_file: &Path) -> Result<Liveness, String> {
 /// Whether another open file description holds the lock on `file`. When
 /// nobody does, the probe takes it, and keeps it until `file` is closed.
 fn held(file: &File, path: &Path) -> Result<bool, String> {
-    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
-        return Ok(false);
+    match flock_nb(file.as_raw_fd()) {
+        Ok(()) => Ok(false),
+        Err(err) if err.raw_os_error() == Some(libc::EWOULDBLOCK) => Ok(true),
+        Err(err) => Err(format!("{}: {err}", path.display())),
     }
-    let err = io::Error::last_os_error();
-    if err.raw_os_error() == Some(libc::EWOULDBLOCK) {
-        Ok(true)
-    } else {
-        Err(format!("{}: {err}", path.display()))
+}
+
+fn read_pid_retry(file: &mut File) -> Option<i32> {
+    for attempt in 0..PID_READ_ATTEMPTS {
+        if let Some(pid) = read_pid(file) {
+            return Some(pid);
+        }
+        if attempt + 1 < PID_READ_ATTEMPTS {
+            std::thread::sleep(PID_READ_RETRY);
+        }
     }
+    None
 }
 
 fn read_pid(file: &mut File) -> Option<i32> {
@@ -365,13 +396,21 @@ enum Ready {
 }
 
 fn wait_ready(fd: RawFd) -> Ready {
-    let mut pfd = libc::pollfd {
-        fd,
-        events: libc::POLLIN,
-        revents: 0,
-    };
+    let deadline = Instant::now() + READY_TIMEOUT;
+    let mut buffer = Vec::new();
+    let mut chunk = [0u8; 512];
     loop {
-        let ready = unsafe { libc::poll(&mut pfd, 1, READY_TIMEOUT.as_millis() as i32) };
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Ready::Timeout;
+        }
+        let mut pfd = libc::pollfd {
+            fd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let timeout = remaining.as_millis().clamp(1, i32::MAX as u128) as i32;
+        let ready = unsafe { libc::poll(&mut pfd, 1, timeout) };
         if ready == 0 {
             return Ready::Timeout;
         }
@@ -382,8 +421,12 @@ fn wait_ready(fd: RawFd) -> Ready {
             }
             return Ready::Unreadable(err.to_string());
         }
-        let mut buffer = [0u8; REASON_MAX];
-        let read = unsafe { libc::read(fd, buffer.as_mut_ptr().cast(), buffer.len()) };
+        let space = REASON_MAX.saturating_sub(buffer.len());
+        if space == 0 {
+            break;
+        }
+        let want = chunk.len().min(space);
+        let read = unsafe { libc::read(fd, chunk.as_mut_ptr().cast(), want) };
         if read < 0 {
             let err = io::Error::last_os_error();
             if err.kind() == ErrorKind::Interrupted {
@@ -392,20 +435,30 @@ fn wait_ready(fd: RawFd) -> Ready {
             return Ready::Unreadable(err.to_string());
         }
         if read == 0 {
-            return Ready::Silent;
+            break;
         }
-        let text = String::from_utf8_lossy(&buffer[..read as usize])
-            .trim()
-            .to_string();
-        let mut lines = text.lines().map(str::trim);
-        return match lines.next() {
-            Some("k") => {
-                let token = lines.next().unwrap_or_default().to_owned();
-                Ready::Started(lines.map(|url| format!("{url}#token={token}")).collect())
-            }
-            _ => Ready::Refused(text),
-        };
+        buffer.extend_from_slice(&chunk[..read as usize]);
     }
+    if buffer.is_empty() {
+        return Ready::Silent;
+    }
+    let text = String::from_utf8_lossy(&buffer);
+    let trimmed = text.trim();
+    if trimmed == "ok" {
+        return Ready::Started(Vec::new());
+    }
+    if let Some(rest) = trimmed.strip_prefix("ok\n") {
+        let mut lines = rest.lines().map(str::trim);
+        let token = lines.next().unwrap_or_default().to_owned();
+        return Ready::Started(
+            lines
+                .filter(|url| !url.is_empty())
+                .map(|url| format!("{url}#token={token}"))
+                .collect(),
+        );
+    }
+    let reason = trimmed.strip_prefix("err\n").unwrap_or(trimmed).trim();
+    Ready::Refused(reason.to_string())
 }
 
 /// `fork` and friends, minus the terminal: a new session, so the daemon
@@ -429,9 +482,11 @@ fn fail_bare(write_fd: RawFd, message: &str) -> ! {
 /// code.
 fn fail_now(ready: Option<RawFd>, message: &str) -> i32 {
     if let Some(fd) = ready {
-        let bytes = message.as_bytes();
+        let mut payload = String::from("err\n");
+        payload.push_str(message);
+        let bytes = payload.as_bytes();
         let len = bytes.len().min(REASON_MAX);
-        unsafe { libc::write(fd, bytes.as_ptr().cast(), len) };
+        write_all_fd(fd, &bytes[..len]);
         unsafe { libc::close(fd) };
     }
     1
@@ -442,7 +497,87 @@ fn pipe() -> Result<(RawFd, RawFd), String> {
     if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
         return Err(format!("pipe: {}", io::Error::last_os_error()));
     }
-    Ok((fds[0], fds[1]))
+    let read_fd = match move_fd_above_stdio(fds[0]) {
+        Ok(fd) => fd,
+        Err(err) => {
+            unsafe {
+                libc::close(fds[0]);
+                libc::close(fds[1]);
+            }
+            return Err(format!("pipe: {err}"));
+        }
+    };
+    let write_fd = match move_fd_above_stdio(fds[1]) {
+        Ok(fd) => fd,
+        Err(err) => {
+            unsafe {
+                libc::close(read_fd);
+                libc::close(fds[1]);
+            }
+            return Err(format!("pipe: {err}"));
+        }
+    };
+    Ok((read_fd, write_fd))
+}
+
+fn move_fd_above_stdio(fd: RawFd) -> io::Result<RawFd> {
+    if fd > libc::STDERR_FILENO {
+        return Ok(fd);
+    }
+    let moved = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 3) };
+    if moved < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    unsafe { libc::close(fd) };
+    Ok(moved)
+}
+
+fn move_file_above_stdio(file: File) -> io::Result<File> {
+    if file.as_raw_fd() > libc::STDERR_FILENO {
+        return Ok(file);
+    }
+    let fd = file.into_raw_fd();
+    match move_fd_above_stdio(fd) {
+        Ok(moved) => Ok(unsafe { File::from_raw_fd(moved) }),
+        Err(err) => {
+            unsafe { libc::close(fd) };
+            Err(err)
+        }
+    }
+}
+
+fn flock_nb(fd: RawFd) -> io::Result<()> {
+    loop {
+        if unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+            return Ok(());
+        }
+        let err = io::Error::last_os_error();
+        if err.kind() != ErrorKind::Interrupted {
+            return Err(err);
+        }
+    }
+}
+
+fn write_all_fd(fd: RawFd, mut bytes: &[u8]) {
+    while !bytes.is_empty() {
+        let written = unsafe { libc::write(fd, bytes.as_ptr().cast(), bytes.len()) };
+        if written > 0 {
+            bytes = &bytes[written as usize..];
+        } else if written < 0 && io::Error::last_os_error().kind() == ErrorKind::Interrupted {
+            continue;
+        } else {
+            break;
+        }
+    }
+}
+
+fn same_inode(file: &File, path: &Path) -> io::Result<bool> {
+    let held = file.metadata()?;
+    match fs::symlink_metadata(path) {
+        Ok(now) => Ok((held.dev(), held.ino()) == (now.dev(), now.ino())),
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(err),
+    }
 }
 
 fn open_log(log: &Path) -> Result<File, String> {
@@ -518,5 +653,32 @@ mod tests {
         fs::write(&path, "42\n").unwrap();
         assert_eq!(read_pid(&mut File::open(path).unwrap()), Some(42));
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn readiness_pipe_distinguishes_ok_from_refused_messages() {
+        let (r, w) = pipe().unwrap();
+        write_all_fd(w, b"err\nk");
+        unsafe { libc::close(w) };
+        match wait_ready(r) {
+            Ready::Refused(msg) => assert_eq!(msg, "k"),
+            _ => panic!("expected refused"),
+        }
+        unsafe { libc::close(r) };
+
+        let (r, w) = pipe().unwrap();
+        write_all_fd(w, b"ok\nabc123\nhttp://127.0.0.1:8790/\nhttp://[::1]:8790/");
+        unsafe { libc::close(w) };
+        match wait_ready(r) {
+            Ready::Started(urls) => assert_eq!(
+                urls,
+                vec![
+                    "http://127.0.0.1:8790/#token=abc123",
+                    "http://[::1]:8790/#token=abc123",
+                ]
+            ),
+            _ => panic!("expected started"),
+        }
+        unsafe { libc::close(r) };
     }
 }

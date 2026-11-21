@@ -1,7 +1,7 @@
 //! Authenticated HTTP/HTTPS reads. No redirects, ambient cookies or proxy state.
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, IsTerminal, Write};
+use std::io::{self, IsTerminal, Read, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
@@ -13,8 +13,11 @@ use http::{Request, StatusCode, Uri};
 use http_body_util::{BodyExt, Limited};
 use hyper::body::Incoming;
 use ratatui::crossterm::{
-    event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
-    terminal,
+    event::{
+        self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEventKind,
+        KeyModifiers,
+    },
+    execute, terminal,
 };
 use rustls::{
     SignatureScheme,
@@ -193,7 +196,8 @@ impl Client {
             .headers()
             .get("content-type")
             .and_then(|v| v.to_str().ok())
-            .is_some_and(|v| v.starts_with("text/event-stream"))
+            .and_then(|v| v.split(';').next())
+            .is_some_and(|v| v.trim().eq_ignore_ascii_case("text/event-stream"))
         {
             return Err(Error::Other(
                 "console did not return an event stream".into(),
@@ -281,15 +285,39 @@ impl ResolvesClientCert for Identity {
     }
 }
 
+const MAX_CACHE: u64 = 1024 * 1024;
+const MAX_PEM: u64 = 1024 * 1024;
+
 /// A PEM file holding the client certificate, any intermediates, and its
 /// unencrypted private key (PKCS#8, SEC1 or PKCS#1), as curl's `--cert` takes.
 fn load_identity(path: &Path, provider: &CryptoProvider) -> Result<CertifiedKey, Error> {
-    let pem = fs::read(path).map_err(|error| {
+    let read_err = |error: io::Error| {
         Error::Other(format!(
             "reading the client certificate {} (--client-cert / {CLIENT_CERT_ENV}): {error}",
             path.display()
         ))
-    })?;
+    };
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(path)
+        .map_err(read_err)?;
+    if !file.metadata().map_err(read_err)?.is_file() {
+        return Err(Error::Other(format!(
+            "{}: client certificate must be a regular file",
+            path.display()
+        )));
+    }
+    let mut pem = Vec::new();
+    file.take(MAX_PEM + 1)
+        .read_to_end(&mut pem)
+        .map_err(read_err)?;
+    if pem.len() as u64 > MAX_PEM {
+        return Err(Error::Other(format!(
+            "{}: client certificate exceeds 1 MiB",
+            path.display()
+        )));
+    }
     let chain = CertificateDer::pem_slice_iter(&pem)
         .collect::<Result<Vec<_>, _>>()
         .ok()
@@ -322,10 +350,11 @@ fn owned(file: &File) -> io::Result<()> {
     let metadata = file.metadata()?;
     if !metadata.is_file()
         || metadata.uid() != unsafe { libc::geteuid() }
-        || metadata.permissions().mode() & 0o077 != 0
+        || metadata.nlink() != 1
+        || metadata.permissions().mode() & 0o7777 != 0o600
     {
         return Err(io::Error::other(
-            "remote session files must be owned by this user with mode 0600",
+            "remote session files must be owned by this user with mode 0600 and no extra links",
         ));
     }
     Ok(())
@@ -341,10 +370,12 @@ fn sessions(dir: &Path) -> io::Result<BTreeMap<String, String>> {
         Err(error) => return Err(error),
     };
     owned(&file)?;
-    if file.metadata()?.len() > 1024 * 1024 {
+    let mut raw = Vec::new();
+    file.take(MAX_CACHE + 1).read_to_end(&mut raw)?;
+    if raw.len() as u64 > MAX_CACHE {
         return Err(io::Error::other("remote session file too large"));
     }
-    serde_json::from_reader(file).map_err(|_| io::Error::other("invalid remote session file"))
+    serde_json::from_slice(&raw).map_err(|_| io::Error::other("invalid remote session file"))
 }
 
 /// Lock across the read/modify/rename so two viewers cannot lose each other's sessions.
@@ -359,8 +390,14 @@ pub fn save_session(dir: &Path, url: &str, cookie: Option<&str>) -> io::Result<(
         .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
         .open(dir.join("remote-sessions.lock"))?;
     owned(&lock)?;
-    if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) } != 0 {
-        return Err(io::Error::last_os_error());
+    loop {
+        if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) } == 0 {
+            break;
+        }
+        let err = io::Error::last_os_error();
+        if err.kind() != io::ErrorKind::Interrupted {
+            return Err(err);
+        }
     }
     let mut saved = sessions(dir)?;
     match cookie {
@@ -370,6 +407,11 @@ pub fn save_session(dir: &Path, url: &str, cookie: Option<&str>) -> io::Result<(
         None => {
             saved.remove(url);
         }
+    }
+    let mut encoded = serde_json::to_vec(&saved).map_err(io::Error::other)?;
+    encoded.push(b'\n');
+    if encoded.len() as u64 > MAX_CACHE {
+        return Err(io::Error::other("remote session file too large"));
     }
     let nonce = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -382,10 +424,13 @@ pub fn save_session(dir: &Path, url: &str, cookie: Option<&str>) -> io::Result<(
         .mode(0o600)
         .open(&temp)?;
     let result = (|| {
-        serde_json::to_writer(&mut file, &saved).map_err(io::Error::other)?;
-        file.write_all(b"\n")?;
+        file.write_all(&encoded)?;
         file.sync_all()?;
-        fs::rename(&temp, dir.join(CACHE))
+        fs::rename(&temp, dir.join(CACHE))?;
+        if let Ok(parent) = File::open(dir) {
+            let _ = parent.sync_all();
+        }
+        Ok(())
     })();
     if result.is_err() {
         let _ = fs::remove_file(&temp);
@@ -402,57 +447,60 @@ async fn prompt() -> io::Result<String> {
     struct Restore;
     impl Drop for Restore {
         fn drop(&mut self) {
+            let _ = execute!(io::stderr(), DisableBracketedPaste);
             let _ = terminal::disable_raw_mode();
         }
     }
     terminal::enable_raw_mode()?;
     let guard = Restore;
+    let _ = execute!(io::stderr(), EnableBracketedPaste);
     eprint!("Console token (hidden; Esc cancels): ");
     io::stderr().flush()?;
     let mut token = String::new();
     let interrupted = super::interrupted();
     tokio::pin!(interrupted);
-    let result = loop {
+    let result = 'outer: loop {
         tokio::select! {
             _ = &mut interrupted => break Err(io::Error::new(io::ErrorKind::Interrupted, "token entry cancelled")),
             _ = tokio::time::sleep(Duration::from_millis(20)) => {},
         }
-        if !event::poll(Duration::ZERO)? {
-            continue;
-        }
-        let key = match event::read()? {
-            Event::Key(key) => key,
-            Event::Paste(text) => {
-                let text = text.trim();
-                if token.len() + text.len() <= 128 && text.bytes().all(|b| b.is_ascii_hexdigit()) {
-                    token.push_str(text);
+        while event::poll(Duration::ZERO)? {
+            let key = match event::read()? {
+                Event::Key(key) => key,
+                Event::Paste(text) => {
+                    let text = text.trim();
+                    if token.len() + text.len() <= 128
+                        && text.bytes().all(|b| b.is_ascii_hexdigit())
+                    {
+                        token.push_str(text);
+                    }
+                    continue;
                 }
+                _ => continue,
+            };
+            if key.kind == KeyEventKind::Release {
                 continue;
             }
-            _ => continue,
-        };
-        if key.kind == KeyEventKind::Release {
-            continue;
-        }
-        match key.code {
-            KeyCode::Enter if !token.is_empty() => break Ok(token),
-            KeyCode::Esc => {
-                break Err(io::Error::new(
-                    io::ErrorKind::Interrupted,
-                    "token entry cancelled",
-                ));
+            match key.code {
+                KeyCode::Enter if !token.is_empty() => break 'outer Ok(token),
+                KeyCode::Esc => {
+                    break 'outer Err(io::Error::new(
+                        io::ErrorKind::Interrupted,
+                        "token entry cancelled",
+                    ));
+                }
+                KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    break 'outer Err(io::Error::new(
+                        io::ErrorKind::Interrupted,
+                        "token entry cancelled",
+                    ));
+                }
+                KeyCode::Backspace => {
+                    token.pop();
+                }
+                KeyCode::Char(c) if c.is_ascii_hexdigit() && token.len() < 128 => token.push(c),
+                _ => {}
             }
-            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                break Err(io::Error::new(
-                    io::ErrorKind::Interrupted,
-                    "token entry cancelled",
-                ));
-            }
-            KeyCode::Backspace => {
-                token.pop();
-            }
-            KeyCode::Char(c) if c.is_ascii_hexdigit() && token.len() < 128 => token.push(c),
-            _ => {}
         }
     };
     drop(guard);

@@ -65,7 +65,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // One-shot commands: no runtime, no listener, no recorder thread.
     if args.stop || args.reload || args.status {
-        let dir = store::data_dir(args.data_dir.as_deref())?;
+        let dir = std::path::absolute(store::data_dir(args.data_dir.as_deref())?)?;
         daemon_message(if args.stop {
             daemon::stop(&dir)
         } else if args.reload {
@@ -75,7 +75,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
     if args.report {
-        let dir = store::data_dir(args.data_dir.as_deref())?;
+        let dir = std::path::absolute(store::data_dir(args.data_dir.as_deref())?)?;
         match report::render(&dir.join(store::DB_FILE), args.since, args.model.as_deref()) {
             Ok(text) => {
                 print!("{text}");
@@ -109,7 +109,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     args.config = Config::path(&args).map(std::path::absolute).transpose()?;
     let config = Config::load(&args)?;
 
-    let dir = store::data_dir(args.data_dir.as_deref())?;
+    let dir = std::path::absolute(store::data_dir(args.data_dir.as_deref())?)?;
     // Read only when a dashboard is going to use it: a forwarder that logs is
     // not a forwarder that has settings.
     #[cfg(feature = "tui")]
@@ -143,11 +143,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // readiness and exits, and neither inherits a thread it did not create.
     let daemon = args.daemon.then(|| daemon::start(&dir)).transpose()?;
     purge_in_background();
-    let store = store::spawn(&dir, args.retention_days)?;
+    let store = match store::spawn(&dir, args.retention_days) {
+        Ok(store) => store,
+        Err(err) => match &daemon {
+            Some(daemon) => daemon.fail(&err),
+            None => return Err(err.into()),
+        },
+    };
 
-    let runtime = tokio::runtime::Builder::new_multi_thread()
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
-        .build()?;
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(err) => match &daemon {
+            Some(daemon) => daemon.fail(&err.to_string()),
+            None => return Err(err.into()),
+        },
+    };
     let outcome = runtime.block_on(run(
         &args,
         &config,
@@ -156,16 +169,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         daemon.as_ref(),
         settings,
     ));
-    // The recorder is flushed before the process goes, and the pid file goes
-    // with it — the lock is released either way, but a file that only ever
-    // reads as stale helps nobody. The lock itself goes last: `daemon` was
-    // declared before the runtime, so it is dropped after the runtime has
-    // joined its threads, and that release is what `--stop` waits for.
+    // Shut down the runtime before closing the recorder so tasks finishing
+    // their final request records still land in SQLite, then drop the pid file
+    // while `daemon` still holds the flock until this function returns.
+    drop(runtime);
     store.shutdown();
     if let Some(daemon) = &daemon {
         daemon.remove_pid_file();
     }
     outcome
+}
+
+fn format_host_port(host: &str, port: u16) -> String {
+    let bare = host.trim_start_matches('[').trim_end_matches(']');
+    if bare.contains(':') {
+        format!("[{bare}]:{port}")
+    } else {
+        format!("{bare}:{port}")
+    }
+}
+
+fn startup_or_fail<T>(
+    daemon: Option<&daemon::Daemon>,
+    result: Result<T, String>,
+) -> Result<T, Box<dyn std::error::Error>> {
+    match result {
+        Ok(value) => Ok(value),
+        Err(message) => match daemon {
+            Some(daemon) => daemon.fail(&message),
+            None => Err(message.into()),
+        },
+    }
 }
 
 async fn run(
@@ -176,7 +210,7 @@ async fn run(
     daemon: Option<&daemon::Daemon>,
     _settings: Settings,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let router = config.router(args.mode)?;
+    let router = startup_or_fail(daemon, config.router(args.mode))?;
     let router_state = control::cell(&router);
     let prices_state = control::prices(&config.prices);
     let aliases_state = portway::aliases::Shared::new(config.model_aliases.clone());
@@ -186,36 +220,43 @@ async fn run(
         settings.aliases = aliases_state.clone();
         settings
     };
-    let decoder = (args.mode == Mode::Receive)
-        .then(|| portway_core::Receiver::new(config.receiver.clone()))
-        .transpose()?;
+    let decoder = startup_or_fail(
+        daemon,
+        (args.mode == Mode::Receive)
+            .then(|| portway_core::Receiver::new(config.receiver.clone()))
+            .transpose(),
+    )?;
 
     // Bound before the probes: a taken port has to fail before the dashboard
     // takes the screen, and requests that arrive during negotiation then wait
     // in the backlog instead of being refused.
-    let listener = match tokio::net::TcpListener::bind((config.host.as_str(), config.port)).await {
-        Ok(listener) => listener,
-        Err(err) => {
-            let message = format!("bind {}:{}: {err}", config.host, config.port);
-            // A daemon reports through the readiness pipe: the launching
-            // terminal prints the reason instead of "see the log".
-            match daemon {
-                Some(daemon) => daemon.fail(&message),
-                None => return Err(message.into()),
-            }
-        }
-    };
+    let listener = startup_or_fail(
+        daemon,
+        tokio::net::TcpListener::bind((config.host.as_str(), config.port))
+            .await
+            .map_err(|err| {
+                format!(
+                    "bind {}: {err}",
+                    format_host_port(&config.host, config.port)
+                )
+            }),
+    )?;
+    let local_addr = startup_or_fail(
+        daemon,
+        listener
+            .local_addr()
+            .map_err(|err| format!("local address: {err}")),
+    )?;
+    let listen_addr = format_host_port(&config.host, local_addr.port());
     let banner = format!(
-        "http://{}:{} -> {} route(s) (stats: {STATS_PATH})",
-        config.host,
-        config.port,
+        "http://{listen_addr} -> {} route(s) (stats: {STATS_PATH})",
         router.routes().len()
     );
     // Available in every CLI build, without starting the web console. A local
     // observer failure must never stop forwarding.
     let _live = match live::Server::start(
         _dir,
-        listener.local_addr()?,
+        local_addr,
         Arc::clone(router.telemetry()),
         aliases_state.clone(),
     ) {
@@ -257,7 +298,7 @@ async fn run(
                     feed: web::Feed::Live(Arc::clone(&router_state)),
                     events,
                     header: web::Header {
-                        listen: format!("http://{}:{}/v1", config.host, config.port),
+                        listen: format!("http://{listen_addr}/v1"),
                         coding: coding_label(&config.compression),
                         mode: if daemon.is_some() {
                             web::Mode::Daemon
@@ -277,13 +318,7 @@ async fn run(
                     prices: Arc::clone(&prices_state),
                     dir: _dir.to_path_buf(),
                 };
-                match web::Console::start(options).await {
-                    Ok(console) => Some(console),
-                    Err(message) => match daemon {
-                        Some(daemon) => daemon.fail(&message),
-                        None => return Err(message.into()),
-                    },
-                }
+                Some(startup_or_fail(daemon, web::Console::start(options).await)?)
             }
             None => None,
         };
@@ -297,17 +332,26 @@ async fn run(
             .map(|console| (console.token.as_str(), console.public_urls.as_slice()));
         #[cfg(not(feature = "web"))]
         let ready = None;
-        match daemon {
+        // Register signal dispositions before signaling readiness so an
+        // immediate `--stop` or `--reload` cannot catch the default handler.
+        let mut term = register_signal(tokio::signal::unix::SignalKind::terminate());
+        let mut interrupt = register_signal(tokio::signal::unix::SignalKind::interrupt());
+        let mut hangup_signal = register_signal(tokio::signal::unix::SignalKind::hangup());
+        let reload_task = match daemon {
             Some(daemon) => {
-                daemon.ready_with(ready);
                 let log = daemon.log_path().to_path_buf();
-                tokio::spawn(reload_on_hangup(
-                    args.clone(),
-                    Arc::clone(&router_state),
-                    Arc::clone(&prices_state),
-                    aliases_state.clone(),
-                    log,
-                ));
+                let task = hangup_signal.take().map(|stream| {
+                    tokio::spawn(reload_on_hangup(
+                        args.clone(),
+                        Arc::clone(&router_state),
+                        Arc::clone(&prices_state),
+                        aliases_state.clone(),
+                        log,
+                        stream,
+                    ))
+                });
+                daemon.ready_with(ready);
+                task
             }
             // The token goes to the terminal that started this, never to
             // the log: whoever reads the log has not been handed the page.
@@ -321,24 +365,31 @@ async fn run(
                         web::launch::open(&console.launch_url);
                     }
                 }
+                None
             }
             #[cfg(not(feature = "web"))]
-            None => {}
-        }
-        // A foreground console has no log to reopen: a hangup is the terminal
+            None => None,
+        };
+        // A foreground process has no log to reopen: a hangup is the terminal
         // going away, and ends the process the orderly way.
-        let hangup = ready.is_some() && daemon.is_none();
+        let hangup = daemon.is_none();
         tokio::select! {
             () = negotiated_serving(&router, listener, router_state, decoder) => {}
-            () = terminate() => {
+            () = recv_signal(&mut term) => {
+                logfmt::info("stopping");
+            }
+            () = recv_signal(&mut interrupt) => {
                 logfmt::info("stopping");
             }
             () = stop.notified() => {
                 logfmt::info("stopping");
             }
-            () = hung_up(), if hangup => {
+            () = recv_signal(&mut hangup_signal), if hangup => {
                 logfmt::info("stopping");
             }
+        }
+        if let Some(task) = reload_task {
+            task.abort();
         }
         #[cfg(feature = "web")]
         if let Some(console) = console {
@@ -358,7 +409,7 @@ async fn run(
             ..Sinks::default()
         });
         let header = Header {
-            listen: format!("http://{}:{}/v1", config.host, config.port),
+            listen: format!("http://{listen_addr}/v1"),
             coding: coding_label(&config.compression),
             watching: None,
         };
@@ -401,15 +452,14 @@ fn watching(
     let watch = watch::spawn(&dir.join(store::DB_FILE), sender)?;
     // After the backfill, which is already queued: the newest line in the pane
     // is the one that says what is being read.
+    let listen_addr = format_host_port(&config.host, config.port);
     logfmt::info(&format!(
-        "watching the forwarder on http://{}:{}: reading {}, last {}",
-        config.host,
-        config.port,
+        "watching the forwarder on http://{listen_addr}: reading {}, last {}",
         dir.join(store::DB_FILE).display(),
         logfmt::span(watch::WINDOW),
     ));
     let header = Header {
-        listen: format!("http://{}:{}/v1", config.host, config.port),
+        listen: format!("http://{listen_addr}/v1"),
         // Nothing was negotiated here; the header shows the window instead.
         coding: String::new(),
         watching: Some(watch::WINDOW),
@@ -472,10 +522,9 @@ fn web_watching(
     });
     let db = dir.join(store::DB_FILE);
     let watch = watch::spawn(&db, sender)?;
+    let listen_addr = format_host_port(&config.host, config.port);
     logfmt::info(&format!(
-        "watching the forwarder on http://{}:{}: reading {}, last {}",
-        config.host,
-        config.port,
+        "watching the forwarder on http://{listen_addr}: reading {}, last {}",
         db.display(),
         logfmt::span(watch::WINDOW),
     ));
@@ -511,7 +560,7 @@ fn web_watching(
             feed: web::Feed::Recorded(watch.window()),
             events: receiver,
             header: web::Header {
-                listen: format!("http://{}:{}/v1", config.host, config.port),
+                listen: format!("http://{listen_addr}/v1"),
                 coding: String::new(),
                 mode: web::Mode::Attached,
                 window: Some(watch::WINDOW),
@@ -570,12 +619,8 @@ async fn reload_on_hangup(
     prices: PricesCell,
     aliases: portway::aliases::Shared,
     log: PathBuf,
+    mut stream: tokio::signal::unix::Signal,
 ) {
-    use tokio::signal::unix::{SignalKind, signal};
-
-    let Ok(mut stream) = signal(SignalKind::hangup()) else {
-        return;
-    };
     while stream.recv().await.is_some() {
         match daemon::reopen_log(&log) {
             Ok(()) => logfmt::info("SIGHUP: log reopened; reloading configuration"),
@@ -591,6 +636,19 @@ async fn reload_on_hangup(
                 logfmt::error(&format!("SIGHUP: keeping existing configuration: {err}"));
             }
         }
+    }
+}
+
+fn register_signal(kind: tokio::signal::unix::SignalKind) -> Option<tokio::signal::unix::Signal> {
+    tokio::signal::unix::signal(kind).ok()
+}
+
+async fn recv_signal(stream: &mut Option<tokio::signal::unix::Signal>) {
+    match stream {
+        Some(stream) => {
+            stream.recv().await;
+        }
+        None => std::future::pending::<()>().await,
     }
 }
 
@@ -613,6 +671,7 @@ fn coding_label(args: &portway_core::ForwarderConfig) -> String {
 
 /// SIGTERM and SIGINT stop the forwarder in every mode, which is what lets the
 /// recorder flush before the process goes.
+#[cfg(any(feature = "tui", feature = "web"))]
 async fn terminate() {
     use tokio::signal::unix::{SignalKind, signal};
 
@@ -643,6 +702,7 @@ async fn terminate_tui() {
 }
 
 /// SIGHUP, for the processes that have no log to reopen on one.
+#[cfg(any(feature = "tui", feature = "web"))]
 async fn hung_up() {
     use tokio::signal::unix::{SignalKind, signal};
 
@@ -683,6 +743,14 @@ async fn serving(
             let Some(receiver) = receiver else {
                 return control::current(&router).await.handle(request).await;
             };
+            if request.method() == http::Method::GET
+                && request.uri().path() == portway::router::HEALTH_PATH
+            {
+                return portway::relay::json_response(
+                    http::StatusCode::OK,
+                    serde_json::json!({"status": "ok", "mode": "receive"}),
+                );
+            }
             if request.method() == http::Method::GET
                 && request.uri().path() == portway::router::STATS_PATH
             {

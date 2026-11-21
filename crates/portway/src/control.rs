@@ -56,8 +56,8 @@ pub async fn reload(
     next.inherit_origin_state(&*current(cell).await);
     next.negotiate_all().await;
     let routes = next.routes().len();
-    *cell.write().await = next;
     *prices.write().await = Arc::new(config.prices);
     aliases.set(config.model_aliases);
+    *cell.write().await = next;
     Ok(routes)
 }

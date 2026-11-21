@@ -1,11 +1,29 @@
 use crate::logfmt::{self, BOLD, CYAN, DIM, GREEN, YELLOW};
 use crate::telemetry::RequestRecord;
 use crate::usage::Usage;
+fn sanitize(raw: &str) -> std::borrow::Cow<'_, str> {
+    if !raw.chars().any(char::is_control) {
+        return std::borrow::Cow::Borrowed(raw);
+    }
+    std::borrow::Cow::Owned(
+        raw.chars()
+            .map(|c| if c.is_control() { ' ' } else { c })
+            .collect(),
+    )
+}
+
+fn saved_percent(raw: u64, wire: u64) -> u64 {
+    if raw == 0 {
+        return 0;
+    }
+    (u128::from(raw.saturating_sub(wire)) * 100 / u128::from(raw)) as u64
+}
+
 pub fn render(record: &RequestRecord) -> String {
     let agent_coding = record.agent_encoding.as_deref();
     let up = match record.coding.name() {
         Some(name) if record.body_len > 0 => {
-            let saved = record.body_len.saturating_sub(record.wire_len) * 100 / record.body_len;
+            let saved = saved_percent(record.body_len, record.wire_len);
             format!(
                 "{} {} -> {} {}",
                 logfmt::c(DIM, "up"),
@@ -72,7 +90,7 @@ pub fn render(record: &RequestRecord) -> String {
     let mut line = format!(
         "{} {} -> {}{sep}{}",
         logfmt::c(BOLD, record.method.as_str()),
-        record.path,
+        sanitize(&record.path),
         logfmt::status(record.status),
         segments.join(&sep)
     );
@@ -95,6 +113,8 @@ pub fn render(record: &RequestRecord) -> String {
 /// - `down 92KB -> 11KB (identity -> zstd)`: what the agent got, re-encoded;
 /// - `down 37KB <- 5KB (zstd, -86%) -> 0.6KB (zstd)`: both.
 fn down(record: &RequestRecord, agent_coding: Option<&str>, download: &str) -> String {
+    let upstream_encoding = sanitize(&record.upstream_encoding);
+    let agent_coding = agent_coding.map(sanitize);
     let coded = record.upstream_encoding != "identity";
     let mut out = format!(
         "{} {}",
@@ -102,15 +122,14 @@ fn down(record: &RequestRecord, agent_coding: Option<&str>, download: &str) -> S
         logfmt::c(CYAN, &logfmt::human(record.received))
     );
     if coded {
-        let saved =
-            record.received.saturating_sub(record.received_wire) * 100 / record.received.max(1);
+        let saved = saved_percent(record.received, record.received_wire);
         out.push_str(&format!(
             " <- {} {}",
             logfmt::c(CYAN, &logfmt::human(record.received_wire)),
-            logfmt::c(DIM, &format!("({}, -{saved}%)", record.upstream_encoding)),
+            logfmt::c(DIM, &format!("({upstream_encoding}, -{saved}%)")),
         ));
     }
-    match agent_coding {
+    match agent_coding.as_deref() {
         Some(agent) if coded => out.push_str(&format!(
             " -> {} {}",
             logfmt::c(CYAN, &logfmt::human(record.received_agent)),
@@ -119,12 +138,12 @@ fn down(record: &RequestRecord, agent_coding: Option<&str>, download: &str) -> S
         Some(agent) => out.push_str(&format!(
             " -> {} {}",
             logfmt::c(CYAN, &logfmt::human(record.received_agent)),
-            logfmt::c(DIM, &format!("({} -> {agent})", record.upstream_encoding)),
+            logfmt::c(DIM, &format!("({upstream_encoding} -> {agent})")),
         )),
         None if coded => {}
         None => out.push_str(&format!(
             " {}",
-            logfmt::c(DIM, &format!("({})", record.upstream_encoding))
+            logfmt::c(DIM, &format!("({upstream_encoding})"))
         )),
     }
     out.push_str(download);
@@ -140,7 +159,10 @@ pub fn write_tokens(usage: Usage) -> Option<String> {
         ("30m", usage.cache_write_30m),
         ("12h", usage.cache_write_12h),
     ];
-    let known: u64 = periods.iter().filter_map(|(_, n)| *n).sum();
+    let known: u64 = periods
+        .iter()
+        .filter_map(|(_, n)| *n)
+        .fold(0u64, u64::saturating_add);
     let mut parts = periods
         .into_iter()
         .filter_map(|(ttl, n)| n.map(|n| format!("{ttl}: {n}")))

@@ -112,20 +112,33 @@ fn claude_path() -> Result<PathBuf, String> {
 
 const MAX_CONFIG: u64 = 1024 * 1024;
 fn read(path: &Path) -> Result<Option<String>, String> {
-    match fs::symlink_metadata(path) {
+    let file = match OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+    {
+        Ok(file) => file,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(format!("{}: {e}", path.display())),
-        Ok(meta) if !meta.is_file() => {
+        Err(e) if e.raw_os_error() == Some(libc::ELOOP) => {
             return Err(format!(
                 "{} is not a regular file; edit it manually",
                 path.display()
             ));
         }
-        Ok(_) => (),
+        Err(e) => return Err(format!("{}: {e}", path.display())),
+    };
+    let meta = file
+        .metadata()
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    if !meta.is_file() {
+        return Err(format!(
+            "{} is not a regular file; edit it manually",
+            path.display()
+        ));
     }
     let mut text = String::new();
-    fs::File::open(path)
-        .and_then(|f| f.take(MAX_CONFIG + 1).read_to_string(&mut text))
+    file.take(MAX_CONFIG + 1)
+        .read_to_string(&mut text)
         .map_err(|e| format!("{}: {e}", path.display()))?;
     if text.len() as u64 > MAX_CONFIG {
         return Err(format!("{} exceeds 1 MiB", path.display()));
@@ -378,12 +391,18 @@ fn private_file(path: &Path, text: &str) -> Result<(), String> {
         .mode(0o600)
         .open(path)
         .map_err(|e| format!("{}: {e}", path.display()))?;
-    file.write_all(text.as_bytes())
+    if let Err(e) = file
+        .write_all(text.as_bytes())
         .and_then(|_| file.sync_all())
-        .map_err(|e| format!("{}: {e}", path.display()))
+    {
+        let _ = fs::remove_file(path);
+        return Err(format!("{}: {e}", path.display()));
+    }
+    Ok(())
 }
 fn apply(edit: &Edit) -> Result<(), String> {
-    crate::store::ensure_dir(edit.path.parent().ok_or("config path has no parent")?)?;
+    let parent = edit.path.parent().ok_or("config path has no parent")?;
+    crate::store::ensure_dir(parent)?;
     if read(&edit.path)? != edit.old {
         return Err(format!(
             "{} changed during setup; run again",
@@ -397,7 +416,11 @@ fn apply(edit: &Edit) -> Result<(), String> {
     }
     let temp = unique_sibling(&edit.path, "tmp");
     let result = private_file(&temp, &edit.new).and_then(|()| {
-        fs::rename(&temp, &edit.path).map_err(|e| format!("{}: {e}", edit.path.display()))
+        fs::rename(&temp, &edit.path).map_err(|e| format!("{}: {e}", edit.path.display()))?;
+        if let Ok(dir) = fs::File::open(parent) {
+            let _ = dir.sync_all();
+        }
+        Ok(())
     });
     if result.is_err() {
         let _ = fs::remove_file(&temp);
@@ -474,6 +497,9 @@ fn doctor(args: &DoctorArgs) -> Result<(), String> {
             Err(e) => failures.push(format!("listener health: {e}")),
         }
         match get_json(&url, "/__portway/stats").await {
+            Ok(v) if v.get("receiver").is_some() => {
+                failures.push("stats response is from a Portway receiver, not a forwarder".into());
+            }
             Ok(v) => {
                 for name in ["anthropic", "codex"] {
                     if (name == "codex" && !args.client.codex())
