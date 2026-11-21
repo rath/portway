@@ -24,7 +24,7 @@ impl Asset {
 }
 
 /// FNV-1a over the content: enough to tell two versions of a file apart.
-fn tag(content: &str) -> String {
+pub(super) fn tag(content: &str) -> String {
     let hash = content
         .bytes()
         .fold(0xcbf2_9ce4_8422_2325u64, |hash, byte| {

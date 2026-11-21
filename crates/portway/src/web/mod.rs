@@ -163,8 +163,12 @@ impl Console {
             .iter()
             .map(|authority| format!("http://{authority}{prefix}/"))
             .collect();
-        let auth = auth::Auth::load(&dir, local.port(), names, &base)
-            .map_err(|err| format!("console authentication: {err}"))?;
+        let auth = if port == 0 {
+            auth::Auth::ephemeral(local.port(), names, &base)
+        } else {
+            auth::Auth::load(&dir, local.port(), names, &base)
+        }
+        .map_err(|err| format!("console authentication: {err}"))?;
         let urls: Vec<String> = public_urls
             .iter()
             .map(|url| format!("{url}#token={}", auth.token()))
@@ -177,6 +181,8 @@ impl Console {
             ));
         }
 
+        crate::store::ensure_dir(&dir)?;
+        let file = file::WebFile::claim(&dir, &urls)?;
         let board = aggregate::spawn(feed, events, aliases.clone())
             .map_err(|err| format!("web board: {err}"))?;
         let started_unix = logfmt::epoch();
@@ -206,8 +212,6 @@ impl Console {
             base,
         });
         let server = tokio::spawn(http::serve(listener, app, closed));
-        crate::store::ensure_dir(&dir)?;
-        let file = file::WebFile::claim(&dir, &urls)?;
         Ok(Console {
             urls,
             public_urls,
@@ -224,6 +228,9 @@ impl Console {
     /// give `portway.web` back.
     pub async fn shutdown(self) {
         self.board.shared.announce(json!({"event": "stopping"}));
+        if self.board.shared.has_subscribers() {
+            tokio::time::sleep(http::STOP_GRACE).await;
+        }
         let _ = self.closing.send(true);
         let _ = self.server.await;
         let board = self.board;

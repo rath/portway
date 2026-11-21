@@ -74,13 +74,26 @@ pub struct Shared {
 }
 
 impl Shared {
-    /// Subscribe and read the backlog under one lock: every event after
-    /// `after` is then either in the backlog or on the receiver (or, for one
-    /// pushed in between, both — the stream skips sequence numbers it sent).
-    pub fn resume(&self, after: u64) -> Result<(broadcast::Receiver<Frame>, Backlog), Gap> {
+    /// Subscribe, read the backlog, and snapshot in-flight requests under one
+    /// lock so every event after `after` and every subsequent flights update
+    /// arrives in order.
+    pub fn resume(
+        &self,
+        after: u64,
+    ) -> Result<(broadcast::Receiver<Frame>, Backlog, Option<String>), Gap> {
         let inner = self.inner.lock().expect("web board");
         let receiver = self.frames.subscribe();
-        inner.ring.after(after).map(|backlog| (receiver, backlog))
+        let flights = inner
+            .router
+            .as_ref()
+            .filter(|_| !self.recorded)
+            .map(|router| {
+                api::flights(logfmt::epoch(), &router.telemetry().flights().views()).to_string()
+            });
+        inner
+            .ring
+            .after(after)
+            .map(|backlog| (receiver, backlog, flights))
     }
 
     /// Up to `limit` events before `seq`, and the oldest one still held.
@@ -95,17 +108,8 @@ impl Shared {
             .send(Frame::Control(Arc::from(control.to_string())));
     }
 
-    /// Seed every subscriber, including one connecting between two flight
-    /// changes. The periodic publisher only emits when progress changes.
-    pub fn flights(&self) -> Option<String> {
-        let inner = self.inner.lock().expect("web board");
-        inner
-            .router
-            .as_ref()
-            .filter(|_| !self.recorded)
-            .map(|router| {
-                api::flights(logfmt::epoch(), &router.telemetry().flights().views()).to_string()
-            })
+    pub fn has_subscribers(&self) -> bool {
+        self.frames.receiver_count() > 0
     }
 
     /// Everything a page needs to draw its first frame. `header` is fixed at

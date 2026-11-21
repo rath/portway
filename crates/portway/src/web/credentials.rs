@@ -1,7 +1,7 @@
 //! Console credentials outlive the process; the launch/discovery file does not.
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::Path;
@@ -47,13 +47,26 @@ fn private(file: &File) -> io::Result<()> {
     let meta = file.metadata()?;
     if !meta.is_file()
         || meta.uid() != unsafe { libc::geteuid() }
-        || meta.permissions().mode() & 0o777 != 0o600
+        || meta.nlink() != 1
+        || meta.permissions().mode() & 0o7777 != 0o600
     {
         return Err(io::Error::other(
-            "console auth files must be regular files owned by this user with mode 0600",
+            "console auth files must be unlinked regular files owned by this user with mode 0600",
         ));
     }
     Ok(())
+}
+
+fn lock_exclusive(file: &File) -> io::Result<()> {
+    loop {
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } == 0 {
+            return Ok(());
+        }
+        let err = io::Error::last_os_error();
+        if err.kind() != io::ErrorKind::Interrupted {
+            return Err(err);
+        }
+    }
 }
 
 fn invalid() -> io::Error {
@@ -73,9 +86,7 @@ pub(super) fn load(dir: &Path, port: u16, base: &str) -> io::Result<Credentials>
         .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
         .open(dir.join("web-auth.lock"))?;
     private(&lock)?;
-    if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) } != 0 {
-        return Err(io::Error::last_os_error());
-    }
+    lock_exclusive(&lock)?;
     let path = dir.join(FILE);
     let mut saved = match OpenOptions::new()
         .read(true)
@@ -84,10 +95,12 @@ pub(super) fn load(dir: &Path, port: u16, base: &str) -> io::Result<Credentials>
     {
         Ok(file) => {
             private(&file)?;
-            if file.metadata()?.len() > MAX_BYTES {
+            let mut raw = Vec::new();
+            file.take(MAX_BYTES + 1).read_to_end(&mut raw)?;
+            if raw.len() as u64 > MAX_BYTES {
                 return Err(invalid());
             }
-            let saved: Saved = serde_json::from_reader(file).map_err(|_| invalid())?;
+            let saved: Saved = serde_json::from_slice(&raw).map_err(|_| invalid())?;
             if saved.version != 1 || saved.consoles.values().any(|entry| !entry.valid()) {
                 return Err(invalid());
             }
@@ -132,7 +145,7 @@ pub(super) fn load(dir: &Path, port: u16, base: &str) -> io::Result<Credentials>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::web::auth::Auth;
+    use crate::web::auth::{Auth, Session};
     use std::os::unix::fs::symlink;
     use std::path::PathBuf;
     use std::sync::{Arc, Barrier};
@@ -161,7 +174,19 @@ mod tests {
         assert_eq!(first.set_cookie(), next.set_cookie());
         assert_ne!(first.launch_code(), next.launch_code());
         assert!(!next.launch_ok(first.launch_code()));
-        assert!(next.has_session([first.set_cookie().as_str()]));
+        assert_eq!(
+            next.session([first.set_cookie().as_str()]),
+            Some(Session::Persistent)
+        );
+        assert_eq!(
+            first.session([first.set_launch_cookie().as_str()]),
+            Some(Session::Launch)
+        );
+        assert_eq!(
+            next.session([first.set_launch_cookie().as_str()]),
+            None,
+            "a launch-code session never survives a restart"
+        );
         for path in [FILE, "web-auth.lock"] {
             assert_eq!(
                 fs::metadata(dir.0.join(path)).unwrap().permissions().mode() & 0o777,
@@ -171,7 +196,7 @@ mod tests {
         for (port, base) in [(8791, "/console"), (8790, "/other")] {
             let other = Auth::load(&dir.0, port, vec![], base).unwrap();
             assert!(!other.token_ok(first.token()));
-            assert!(!other.has_session([first.set_cookie().as_str()]));
+            assert_eq!(other.session([first.set_cookie().as_str()]), None);
         }
         let other_dir = Temp::new();
         let other = Auth::load(&other_dir.0, 8790, vec![], "/console").unwrap();
@@ -183,7 +208,7 @@ mod tests {
         fs::remove_file(dir.0.join(FILE)).unwrap();
         let reset = Auth::load(&dir.0, 8790, vec![], "/console").unwrap();
         assert!(!reset.token_ok(&token));
-        assert!(!reset.has_session([cookie.as_str()]));
+        assert_eq!(reset.session([cookie.as_str()]), None);
     }
 
     #[test]
@@ -245,5 +270,11 @@ mod tests {
         symlink(&target, dir.0.join("web-auth.lock")).unwrap();
         assert!(load(&dir.0, 8790, "/").is_err());
         assert!(!path.exists());
+        fs::remove_file(dir.0.join("web-auth.lock")).unwrap();
+        load(&dir.0, 8790, "/").unwrap();
+        let alias = dir.0.join("web-auth.hardlink");
+        fs::hard_link(&path, &alias).unwrap();
+        assert!(load(&dir.0, 8790, "/").is_err());
+        fs::remove_file(&alias).unwrap();
     }
 }

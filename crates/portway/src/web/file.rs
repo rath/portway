@@ -5,17 +5,42 @@
 //! exclusive `flock` for as long as the console runs: the lock is the
 //! liveness check, and a file left by a killed process reads as nothing.
 
-use std::fs::{File, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::os::fd::AsRawFd;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 pub const WEB_FILE: &str = "portway.web";
+const MAX_READ: u64 = 64 * 1024;
 
 pub struct WebFile {
     /// Held for the lock.
     _file: File,
     path: PathBuf,
+}
+
+fn flock_nb(file: &File, op: libc::c_int) -> io::Result<bool> {
+    loop {
+        if unsafe { libc::flock(file.as_raw_fd(), op | libc::LOCK_NB) } == 0 {
+            return Ok(true);
+        }
+        let err = io::Error::last_os_error();
+        if err.kind() == io::ErrorKind::Interrupted {
+            continue;
+        }
+        if err.raw_os_error() == Some(libc::EWOULDBLOCK) {
+            return Ok(false);
+        }
+        return Err(err);
+    }
+}
+
+fn same_inode(file: &File, path: &Path) -> bool {
+    let (Ok(held), Ok(on_disk)) = (file.metadata(), fs::symlink_metadata(path)) else {
+        return false;
+    };
+    held.dev() == on_disk.dev() && held.ino() == on_disk.ino()
 }
 
 impl WebFile {
@@ -25,21 +50,29 @@ impl WebFile {
     pub fn claim(dir: &Path, urls: &[String]) -> Result<Option<WebFile>, String> {
         let path = dir.join(WEB_FILE);
         let error = |err: io::Error| format!("{}: {err}", path.display());
-        let mut file = crate::private_file::open(
-            &path,
-            OpenOptions::new().read(true).write(true).create(true),
-        )
-        .map_err(error)?;
-        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
-            let err = io::Error::last_os_error();
-            if err.raw_os_error() == Some(libc::EWOULDBLOCK) {
+        let mut file = loop {
+            let file = crate::private_file::open(
+                &path,
+                OpenOptions::new().read(true).write(true).create(true),
+            )
+            .map_err(error)?;
+            if !flock_nb(&file, libc::LOCK_EX).map_err(error)? {
                 return Ok(None);
             }
-            return Err(error(err));
+            // If an exiting console unlinked the inode between `open` and
+            // `flock`, retry so we never write into an unlinked file.
+            if same_inode(&file, &path) {
+                break file;
+            }
+        };
+        let mut payload = format!("{}\n", std::process::id());
+        for url in urls {
+            payload.push_str(url);
+            payload.push('\n');
         }
         file.set_len(0)
             .and_then(|()| file.seek(SeekFrom::Start(0)).map(drop))
-            .and_then(|()| writeln!(file, "{}\n{}", std::process::id(), urls.join("\n")))
+            .and_then(|()| file.write_all(payload.as_bytes()))
             .and_then(|()| file.flush())
             .map_err(error)?;
         Ok(Some(WebFile { _file: file, path }))
@@ -60,20 +93,28 @@ pub fn console_urls(dir: &Path) -> Vec<String> {
             Err(_) => return Vec::new(),
         };
     // Taking the lock means nobody held it: what is in the file is stale.
-    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_SH | libc::LOCK_NB) } == 0
-        || io::Error::last_os_error().raw_os_error() != Some(libc::EWOULDBLOCK)
-    {
+    if !matches!(flock_nb(&file, libc::LOCK_SH), Ok(false)) {
         return Vec::new();
     }
     let mut text = String::new();
     if Read::by_ref(&mut file)
-        .take(8192)
+        .take(MAX_READ + 1)
         .read_to_string(&mut text)
         .is_err()
     {
         return Vec::new();
     }
-    text.lines()
+    let truncated = text.len() as u64 > MAX_READ;
+    let slice = if truncated {
+        match text.rfind('\n') {
+            Some(at) => &text[..at],
+            None => return Vec::new(),
+        }
+    } else {
+        text.as_str()
+    };
+    slice
+        .lines()
         .skip(1)
         .filter(|line| !line.is_empty())
         .map(str::to_owned)

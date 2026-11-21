@@ -28,12 +28,20 @@ use crate::spend;
 use crate::web::aggregate::{Frame, Shared};
 use crate::web::api;
 use crate::web::assets;
-use crate::web::auth::{Auth, CSRF_HEADER};
+use crate::web::auth::{Auth, CSRF_HEADER, Session};
 use crate::web::body::WebBody;
 use crate::web::{Control, ring::Gap};
 
 /// Open streams, all pages together. Each is a task and a broadcast slot.
 const MAX_STREAMS: usize = 16;
+/// Concurrent TCP connections the console serves at once, bounding FD and
+/// memory usage on the shared forwarder process.
+const MAX_CONNECTIONS: usize = 128;
+/// HTTP/1 read buffer ceiling per console connection.
+const MAX_CONN_BUF: usize = 32 * 1024;
+/// How long an SSE task waits for a stalled client to drain one frame before
+/// disconnecting it and freeing its stream slot.
+const STREAM_SEND_TIMEOUT: Duration = Duration::from_secs(10);
 /// The largest body the console reads: a token and its braces.
 const MAX_BODY: usize = 1024;
 const SESSION_TIMEOUT: Duration = Duration::from_secs(10);
@@ -41,9 +49,9 @@ const SESSION_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_PAGE: usize = 1000;
 const PING: Duration = Duration::from_secs(15);
 /// Long enough for the 202 and the `stopping` frame to reach the page.
-const STOP_GRACE: Duration = Duration::from_millis(150);
+pub(super) const STOP_GRACE: Duration = Duration::from_millis(150);
 
-const CSP: &str = "default-src 'self'; img-src 'self'; frame-ancestors 'none'; \
+const CSP: &str = "default-src 'self'; img-src 'self'; object-src 'none'; frame-ancestors 'none'; \
                    base-uri 'none'; form-action 'none'";
 
 /// The path with `base` taken off, or `None` when it is not under `base`.
@@ -85,9 +93,13 @@ pub async fn serve(listener: TcpListener, app: Arc<App>, mut closing: watch::Rec
     let mut connections = tokio::task::JoinSet::new();
     loop {
         tokio::select! {
-            accepted = listener.accept() => {
+            accepted = listener.accept(), if connections.len() < MAX_CONNECTIONS => {
                 let Ok((stream, _)) = accepted else {
-                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    tokio::select! {
+                        _ = tokio::time::sleep(Duration::from_millis(100)) => {}
+                        _ = connections.join_next(), if !connections.is_empty() => {}
+                        _ = closing.changed() => break,
+                    }
                     continue;
                 };
                 let _ = stream.set_nodelay(true);
@@ -100,6 +112,7 @@ pub async fn serve(listener: TcpListener, app: Arc<App>, mut closing: watch::Rec
                     let _ = hyper::server::conn::http1::Builder::new()
                         .timer(TokioTimer::new())
                         .header_read_timeout(Duration::from_secs(30))
+                        .max_buf_size(MAX_CONN_BUF)
                         .serve_connection(TokioIo::new(stream), service)
                         .await;
                 });
@@ -135,7 +148,7 @@ pub async fn handle(app: Arc<App>, request: Request<Incoming>) -> Response<WebBo
             _ => error(StatusCode::METHOD_NOT_ALLOWED, "method not allowed"),
         };
     }
-    let session = app.auth.has_session(
+    let session = app.auth.session(
         request
             .headers()
             .get_all(header::COOKIE)
@@ -150,7 +163,8 @@ pub async fn handle(app: Arc<App>, request: Request<Incoming>) -> Response<WebBo
             .is_ok_and(|origin| app.auth.origin_allowed(Some(origin), &host)),
         _ => false,
     };
-    if !origin_allowed || (method == Method::POST && !request.headers().contains_key(CSRF_HEADER)) {
+    let mutating = !matches!(method, Method::GET | Method::HEAD);
+    if !origin_allowed || (mutating && !request.headers().contains_key(CSRF_HEADER)) {
         return error(StatusCode::FORBIDDEN, "cross-site request refused");
     }
     let mut response = match (&method, path.as_str()) {
@@ -159,11 +173,11 @@ pub async fn handle(app: Arc<App>, request: Request<Incoming>) -> Response<WebBo
             &json!({
                 "console": "portway",
                 "version": crate::VERSION,
-                "session": session,
+                "session": session.is_some(),
             }),
         ),
         (&Method::POST, "/api/session") => open_session(&app, request).await,
-        _ if !session => error(StatusCode::UNAUTHORIZED, "session required"),
+        _ if session.is_none() => error(StatusCode::UNAUTHORIZED, "session required"),
         (&Method::GET, "/api/snapshot") => {
             let mut header = app.header.clone();
             // The one header field a reload can change: whether there is a
@@ -228,9 +242,10 @@ pub async fn handle(app: Arc<App>, request: Request<Incoming>) -> Response<WebBo
         }
         _ => error(StatusCode::NOT_FOUND, "no such route"),
     };
-    // Renew the browser's storage lifetime, never the session secret. Remote
-    // viewers can keep using their original cookie without updating a cache.
-    if session
+    // Renew the browser's storage lifetime for persistent token sessions only,
+    // never upgrading an ephemeral launch-code session and never rotating the
+    // secret so remote viewers can keep using their saved cookie.
+    if session == Some(Session::Persistent)
         && response.status().is_success()
         && let Ok(cookie) = HeaderValue::from_str(&app.auth.set_cookie())
     {
@@ -240,8 +255,9 @@ pub async fn handle(app: Arc<App>, request: Request<Incoming>) -> Response<WebBo
 }
 
 /// Trade the launch token, or the one-time launch code a browser this run
-/// opened was handed, for the session cookie. Either is checked, never stored
-/// by the page, and never needed again.
+/// opened was handed, for a session cookie. The persistent token receives the
+/// persistent `web-auth.json` session; the argv-visible launch code receives an
+/// in-memory, browser-session cookie scoped to this run only.
 async fn open_session(app: &App, request: Request<Incoming>) -> Response<WebBody> {
     let body = match tokio::time::timeout(
         SESSION_TIMEOUT,
@@ -250,21 +266,46 @@ async fn open_session(app: &App, request: Request<Incoming>) -> Response<WebBody
     .await
     {
         Ok(Ok(collected)) => collected.to_bytes(),
-        Ok(Err(_)) => return error(StatusCode::PAYLOAD_TOO_LARGE, "body too large"),
+        Ok(Err(err))
+            if err
+                .downcast_ref::<http_body_util::LengthLimitError>()
+                .is_some() =>
+        {
+            return error(StatusCode::PAYLOAD_TOO_LARGE, "body too large");
+        }
+        Ok(Err(_)) => return error(StatusCode::BAD_REQUEST, "failed to read request body"),
         Err(_) => return error(StatusCode::REQUEST_TIMEOUT, "session body read timed out"),
     };
     let token = serde_json::from_slice::<Value>(&body)
         .ok()
         .and_then(|value| value.get("token")?.as_str().map(str::to_owned));
-    match token {
-        Some(token) if app.auth.token_ok(&token) || app.auth.launch_ok(&token) => {
-            let mut response = respond(StatusCode::NO_CONTENT, None, WebBody::empty());
-            if let Ok(cookie) = HeaderValue::from_str(&app.auth.set_cookie()) {
-                response.headers_mut().insert(header::SET_COOKIE, cookie);
-            }
-            response
+    let cookie = match token {
+        Some(token) if app.auth.token_ok(&token) => app.auth.set_cookie(),
+        Some(token) if app.auth.launch_ok(&token) => app.auth.set_launch_cookie(),
+        _ => return error(StatusCode::UNAUTHORIZED, "invalid token"),
+    };
+    let mut response = respond(StatusCode::NO_CONTENT, None, WebBody::empty());
+    if let Ok(cookie) = HeaderValue::from_str(&cookie) {
+        response.headers_mut().insert(header::SET_COOKIE, cookie);
+    }
+    response
+}
+
+/// Push one SSE chunk with a bounded wait so a stalled or half-open reader
+/// cannot hold its stream slot indefinitely or block shutdown.
+async fn send_chunk(
+    sender: &mpsc::Sender<Bytes>,
+    chunk: Bytes,
+    closing: &mut watch::Receiver<bool>,
+) -> bool {
+    if *closing.borrow() {
+        return false;
+    }
+    tokio::select! {
+        sent = tokio::time::timeout(STREAM_SEND_TIMEOUT, sender.send(chunk)) => {
+            matches!(sent, Ok(Ok(())))
         }
-        _ => error(StatusCode::UNAUTHORIZED, "invalid token"),
+        _ = closing.changed() => false,
     }
 }
 
@@ -279,38 +320,48 @@ fn stream(app: &Arc<App>, after: u64) -> Response<WebBody> {
     let guard = StreamSlot(Arc::clone(app));
     let (sender, receiver) = mpsc::channel::<Bytes>(64);
     let resumed = app.shared.resume(after);
-    let flights = app.shared.flights();
     let mut closing = app.closing.clone();
     tokio::spawn(async move {
         let _slot = guard;
-        let (mut frames, backlog) = match resumed {
+        let (mut frames, backlog, flights) = match resumed {
             Ok(resumed) => resumed,
             Err(Gap) => {
-                let _ = sender.send(sse("reset", None, r#"{"reason":"gap"}"#)).await;
+                let _ = send_chunk(
+                    &sender,
+                    sse("reset", None, r#"{"reason":"gap"}"#),
+                    &mut closing,
+                )
+                .await;
                 return;
             }
         };
-        if sender
-            .send(Bytes::from_static(b"retry: 2000\n\n"))
-            .await
-            .is_err()
+        if !send_chunk(
+            &sender,
+            Bytes::from_static(b"retry: 2000\n\n"),
+            &mut closing,
+        )
+        .await
         {
             return;
         }
         let mut last = after;
         for (seq, json) in backlog {
-            if sender.send(sse("ev", Some(seq), &json)).await.is_err() {
+            if !send_chunk(&sender, sse("ev", Some(seq), &json), &mut closing).await {
                 return;
             }
             last = seq;
         }
         if let Some(flights) = flights
-            && sender.send(sse("flights", None, &flights)).await.is_err()
+            && !send_chunk(&sender, sse("flights", None, &flights), &mut closing).await
         {
             return;
         }
         let mut ping = tokio::time::interval_at(tokio::time::Instant::now() + PING, PING);
+        ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
+            if *closing.borrow() {
+                return;
+            }
             let chunk = tokio::select! {
                 frame = frames.recv() => match frame {
                     Ok(Frame::Event { seq, json }) if seq > last => {
@@ -322,7 +373,12 @@ fn stream(app: &Arc<App>, after: u64) -> Response<WebBody> {
                     Ok(Frame::Flights(json)) => sse("flights", None, &json),
                     Ok(Frame::Control(json)) => sse("control", None, &json),
                     Err(broadcast::error::RecvError::Lagged(_)) => {
-                        let _ = sender.send(sse("reset", None, r#"{"reason":"lagged"}"#)).await;
+                        let _ = send_chunk(
+                            &sender,
+                            sse("reset", None, r#"{"reason":"lagged"}"#),
+                            &mut closing,
+                        )
+                        .await;
                         return;
                     }
                     Err(broadcast::error::RecvError::Closed) => return,
@@ -331,7 +387,7 @@ fn stream(app: &Arc<App>, after: u64) -> Response<WebBody> {
                 _ = sender.closed() => return,
                 _ = closing.changed() => return,
             };
-            if sender.send(chunk).await.is_err() {
+            if !send_chunk(&sender, chunk, &mut closing).await {
                 return;
             }
         }
@@ -364,13 +420,25 @@ fn sse(event: &str, id: Option<u64>, data: &str) -> Bytes {
     if let Some(id) = id {
         frame.push_str(&format!("id: {id}\n"));
     }
-    // JSON has no raw newlines, but a frame must never be split by one.
-    for line in data.split('\n') {
-        frame.push_str("data: ");
-        frame.push_str(line);
-        frame.push('\n');
+    // JSON has no raw newlines, but a frame must never be split by CR or LF.
+    let bytes = data.as_bytes();
+    let mut start = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'\r' || bytes[i] == b'\n' {
+            frame.push_str("data: ");
+            frame.push_str(&data[start..i]);
+            frame.push('\n');
+            if bytes[i] == b'\r' && bytes.get(i + 1) == Some(&b'\n') {
+                i += 1;
+            }
+            start = i + 1;
+        }
+        i += 1;
     }
-    frame.push('\n');
+    frame.push_str("data: ");
+    frame.push_str(&data[start..]);
+    frame.push_str("\n\n");
     Bytes::from(frame)
 }
 
@@ -483,25 +551,34 @@ fn asset(path: &str, request: &Request<Incoming>, base: &str) -> Response<WebBod
     let Some(file) = assets::get(path) else {
         return error(StatusCode::NOT_FOUND, "no such file");
     };
-    let etag = file.etag();
+    let rendered = rebased(file, base);
+    let (etag, len) = match &rendered {
+        Rebased::Static => (file.etag(), file.content.len()),
+        Rebased::Text(text) => (assets::tag(text), text.len()),
+    };
     let fresh = request
         .headers()
-        .get(header::IF_NONE_MATCH)
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| value.split(',').any(|tag| tag.trim() == etag));
+        .get_all(header::IF_NONE_MATCH)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .map(str::trim)
+        .any(|tag| tag == "*" || tag.strip_prefix("W/").unwrap_or(tag) == etag);
     let mut response = if fresh {
         respond(StatusCode::NOT_MODIFIED, None, WebBody::empty())
+    } else if request.method() == Method::HEAD {
+        let mut response = respond(StatusCode::OK, Some(file.content_type), WebBody::empty());
+        if let Ok(len) = HeaderValue::from_str(&len.to_string()) {
+            response.headers_mut().insert(header::CONTENT_LENGTH, len);
+        }
+        response
     } else {
         respond(
             StatusCode::OK,
             Some(file.content_type),
-            if request.method() == Method::HEAD {
-                WebBody::empty()
-            } else {
-                match rebased(file, base) {
-                    Rebased::Static => WebBody::full(Bytes::from_static(file.content.as_bytes())),
-                    Rebased::Text(text) => WebBody::full(Bytes::from(text)),
-                }
+            match rendered {
+                Rebased::Static => WebBody::full(Bytes::from_static(file.content.as_bytes())),
+                Rebased::Text(text) => WebBody::full(Bytes::from(text)),
             },
         )
     };
@@ -532,24 +609,33 @@ fn rebased(file: &assets::Asset, base: &str) -> Rebased {
     if base == "/" || !needs_rebase(file.path) {
         return Rebased::Static;
     }
-    // Each entry is (what to look for, what to write instead). `{}` is where
-    // the base path goes. The anchors keep their own quote and slash, so the
-    // result reads `href="/portway/css/app.css"` and `` `/portway/api/events` ``.
-    //
-    // Order matters only in that a rewritten `"/api/` never contains another
-    // anchor, so the passes cannot feed each other.
-    const ANCHORS: [(&str, &str); 5] = [
-        (r#"href="/"#, r#"href="{}/"#),
-        (r#"src="/"#, r#"src="{}/"#),
-        (r#""/api/"#, r#""{}/api/"#),
-        (r#"`/api/"#, r#"`{}/api/"#),
-        (r#""/favicon"#, r#""{}/favicon"#),
+    // Single-pass scan so a `base` like `/api` or `/favicon` cannot cause
+    // rewritten output to be matched again by a later anchor.
+    let replacements: [(&str, String); 5] = [
+        (r#"href="/"#, format!(r#"href="{base}/"#)),
+        (r#"src="/"#, format!(r#"src="{base}/"#)),
+        (r#""/api/"#, format!(r#""{base}/api/"#)),
+        (r#"`/api/"#, format!(r#"`{base}/api/"#)),
+        (r#""/favicon"#, format!(r#""{base}/favicon"#)),
     ];
-    let mut text = file.content.to_owned();
-    for (anchor, shape) in ANCHORS {
-        text = text.replace(anchor, &shape.replace("{}", base));
+    let src = file.content;
+    let mut out = String::with_capacity(src.len() + 64);
+    let mut at = 0;
+    while at < src.len() {
+        let rest = &src[at..];
+        if let Some((anchor, replacement)) = replacements
+            .iter()
+            .find(|(anchor, _)| rest.starts_with(anchor))
+        {
+            out.push_str(replacement);
+            at += anchor.len();
+        } else {
+            let ch = rest.chars().next().unwrap_or_default();
+            out.push(ch);
+            at += ch.len_utf8();
+        }
     }
-    Rebased::Text(text)
+    Rebased::Text(out)
 }
 
 /// Whether a file is known to carry root-absolute references.
@@ -664,6 +750,10 @@ mod tests {
             &sse("x", None, "a\nb")[..],
             b"event: x\ndata: a\ndata: b\n\n"
         );
+        assert_eq!(
+            &sse("x", None, "a\r\nb\rc")[..],
+            b"event: x\ndata: a\ndata: b\ndata: c\n\n"
+        );
     }
 
     #[test]
@@ -724,6 +814,26 @@ mod tests {
         assert!(text.contains(r#""/portway/favicon-alert.svg""#), "{text}");
         assert!(text.contains(r#""/portway/favicon.svg""#), "{text}");
         assert!(!text.contains(r#""/favicon-"#), "{text}");
+
+        // Base paths named `/api` or `/favicon` must not feed into later anchors.
+        let Rebased::Text(api_html) = rebased(html, "/api") else {
+            panic!("index.html should be rebased");
+        };
+        assert!(
+            api_html.contains(r#"href="/api/css/app.css""#),
+            "{api_html}"
+        );
+        assert!(!api_html.contains("/api/api/"), "{api_html}");
+        assert_ne!(assets::tag(&api_html), html.etag());
+
+        let Rebased::Text(fav_html) = rebased(html, "/favicon") else {
+            panic!("index.html should be rebased");
+        };
+        assert!(
+            fav_html.contains(r#"href="/favicon/favicon.svg""#),
+            "{fav_html}"
+        );
+        assert!(!fav_html.contains("/favicon/favicon/"), "{fav_html}");
     }
 
     #[test]

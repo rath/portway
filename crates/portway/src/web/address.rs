@@ -222,16 +222,20 @@ fn interfaces() -> Vec<IpAddr> {
         }
         let family = libc::c_int::from(unsafe { (*ifa.ifa_addr).sa_family });
         if family == libc::AF_INET {
-            let addr = unsafe { &*ifa.ifa_addr.cast::<libc::sockaddr_in>() };
+            let addr =
+                unsafe { std::ptr::read_unaligned(ifa.ifa_addr.cast::<libc::sockaddr_in>()) };
             found.push(IpAddr::V4(Ipv4Addr::from(u32::from_be(
                 addr.sin_addr.s_addr,
             ))));
         } else if family == libc::AF_INET6 {
-            let addr = unsafe { &*ifa.ifa_addr.cast::<libc::sockaddr_in6>() };
+            let addr =
+                unsafe { std::ptr::read_unaligned(ifa.ifa_addr.cast::<libc::sockaddr_in6>()) };
             found.push(IpAddr::V6(Ipv6Addr::from(addr.sin6_addr.s6_addr)));
         }
     }
-    unsafe { libc::freeifaddrs(head) };
+    if !head.is_null() {
+        unsafe { libc::freeifaddrs(head) };
+    }
     found
 }
 
