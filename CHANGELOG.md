@@ -7,10 +7,42 @@ version may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-11-22
+
+### Added
+
+- Recognize Gemini and Vertex model names in request paths and record Gemini
+  usage metadata, including cached input, tool-use input, and thought tokens.
+- Isolate dictionary and origin-compression state by `x-goog-api-key` so
+  callers using different Gemini credentials do not share those contexts.
+- Serve the receiver's health endpoint at `/__portway/health`.
+
+### Changed
+
+- Bound DNS and TLS connection setup, stagger IPv4/IPv6 connection attempts,
+  and prefer recently used upstream connections while pruning dead entries.
+- Update rusqlite to 0.42.0, zstd to 0.14.4, and webpki-roots to 1.0.12.
+- Refresh documented Claude Fable 5.2 and GPT-6.2 Astra/Sol prices, and label
+  Codex auto-review rates as estimates.
+
 ### Fixed
 
+- Reject malformed request targets and path traversal before joining upstream
+  URLs; preserve retry byte counts, HTTP encoding negotiation, and upload timing.
+- Close cancelled upload timing watchers, bound receiver and console
+  concurrency, and enforce compression window and body limits.
 - Hold receiver decompression slots until blocking workers finish, including
   after the request is cancelled.
+- Drain SQLite writes on shutdown, serialize schema migrations, and prevent
+  usage totals from overflowing or counting cache-write input twice.
+- Harden daemon readiness, signal handling, runtime-file checks, remote
+  sessions, and configuration validation; apply receiver body limits correctly.
+- Use temporary console sessions for launch codes, expire stalled event-stream
+  writers, and correct base-path asset rewriting and HTTP cache validation.
+- Preserve console sign-in tokens across transient failures and correct
+  filtering, charts, exports, history selection, and keyboard accessibility.
+- Restore terminals reliably, keep large usage tables responsive, and correct
+  TUI scrolling, Unicode widths, sparkline rendering, and input handling.
 - Let slow TUI usage queries finish before scheduling periodic refreshes.
 - Resume web usage polling after signing in again on the same tab.
 
@@ -476,7 +508,8 @@ The first public release.
   FAQ; the request compression protocol; a security policy; and contribution
   guidelines.
 
-[Unreleased]: https://github.com/rath/portway/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/rath/portway/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/rath/portway/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/rath/portway/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/rath/portway/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/rath/portway/compare/v0.2.7...v0.3.0
