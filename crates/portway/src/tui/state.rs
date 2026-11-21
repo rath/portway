@@ -393,11 +393,20 @@ impl State {
 
     pub(crate) fn poll_usage(&mut self) -> bool {
         let mut changed = false;
-        let replies: Vec<_> = match &self.usage_worker {
-            Some(worker) => worker.reply.try_iter().collect(),
-            None => return false,
-        };
-        for (id, range, result) in replies {
+        while let Some(worker) = &self.usage_worker {
+            let (id, range, result) = match worker.reply.try_recv() {
+                Ok(reply) => reply,
+                Err(std::sync::mpsc::TryRecvError::Disconnected)
+                    if self.usage_open && self.usage_loading =>
+                {
+                    (
+                        self.usage_request_id,
+                        self.usage_range,
+                        Err("usage worker stopped".to_string()),
+                    )
+                }
+                Err(_) => break,
+            };
             if !self.usage_open || range != self.usage_range || id != self.usage_request_id {
                 continue;
             }
@@ -734,6 +743,7 @@ impl State {
             return;
         }
         if !self.usage_open
+            || self.usage_loading
             || self
                 .usage_read
                 .is_some_and(|at| at.elapsed() < USAGE_REFRESH)
@@ -764,8 +774,10 @@ impl State {
             return;
         }
         if let Some(worker) = &self.usage_worker {
+            // Periodic refreshes must not supersede a query still in progress,
+            // even when an older table remains visible during the refresh.
+            self.usage_loading = true;
             if self.usage.is_none() {
-                self.usage_loading = true;
                 self.usage_error = Some("loading usage…".into());
             }
             self.usage_read = Some(Instant::now());
@@ -990,6 +1002,99 @@ impl Default for State {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct UsageHarness {
+        requests: std::sync::mpsc::Receiver<(u64, spend::Range)>,
+        replies: std::sync::mpsc::Sender<(u64, spend::Range, Result<spend::Table, String>)>,
+    }
+
+    impl UsageHarness {
+        fn new(state: &mut State) -> Self {
+            let (request, requests) = std::sync::mpsc::channel();
+            let (replies, reply) = std::sync::mpsc::channel();
+            state.set_usage_worker(UsageWorker { request, reply });
+            Self { requests, replies }
+        }
+
+        fn finish(&self, (id, range): (u64, spend::Range), requests: u64) {
+            let mut table = spend::Table::default();
+            table.total.requests = requests;
+            self.replies.send((id, range, Ok(table))).unwrap();
+        }
+    }
+
+    #[test]
+    fn slow_usage_reads_finish_before_periodic_refreshes_replace_them() {
+        let mut state = State::new();
+        let worker = UsageHarness::new(&mut state);
+        state.open_usage();
+        // Cover both the initial load and a refresh with an older table visible.
+        for count in [1, 2] {
+            let request = worker.requests.try_recv().unwrap();
+            assert!(state.usage_loading);
+            for _ in 0..3 {
+                state.usage_read = Some(Instant::now() - USAGE_REFRESH);
+                state.refresh_usage();
+                assert_eq!(state.usage_request_id, request.0);
+                assert!(worker.requests.try_recv().is_err());
+            }
+            worker.finish(request, count);
+            assert!(state.poll_usage());
+            assert!(!state.usage_loading);
+            assert_eq!(state.usage.as_ref().unwrap().total.requests, count);
+            state.refresh_usage();
+            assert!(
+                worker.requests.try_recv().is_err(),
+                "refresh waits after completion"
+            );
+            state.usage_read = Some(Instant::now() - USAGE_REFRESH);
+            state.refresh_usage();
+        }
+    }
+
+    #[test]
+    fn usage_range_changes_and_reopening_still_replace_pending_reads() {
+        let mut state = State::new();
+        let worker = UsageHarness::new(&mut state);
+        state.open_usage();
+        let first = worker.requests.try_recv().unwrap();
+        state.step_usage_range(1);
+        let next = worker.requests.try_recv().unwrap();
+        assert_ne!(first, next);
+        worker.finish(first, 1);
+        assert!(!state.poll_usage());
+        assert!(state.usage_loading);
+        assert!(state.usage.is_none());
+        worker.finish(next, 2);
+        assert!(state.poll_usage());
+        assert_eq!(state.usage.as_ref().unwrap().total.requests, 2);
+
+        state.usage_read = Some(Instant::now() - USAGE_REFRESH);
+        state.refresh_usage();
+        let before_close = worker.requests.try_recv().unwrap();
+        state.close_usage();
+        state.open_usage();
+        let reopened = worker.requests.try_recv().unwrap();
+        assert_ne!(before_close.0, reopened.0);
+        worker.finish(before_close, 3);
+        assert!(!state.poll_usage());
+        assert!(state.usage_loading);
+        worker.finish(reopened, 4);
+        assert!(state.poll_usage());
+        assert_eq!(state.usage.as_ref().unwrap().total.requests, 4);
+    }
+
+    #[test]
+    fn a_stopped_usage_worker_leaves_loading_and_reports_the_failure() {
+        let mut state = State::new();
+        let worker = UsageHarness::new(&mut state);
+        state.open_usage();
+        drop(worker);
+        assert!(state.poll_usage());
+        assert!(!state.usage_loading);
+        assert_eq!(state.usage_error.as_deref(), Some("usage worker stopped"));
+        assert!(!state.poll_usage());
+    }
 
     /// The set is what the flag, the file and the picker all speak: a name
     /// round-trips, and a typo is an error rather than a field going missing.

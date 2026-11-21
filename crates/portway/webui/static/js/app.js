@@ -19,6 +19,7 @@ import { EventList, renderCharts, renderFlights, renderHeader, renderHud, render
 import { openColumns, openHelp, openPalette, openStop, renderDetail } from "./views/dialogs.js";
 import { HistoryView } from "./views/history.js";
 import { InsightsView } from "./views/insights.js";
+import { ViewLifecycle } from "./views/lifecycle.js";
 import { UsageView } from "./views/usage.js";
 
 /** A stream that has sent nothing for this long is called stalled. */
@@ -202,6 +203,7 @@ const views = {
   insights: new InsightsView(ctx),
   appearance: new AppearanceView(ctx),
 };
+const activeView = new ViewLifecycle();
 
 // ------------------------------------------------------------------- toasts
 
@@ -231,7 +233,7 @@ function expired() {
   setConn("expired");
   source?.close();
   connection.stop();
-  views[state.view]?.hide();
+  activeView.hide();
   banner("");
   setGate(true, "Sign in with the console link ending in #token=… (available from portway --status on the server). " +
     "This browser will stay signed in across restarts. If access was reset, use the new link.");
@@ -485,7 +487,7 @@ async function stopForwarder() {
     state.stopped = true;
     connection.stop();
     source?.close();
-    views[state.view]?.hide();
+    activeView.hide();
     setConn("stopped");
   }
   try {
@@ -497,7 +499,7 @@ async function stopForwarder() {
     if (err.status === 401) expired();
     else if (stopsConsole) {
       state.stopped = false;
-      views[state.view]?.show();
+      activeView.show(views[state.view]);
       resync();
     }
   }
@@ -540,7 +542,6 @@ function exportEvents(kind) {
 // ------------------------------------------------------------------ routing
 
 const VIEWS = ["dashboard", "usage", "history", "insights", "appearance"];
-let routed = false;
 
 function go(view) {
   const hash = view === "dashboard" ? "#/" : `#/${view}`;
@@ -551,16 +552,13 @@ function go(view) {
 function route() {
   const name = location.hash.replace(/^#\/?/, "") || "dashboard";
   const view = VIEWS.includes(name) ? name : "dashboard";
-  const changed = !routed || state.view !== view;
-  if (routed && state.view !== view) views[state.view]?.hide();
   state.view = view;
-  routed = true;
   for (const other of VIEWS) $(`#view-${other}`).hidden = other !== view;
   for (const link of document.querySelectorAll(".tabs a")) {
     if (link.dataset.view === view) link.setAttribute("aria-current", "page");
     else link.removeAttribute("aria-current");
   }
-  if (changed) views[view]?.show();
+  activeView.show(views[view]);
   renderAll();
 }
 

@@ -71,6 +71,7 @@ assets! {
     "js/views/dialogs.js" => "text/javascript; charset=utf-8",
     "js/views/history.js" => "text/javascript; charset=utf-8",
     "js/views/insights.js" => "text/javascript; charset=utf-8",
+    "js/views/lifecycle.js" => "text/javascript; charset=utf-8",
     "js/views/usage.js" => "text/javascript; charset=utf-8",
 }
 

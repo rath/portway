@@ -171,7 +171,7 @@ pub struct Receiver {
     config: ReceiverConfig,
     store: Mutex<Store>,
     counters: Counters,
-    inflate_slots: tokio::sync::Semaphore,
+    inflate_slots: Arc<tokio::sync::Semaphore>,
 }
 /// The uncompressed request and an acknowledgement to attach to its response.
 /// `finish` never changes the application's status or body.
@@ -211,7 +211,7 @@ impl Receiver {
             config,
             store: Mutex::default(),
             counters: Counters::default(),
-            inflate_slots: tokio::sync::Semaphore::new(slots),
+            inflate_slots: Arc::new(tokio::sync::Semaphore::new(slots)),
         }))
     }
     pub fn capabilities(&self) -> Response<OutBody> {
@@ -293,14 +293,18 @@ impl Receiver {
         let encoded = coding != "identity";
         let receiver = Arc::clone(self);
         let (body, acknowledgement) = if encoded {
-            let _permit = self
-                .inflate_slots
-                .acquire()
+            let permit = Arc::clone(&self.inflate_slots)
+                .acquire_owned()
                 .await
                 .map_err(|_| reject(500, "decompression limiter closed"))?;
-            tokio::task::spawn_blocking(move || receiver.inflate(&coding, raw, scope, keep))
-                .await
-                .map_err(|_| reject(500, "decompression worker failed"))??
+            tokio::task::spawn_blocking(move || {
+                // Cancelling the caller cannot stop a running blocking task.
+                // Keep its slot until inflation itself finishes.
+                let _permit = permit;
+                receiver.inflate(&coding, raw, scope, keep)
+            })
+            .await
+            .map_err(|_| reject(500, "decompression worker failed"))??
         } else {
             (raw, None)
         };
@@ -545,6 +549,53 @@ pub(crate) fn decode_probe(raw: &[u8], encoding: &str) -> Result<Bytes, DecodeEr
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn cancelled_decodes_hold_their_slots_until_workers_finish() {
+        use std::future::Future;
+        use std::task::{Context, Waker};
+
+        let receiver = Receiver::new(ReceiverConfig::default()).unwrap();
+        let slots = receiver.inflate_slots.available_permits();
+        let request = || {
+            let mut raw = dict::DCZ_MAGIC.to_vec();
+            raw.extend_from_slice(&[0; 32]);
+            Request::builder()
+                .header("content-encoding", "dcz")
+                .body(http_body_util::Full::new(Bytes::from(raw)))
+                .unwrap()
+        };
+        let mut waiting = Box::pin(receiver.decode(request()));
+        {
+            // Pause real workers at the dictionary lookup without timing sleeps.
+            let _store = receiver.store.lock().unwrap();
+            let mut cx = Context::from_waker(Waker::noop());
+            for remaining in (0..slots).rev() {
+                let mut decode = Box::pin(receiver.decode(request()));
+                assert!(decode.as_mut().poll(&mut cx).is_pending());
+                drop(decode);
+                assert_eq!(receiver.inflate_slots.available_permits(), remaining);
+            }
+            assert!(waiting.as_mut().poll(&mut cx).is_pending());
+        }
+
+        let error = tokio::time::timeout(Duration::from_secs(5), waiting)
+            .await
+            .expect("a waiting decode resumes after a worker finishes")
+            .err()
+            .expect("the test dictionary is missing");
+        assert_eq!(error.status(), StatusCode::PRECONDITION_FAILED);
+        let all_slots = tokio::time::timeout(
+            Duration::from_secs(5),
+            receiver.inflate_slots.acquire_many(slots as u32),
+        )
+        .await
+        .expect("all cancelled workers finish")
+        .unwrap();
+        drop(all_slots);
+        assert_eq!(receiver.inflate_slots.available_permits(), slots);
+    }
+
     #[test]
     fn dictionary_expiration_and_recent_use_follow_lru_order() {
         let config = ReceiverConfig {

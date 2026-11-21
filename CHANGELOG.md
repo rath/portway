@@ -7,6 +7,13 @@ version may contain breaking changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- Hold receiver decompression slots until blocking workers finish, including
+  after the request is cancelled.
+- Let slow TUI usage queries finish before scheduling periodic refreshes.
+- Resume web usage polling after signing in again on the same tab.
+
 ## [0.4.1] - 2026-11-10
 
 ### Changed
