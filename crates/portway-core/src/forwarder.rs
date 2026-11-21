@@ -3,7 +3,7 @@
 
 use crate::origin::{OriginCompressionMode, OriginState, UploadMeter};
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
@@ -51,11 +51,19 @@ const HOP_BY_HOP: &[&str] = &[
 fn drop_from_request(name: &str) -> bool {
     // content-encoding is deliberately NOT dropped: a body the agent already
     // encoded keeps its own coding on the way upstream.
-    // x-dict-store: asking the upstream to keep a body is this process's call.
+    // x-dict-store and internal protocol markers are this process's call.
+    // expect: the inbound listener already answered 100-continue while buffering.
     HOP_BY_HOP.contains(&name)
         || matches!(
             name,
-            "host" | "content-length" | "accept-encoding" | dict::STORE_HEADER
+            "host"
+                | "content-length"
+                | "accept-encoding"
+                | "expect"
+                | dict::STORE_HEADER
+                | dict::STORED_HEADER
+                | dict::MISS_HEADER
+                | crate::receiver::ERROR_HEADER
         )
 }
 
@@ -63,7 +71,11 @@ fn drop_from_response(name: &str) -> bool {
     HOP_BY_HOP.contains(&name)
         || matches!(
             name,
-            "content-length" | "content-encoding" | dict::STORED_HEADER | dict::MISS_HEADER
+            "content-length"
+                | "content-encoding"
+                | dict::STORED_HEADER
+                | dict::MISS_HEADER
+                | crate::receiver::ERROR_HEADER
         )
 }
 
@@ -309,6 +321,8 @@ pub struct Forwarder {
     stale: AtomicBool,
     /// One re-probe at a time, however many requests find it due.
     probing: AtomicBool,
+    /// Serializes writes across coding/dict/backoff/ring state transitions.
+    negotiation: Mutex<()>,
     /// When a 415-refused coding, and dictionaries, may be trusted again.
     encoding_refused_until: AtomicU64,
     dict_refused_until: AtomicU64,
@@ -365,9 +379,10 @@ impl Forwarder {
             min_bytes: args.min_bytes,
             stats: Arc::default(),
             born: Instant::now(),
-            probed_at: AtomicU64::new(0),
+            probed_at: AtomicU64::new(u64::MAX),
             stale: AtomicBool::new(false),
             probing: AtomicBool::new(false),
+            negotiation: Mutex::new(()),
             encoding_refused_until: AtomicU64::new(0),
             dict_refused_until: AtomicU64::new(0),
             identity_reason: AtomicU8::new(if args.coding == CodingPreference::Off {
@@ -408,6 +423,7 @@ impl Forwarder {
         if self.origin_auto || self.want == CodingPreference::Off {
             return;
         }
+        self.stale.store(false, Ordering::Relaxed);
         let probed = self.probe_health().await;
         self.note_probe(probed.is_ok());
         let advertised = match probed {
@@ -432,13 +448,12 @@ impl Forwarder {
 
     /// Whether the negotiation should be re-read before the next request.
     fn reprobe_due(&self) -> bool {
+        let probed = self.probed_at.load(Ordering::Relaxed);
         !self.origin_auto
             && self.want != CodingPreference::Off
             && (self.stale.load(Ordering::Relaxed)
-                || self
-                    .now()
-                    .saturating_sub(self.probed_at.load(Ordering::Relaxed))
-                    >= REPROBE_AFTER.as_millis() as u64)
+                || probed == u64::MAX
+                || self.now().saturating_sub(probed) >= REPROBE_AFTER.as_millis() as u64)
     }
 
     /// Re-read /health in the background when it is due. Nothing waits for it:
@@ -451,6 +466,13 @@ impl Forwarder {
         }
         let this = Arc::clone(self);
         tokio::spawn(async move {
+            struct ProbeGuard<'a>(&'a AtomicBool);
+            impl Drop for ProbeGuard<'_> {
+                fn drop(&mut self) {
+                    self.0.store(false, Ordering::Release);
+                }
+            }
+            let _guard = ProbeGuard(&this.probing);
             // Cleared first, so an error that lands mid-probe is not swallowed.
             this.stale.store(false, Ordering::Relaxed);
             let probed = this.probe_health().await;
@@ -461,7 +483,6 @@ impl Forwarder {
             if let Ok(advertised) = probed {
                 this.apply(&advertised, false);
             }
-            this.probing.store(false, Ordering::Release);
         });
     }
 
@@ -475,6 +496,7 @@ impl Forwarder {
     /// whether anything moved. Announced on the first answer and on every
     /// change after it, so a steady upstream is silent.
     fn apply(&self, advertised: &Advertised, first: bool) -> bool {
+        let _lock = self.negotiation.lock().expect("negotiation lock");
         let accepted = &advertised.encodings;
         let order: &[&str] = match self.want {
             CodingPreference::Auto => &["zstd", "gzip"],
@@ -523,6 +545,7 @@ impl Forwarder {
             self.ring.clear();
         }
         let changed = before != (coding, dict);
+        drop(_lock);
         if !first && !changed {
             return false;
         }
@@ -642,13 +665,13 @@ impl Forwarder {
 
     fn encode(&self, body: &Bytes, coding: Coding) -> std::io::Result<Bytes> {
         match coding {
-            Coding::Zstd => compress_zstd(body, self.level).map(Bytes::from),
+            Coding::Zstd => compress_zstd(body, self.level).map(exact),
             Coding::Gzip => {
                 use std::io::Write;
                 let level = flate2::Compression::new(self.level.min(9) as u32);
                 let mut encoder = flate2::write::GzEncoder::new(Vec::new(), level);
                 encoder.write_all(body)?;
-                encoder.finish().map(Bytes::from)
+                encoder.finish().map(exact)
             }
             // Needs a base: `encode_turn` builds these.
             Coding::None | Coding::Dcz => Ok(body.clone()),
@@ -666,7 +689,7 @@ impl Forwarder {
         scope: &dict::DictionaryScope,
     ) -> std::io::Result<Encoded> {
         if coding == Coding::Zstd && dict {
-            let hash = Some(dict::sha256(body));
+            let hash = (body.len() <= dict::MAX_BASE_BYTES).then(|| dict::sha256(body));
             if let Some(base) = self.ring.pick_scoped(body, scope) {
                 return Ok(Encoded {
                     wire: dict::compress(body, &base, self.level)?.into(),
@@ -693,6 +716,11 @@ impl Forwarder {
     /// Stop using dictionaries toward this upstream. A later /health may turn them
     /// back on, but not before the refusal backoff is over.
     fn dict_off(&self, reason: CompressionIssue) {
+        let _lock = self.negotiation.lock().expect("negotiation lock");
+        self.dict_off_locked(reason);
+    }
+
+    fn dict_off_locked(&self, reason: CompressionIssue) {
         self.dict_backoff_reason
             .store(reason as u8, Ordering::Relaxed);
         self.dict.store(false, Ordering::Relaxed);
@@ -702,6 +730,18 @@ impl Forwarder {
             Ordering::Relaxed,
         );
         self.mark_stale();
+    }
+
+    fn refuse_encoding(&self) {
+        let _lock = self.negotiation.lock().expect("negotiation lock");
+        self.coding.store(Coding::None as u8, Ordering::Relaxed);
+        self.identity_reason
+            .store(CompressionIssue::EncodingRefused as u8, Ordering::Relaxed);
+        self.encoding_refused_until.store(
+            self.now() + REFUSAL_BACKOFF.as_millis() as u64,
+            Ordering::Relaxed,
+        );
+        self.dict_off_locked(CompressionIssue::EncodingRefused);
     }
 
     fn upstream_headers(&self, client: &HeaderMap) -> HeaderMap {
@@ -731,10 +771,55 @@ impl Forwarder {
         headers
     }
 
-    async fn send(
+    fn resolve_upstream_uri(
         &self,
         method: &Method,
         path_and_query: &str,
+    ) -> Result<http::Uri, (StatusCode, &'static str)> {
+        if path_and_query == "*" {
+            if method == Method::OPTIONS && self.upstream.base_path.is_empty() {
+                return Ok(http::Uri::from_static("*"));
+            }
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "asterisk-form request target is only valid for OPTIONS on a root upstream",
+            ));
+        }
+        if !path_and_query.starts_with('/') {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "request target must be an origin-form path",
+            ));
+        }
+        if crate::router::has_dot_segment(path_and_query) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "request path must not contain dot segments",
+            ));
+        }
+        let joined = format!("{}{path_and_query}", self.upstream.base_path);
+        if joined.len() >= u16::MAX as usize {
+            return Err((
+                StatusCode::URI_TOO_LONG,
+                "request URI exceeds upstream limit",
+            ));
+        }
+        let uri: http::Uri = joined
+            .parse()
+            .map_err(|_| (StatusCode::BAD_REQUEST, "invalid request URI"))?;
+        if uri.scheme().is_some() || uri.authority().is_some() {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "request target must be an origin-form path",
+            ));
+        }
+        Ok(uri)
+    }
+
+    async fn send(
+        &self,
+        method: &Method,
+        uri: &http::Uri,
         headers: &HeaderMap,
         wire: Bytes,
         meter: Option<Arc<UploadMeter>>,
@@ -742,11 +827,11 @@ impl Forwarder {
     ) -> Result<(Response<Incoming>, Lease, Arc<PhaseClock>), UpstreamError> {
         let clock = Arc::new(PhaseClock::new());
         attempt.0.flight().attempt(&clock, wire.len(), attempt.1);
-        let mut builder = Request::builder()
-            .method(method)
-            .uri(format!("{}{path_and_query}", self.upstream.base_path));
+        let mut builder = Request::builder().method(method).uri(uri.clone());
         {
-            let slot = builder.headers_mut().expect("builder has headers");
+            let Some(slot) = builder.headers_mut() else {
+                return Err(UpstreamError::Resolve("invalid request builder".into()));
+            };
             *slot = headers.clone();
             if !wire.is_empty() {
                 // An explicit Content-Length keeps the wire byte-identical to a
@@ -842,6 +927,12 @@ impl Forwarder {
                 serde_json::json!({"error":"request body exceeds configured limit"}),
             );
         }
+        let upstream_uri = match self.resolve_upstream_uri(&method, &path_and_query) {
+            Ok(uri) => uri,
+            Err((status, message)) => {
+                return json_response(status, serde_json::json!({"error": message}));
+            }
+        };
         let t0 = Instant::now();
         self.reprobe_if_due();
         let mut headers = self.upstream_headers(&client_headers);
@@ -934,11 +1025,12 @@ impl Forwarder {
 
         // One budget spans dialing, upload, headers and every permitted
         // fallback. A retry must not buy another full timeout window.
+        let mut prior_uploaded = 0u64;
         let send = async {
             let mut sent = self
                 .send(
                     &method,
-                    &path_and_query,
+                    &upstream_uri,
                     &headers,
                     wire.clone(),
                     meter.clone(),
@@ -974,7 +1066,7 @@ impl Forwarder {
                     sent = self
                         .send(
                             &method,
-                            &path_and_query,
+                            &upstream_uri,
                             &headers,
                             wire.clone(),
                             meter.clone(),
@@ -985,21 +1077,14 @@ impl Forwarder {
             }
             // A trial ends at response headers; it must not remain reserved for a long SSE stream.
             drop(origin_attempt);
-            if let Ok((response, _, _)) = &mut sent
+            if let Ok((response, _, _)) = &sent
                 && coding == Coding::Dcz
                 && let Some(reason) = dict_refusal(response)
             {
-                // Either way the turn still goes out compressed: plain zstd.
-                // The refusal body on this connection is still unread, so the
-                // connection must NOT go back to the pool: hyper will not write
-                // the next request until the previous response body is consumed,
-                // and the old response is only dropped when `sent` is reassigned
-                // below — which never happens while the resend itself waits on
-                // that connection (deadlock, seen live after every upstream recreate:
-                // the agent hung at 'Working...' with in_flight 1 and no error).
-                // Leave the lease alone instead: it drops with the old `sent`
-                // tuple, the connection that owes bytes is closed, and the
-                // resend dials a fresh one.
+                // Close the unread refusal connection immediately rather than
+                // holding it open while re-encoding and dialing the retry.
+                prior_uploaded = prior_uploaded.saturating_add(wire.len() as u64);
+                drop(sent);
                 match reason {
                     DictRefusal::Miss | DictRefusal::Rejected => {
                         // Miss: upstream restart or eviction, costs this one round trip.
@@ -1011,7 +1096,7 @@ impl Forwarder {
                         }
                         self.stats.dict_misses.fetch_add(1, Ordering::Relaxed);
                         if let Some(gone) = &base {
-                            self.ring.forget(gone);
+                            self.ring.forget_scoped(gone, &scope);
                         }
                     }
                     DictRefusal::Unsupported => {
@@ -1046,7 +1131,7 @@ impl Forwarder {
                 sent = self
                     .send(
                         &method,
-                        &path_and_query,
+                        &upstream_uri,
                         &headers,
                         wire.clone(),
                         meter.clone(),
@@ -1062,30 +1147,22 @@ impl Forwarder {
                 // edge's own 5xx. That is the redeploy signal on this path.
                 self.mark_stale();
             }
-            if let Ok((response, _, _)) = &mut sent
+            if let Ok((response, _, _)) = &sent
                 && !self.origin_auto
                 && response.status() == StatusCode::UNSUPPORTED_MEDIA_TYPE
-                && response.headers().contains_key("x-portway-decode-error")
+                && response
+                    .headers()
+                    .contains_key(crate::receiver::ERROR_HEADER)
                 && coding != Coding::None
             {
-                // The upstream behind the URL no longer inflates (rollback / other
-                // image). Same pool rule as the dictionary refusal above: the
-                // 415 body is unread, so drop the lease with the old `sent`
-                // tuple instead of pooling the connection the identity resend
-                // would immediately check back out.
+                // Close the unread refusal connection before dialing the identity retry.
+                let refused_name = coding.name().unwrap_or("identity");
+                prior_uploaded = prior_uploaded.saturating_add(wire.len() as u64);
+                drop(sent);
                 self.telemetry.warn(&format!(
-                    "415 for {}: resending identity, encoding OFF",
-                    coding.name().unwrap_or("identity")
+                    "415 for {refused_name}: resending identity, encoding OFF",
                 ));
-                self.coding.store(Coding::None as u8, Ordering::Relaxed);
-                self.identity_reason
-                    .store(CompressionIssue::EncodingRefused as u8, Ordering::Relaxed);
-                self.encoding_refused_until.store(
-                    self.now() + REFUSAL_BACKOFF.as_millis() as u64,
-                    Ordering::Relaxed,
-                );
-                self.dict_off(CompressionIssue::EncodingRefused);
-                self.mark_stale();
+                self.refuse_encoding();
                 self.stats.retried_identity.fetch_add(1, Ordering::Relaxed);
                 coding = Coding::None;
                 wire = body.clone();
@@ -1095,7 +1172,7 @@ impl Forwarder {
                 sent = self
                     .send(
                         &method,
-                        &path_and_query,
+                        &upstream_uri,
                         &headers,
                         wire.clone(),
                         meter.clone(),
@@ -1143,15 +1220,15 @@ impl Forwarder {
                 let clock = in_flight.flight().clock().unwrap_or_default();
                 let uploaded = meter.as_ref().map_or_else(
                     || {
-                        if clock.body_handed() {
+                        prior_uploaded.saturating_add(if clock.body_handed() {
                             wire.len() as u64
                         } else {
                             0
-                        }
+                        })
                     },
                     |meter| meter.bytes(),
                 );
-                self.account_upload(body.len(), uploaded, coding);
+                self.account_upload(body.len(), uploaded, coding, false);
                 // Failed attempts need the same persistent request event as
                 // relayed responses. The diagnostic above keeps its precise
                 // reason; this incomplete record feeds history and aggregates.
@@ -1186,10 +1263,14 @@ impl Forwarder {
         if let Some(hash) = hash {
             self.note_stored(response.headers(), hash, &body, scope);
         }
-        let uploaded = meter
-            .as_ref()
-            .map_or(wire.len() as u64, |meter| meter.bytes());
-        self.account_upload(body.len(), uploaded, coding);
+        let uploaded = meter.as_ref().map_or_else(
+            || prior_uploaded.saturating_add(wire.len() as u64),
+            |meter| meter.bytes(),
+        );
+        let dcz_accepted = !response
+            .headers()
+            .contains_key(crate::receiver::ERROR_HEADER);
+        self.account_upload(body.len(), uploaded, coding, dcz_accepted);
         let ttfb = t0.elapsed().as_secs_f64();
         in_flight
             .flight()
@@ -1336,11 +1417,11 @@ impl Forwarder {
         .expect("relay response is well formed")
     }
 
-    fn account_upload(&self, body_len: usize, uploaded: u64, coding: Coding) {
+    fn account_upload(&self, body_len: usize, uploaded: u64, coding: Coding, dcz_accepted: bool) {
         if coding != Coding::None && uploaded > 0 {
             self.stats.encoded_requests.fetch_add(1, Ordering::Relaxed);
         }
-        if coding == Coding::Dcz && uploaded > 0 {
+        if coding == Coding::Dcz && uploaded > 0 && dcz_accepted {
             self.stats.dict_hits.fetch_add(1, Ordering::Relaxed);
         }
         self.stats
@@ -1371,12 +1452,20 @@ impl Forwarder {
             self.stats
                 .dict_hash_mismatches
                 .fetch_add(1, Ordering::Relaxed);
-            if self.dict.load(Ordering::Relaxed) {
+            let disabled = {
+                let _lock = self.negotiation.lock().expect("negotiation lock");
+                if self.dict.load(Ordering::Relaxed) {
+                    self.dict_off_locked(CompressionIssue::HashMismatch);
+                    true
+                } else {
+                    false
+                }
+            };
+            if disabled {
                 self.telemetry.warn(&format!(
                     "{}: the upstream stored a different body than was sent: dictionaries OFF",
                     self.name
                 ));
-                self.dict_off(CompressionIssue::HashMismatch);
             }
         }
     }
@@ -1473,16 +1562,27 @@ fn dict_refusal(response: &Response<Incoming>) -> Option<DictRefusal> {
         StatusCode::PRECONDITION_FAILED if response.headers().contains_key(dict::MISS_HEADER) => {
             Some(DictRefusal::Miss)
         }
-        StatusCode::BAD_REQUEST if response.headers().contains_key("x-portway-decode-error") => {
+        StatusCode::BAD_REQUEST
+            if response
+                .headers()
+                .contains_key(crate::receiver::ERROR_HEADER) =>
+        {
             Some(DictRefusal::Rejected)
         }
         StatusCode::UNSUPPORTED_MEDIA_TYPE
-            if response.headers().contains_key("x-portway-decode-error") =>
+            if response
+                .headers()
+                .contains_key(crate::receiver::ERROR_HEADER) =>
         {
             Some(DictRefusal::Unsupported)
         }
         _ => None,
     }
+}
+
+fn exact(mut out: Vec<u8>) -> Bytes {
+    out.shrink_to_fit();
+    out.into()
 }
 
 fn compress_zstd(body: &[u8], level: i32) -> std::io::Result<Vec<u8>> {
@@ -1747,5 +1847,61 @@ mod tests {
         assert_eq!(fwd.view().identity_reason, None);
         assert_eq!(fwd.view().last_probe_ok, Some(false));
         assert_eq!(fwd.view().probe_failures, 1);
+    }
+
+    #[test]
+    fn upstream_uri_resolution_rejects_oversized_traversal_and_invalid_targets_without_panicking() {
+        let root = forwarder(&ForwarderConfig::default());
+        assert_eq!(
+            root.resolve_upstream_uri(&Method::OPTIONS, "*").unwrap(),
+            "*"
+        );
+        assert_eq!(
+            root.resolve_upstream_uri(&Method::GET, "*").unwrap_err().0,
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            root.resolve_upstream_uri(&Method::GET, "relative")
+                .unwrap_err()
+                .0,
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            root.resolve_upstream_uri(&Method::GET, "/bad uri")
+                .unwrap_err()
+                .0,
+            StatusCode::BAD_REQUEST
+        );
+
+        let prefixed = Forwarder::new(
+            "codex",
+            Arc::new(Upstream::new("http://127.0.0.1:1/backend-api/codex", None).unwrap()),
+            &ForwarderConfig::default(),
+        );
+        assert_eq!(
+            prefixed
+                .resolve_upstream_uri(&Method::OPTIONS, "*")
+                .unwrap_err()
+                .0,
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            prefixed
+                .resolve_upstream_uri(&Method::GET, "/../admin")
+                .unwrap_err()
+                .0,
+            StatusCode::BAD_REQUEST
+        );
+        let huge = format!("/{}", "a".repeat(u16::MAX as usize - 5));
+        assert_eq!(
+            prefixed
+                .resolve_upstream_uri(&Method::GET, &huge)
+                .unwrap_err()
+                .0,
+            StatusCode::URI_TOO_LONG
+        );
+        assert!(drop_from_request("expect"));
+        assert!(drop_from_request(crate::receiver::ERROR_HEADER));
+        assert!(drop_from_response(crate::receiver::ERROR_HEADER));
     }
 }

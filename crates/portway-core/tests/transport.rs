@@ -806,3 +806,84 @@ async fn a_mount_keeps_the_upstream_prefix_and_strips_its_own() {
     assert_eq!(status, http::StatusCode::NOT_FOUND);
     assert_eq!(origin.seen.lock().unwrap().len(), before);
 }
+
+#[tokio::test]
+async fn traversal_oversized_uri_expect_stripping_and_receiver_health() {
+    let origin = origin().await;
+    let router = Router::build(
+        &config(),
+        &[("codex".to_owned(), format!("{}/backend", origin.url))],
+        &[],
+        None,
+    )
+    .unwrap();
+    for bad in [
+        "/codex/../../admin",
+        "/codex/%2e%2e/admin",
+        "/codex/..%2fadmin",
+    ] {
+        let (status, _) = send(&router, "GET", bad, &[], Bytes::new()).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
+    }
+    let huge = format!("/codex/{}", "a".repeat(u16::MAX as usize - 8));
+    assert_eq!(huge.len(), u16::MAX as usize - 1);
+    let (status, _) = send(&router, "GET", &huge, &[], Bytes::new()).await;
+    assert_eq!(status, StatusCode::URI_TOO_LONG);
+    assert!(origin.seen.lock().unwrap().is_empty());
+
+    let (status, body) = send(
+        &router,
+        "POST",
+        "/codex/responses",
+        &[("expect", "100-continue")],
+        Bytes::from_static(b"ok"),
+    )
+    .await;
+    assert_eq!((status, body), (StatusCode::OK, Bytes::from_static(b"ok")));
+    assert!(
+        !origin.seen.lock().unwrap()[0]
+            .headers
+            .contains_key("expect")
+    );
+
+    // Model routing uses ?model=... only for bodiless requests; a non-empty body must name model.
+    let models = Router::build(
+        &config(),
+        &[],
+        &[("m1".to_owned(), origin.url.clone())],
+        None,
+    )
+    .unwrap();
+    let (status, _) = send(&models, "GET", "/v1/responses?model=m1", &[], Bytes::new()).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = send(
+        &models,
+        "POST",
+        "/v1/responses?model=m1",
+        &[],
+        Bytes::from_static(b"{}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // serve_receiver reports mode=receive on /__portway/health.
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let next = Router::single(&config(), &origin.url, None).unwrap();
+    let recv = Receiver::new(ReceiverConfig::default()).unwrap();
+    let task = tokio::spawn(server::serve_receiver(listener, next, recv));
+    let probe =
+        portway_core::Forwarder::from_url("recv", &format!("http://{addr}"), &config()).unwrap();
+    let response = probe
+        .forward(
+            Request::get("/__portway/health")
+                .body(Bytes::new())
+                .unwrap(),
+        )
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["mode"], "receive");
+    task.abort();
+}

@@ -73,7 +73,7 @@ impl Ring {
             .collect();
         candidates
             .into_iter()
-            .filter(|base| base.body.len() + body.len() <= MAX_WINDOW_BYTES)
+            .filter(|base| base.body.len().saturating_add(body.len()) <= MAX_WINDOW_BYTES)
             .max_by_key(|base| common_prefix(&base.body, body))
     }
 
@@ -99,6 +99,13 @@ impl Ring {
             .lock()
             .expect("ring lock")
             .retain(|(_, base)| &base.hash != hash);
+    }
+
+    pub fn forget_scoped(&self, hash: &Hash, scope: &DictionaryScope) {
+        self.0
+            .lock()
+            .expect("ring lock")
+            .retain(|(s, base)| s != scope || &base.hash != hash);
     }
 
     pub fn clear(&self) {
@@ -144,21 +151,20 @@ pub fn compress(body: &[u8], base: &Base, level: i32) -> std::io::Result<Vec<u8>
     // past ~4 MiB the far end of the base stops matching and the frame swells
     // to the size of the body. LDM is what reaches it, and it works with a
     // prefix — unlike `loadDictionary`/`CDict`, which silently disables it.
-    let needed = base.body.len() + body.len();
-    let window_log = needed.ilog2() + 1;
-    cctx.set_parameter(CParameter::WindowLog(
-        window_log.min(MAX_WINDOW_BYTES.ilog2()),
-    ))
-    .map_err(zstd_error)?;
+    const MIN_WINDOW_LOG: u32 = 10;
+    let needed = base.body.len().saturating_add(body.len());
+    let window_log = (needed.max(1).ilog2() + 1).clamp(MIN_WINDOW_LOG, MAX_WINDOW_BYTES.ilog2());
+    cctx.set_parameter(CParameter::WindowLog(window_log))
+        .map_err(zstd_error)?;
     cctx.set_parameter(CParameter::EnableLongDistanceMatching(true))
         .map_err(zstd_error)?;
     cctx.ref_prefix(&base.body).map_err(zstd_error)?;
 
-    let mut out = Vec::with_capacity(40 + compress_bound(body.len()));
-    out.extend_from_slice(&DCZ_MAGIC);
-    out.extend_from_slice(&base.hash);
     let mut frame = Vec::with_capacity(compress_bound(body.len()));
     cctx.compress2(&mut frame, body).map_err(zstd_error)?;
+    let mut out = Vec::with_capacity(40 + frame.len());
+    out.extend_from_slice(&DCZ_MAGIC);
+    out.extend_from_slice(&base.hash);
     out.extend_from_slice(&frame);
     Ok(out)
 }
@@ -263,6 +269,37 @@ mod tests {
         assert_eq!(common_prefix(&a, &b), 9_000);
         assert_eq!(common_prefix(&a, &a[..5_000]), 5_000);
         assert_eq!(common_prefix(b"", &a), 0);
+    }
+
+    #[test]
+    fn compress_handles_empty_and_tiny_inputs_with_exact_capacity() {
+        for (base_bytes, body_bytes) in [(&b""[..], &b""[..]), (&b"short"[..], &b"short tail"[..])]
+        {
+            let base = base_of(base_bytes);
+            let wire = compress(body_bytes, &base, 3).unwrap();
+            assert_eq!(wire[..8], DCZ_MAGIC);
+            assert_eq!(wire[8..40], base.hash);
+            assert_eq!(wire.capacity(), wire.len());
+            let mut decoder = zstd::bulk::Decompressor::with_dictionary(base_bytes).unwrap();
+            assert_eq!(
+                decoder.decompress(&wire[40..], body_bytes.len()).unwrap(),
+                body_bytes
+            );
+        }
+    }
+
+    #[test]
+    fn forget_scoped_only_evicts_the_matching_scope() {
+        let ring = Ring::default();
+        let body = Bytes::from_static(b"shared payload");
+        let hash = sha256(&body);
+        let alice = DictionaryScope::new(b"alice");
+        let bob = DictionaryScope::new(b"bob");
+        ring.confirm_scoped(hash, body.clone(), alice.clone());
+        ring.confirm_scoped(hash, body.clone(), bob.clone());
+        ring.forget_scoped(&hash, &alice);
+        assert!(ring.pick_scoped(&body, &alice).is_none());
+        assert!(ring.pick_scoped(&body, &bob).is_some());
     }
 }
 

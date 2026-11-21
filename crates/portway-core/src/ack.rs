@@ -88,9 +88,16 @@ async fn drain_loop(dup: &OwnedFd, clock: &PhaseClock) {
 /// Fire the watcher as a detached task: the request must not wait on it, and
 /// the response arriving is what actually ends the request.
 pub fn spawn_watch(clock: Arc<PhaseClock>) {
-    if clock.fd().is_some() {
-        tokio::spawn(watch_drain(clock));
-    }
+    let _ = spawn_watch_abortable(clock);
+}
+
+/// Like [`spawn_watch`], returning an abort handle so connection cancellation
+/// or pool return can drop the dup'd descriptor immediately.
+pub(crate) fn spawn_watch_abortable(clock: Arc<PhaseClock>) -> Option<tokio::task::AbortHandle> {
+    clock
+        .fd()
+        .is_some()
+        .then(|| tokio::spawn(watch_drain(clock)).abort_handle())
 }
 
 #[cfg(test)]
@@ -121,6 +128,23 @@ mod tests {
         ));
         watch.await;
         assert!(clock.upload_wall().is_some());
+        assert_eq!(server.read(&mut [0]).unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn aborting_spawned_watcher_closes_duped_socket_promptly() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (mut server, _) = listener.accept().unwrap();
+        server
+            .set_read_timeout(Some(Duration::from_millis(500)))
+            .unwrap();
+        let clock = Arc::new(PhaseClock::new());
+        clock.set_fd(client.as_raw_fd());
+        let handle = spawn_watch_abortable(Arc::clone(&clock)).expect("watcher spawned");
+        drop(client);
+        handle.abort();
+        tokio::task::yield_now().await;
         assert_eq!(server.read(&mut [0]).unwrap(), 0);
     }
 }

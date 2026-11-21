@@ -63,8 +63,8 @@ fn format_epoch(epoch: i64, date: bool) -> String {
     if date {
         format!(
             "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
-            tm.tm_year + 1900,
-            tm.tm_mon + 1,
+            i64::from(tm.tm_year) + 1900,
+            i64::from(tm.tm_mon) + 1,
             tm.tm_mday,
             tm.tm_hour,
             tm.tm_min,

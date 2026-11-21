@@ -60,8 +60,9 @@ pub struct RequestRecord {
     /// Response body as the agent got it, and as it came off the upstream.
     pub received: u64,
     pub received_wire: u64,
-    /// What the hop actually sent the agent once it re-encoded the body; equal
-    /// to `received` while no coding was negotiated for the agent leg.
+    /// What the hop actually sent the agent once it re-encoded the body; zero
+    /// while no coding was negotiated for the agent leg (`agent_encoding` is
+    /// `None`).
     pub received_agent: u64,
     pub upstream_encoding: String,
     pub agent_encoding: Option<String>,

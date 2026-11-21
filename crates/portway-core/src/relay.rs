@@ -117,6 +117,9 @@ pub struct RequestLog {
     received_wire: u64,
     agent_bytes: u64,
     first_byte: Option<Instant>,
+    /// When the relay ended for the agent, so a post-disconnect grace drain
+    /// does not inflate download or elapsed durations.
+    ended_at: Option<Instant>,
     /// When the agent was last handed a chunk; `None` before the first one
     /// and once the relay is over for the agent.
     last_chunk: Option<Instant>,
@@ -175,6 +178,7 @@ impl RequestLog {
             received_wire: 0,
             agent_bytes: 0,
             first_byte: None,
+            ended_at: None,
             last_chunk: None,
             max_gap: None,
             complete: false,
@@ -207,7 +211,12 @@ impl RequestLog {
             received_agent: self.agent_bytes,
             upstream_encoding: self.upstream_encoding.clone(),
             agent_encoding: self.agent_coding.map(str::to_owned),
-            download: self.first_byte.map(|at| at.elapsed().as_secs_f64()),
+            download: self.first_byte.map(|at| {
+                self.ended_at
+                    .unwrap_or_else(Instant::now)
+                    .saturating_duration_since(at)
+                    .as_secs_f64()
+            }),
             // A gap still open here belongs to a log that ended outside the
             // relay; it lasted until now.
             max_gap: self
@@ -251,6 +260,7 @@ impl RequestLog {
     /// chunk is its last gap. Whatever is read after that, the agent never
     /// waited for.
     fn close_gap(&mut self, now: Instant) {
+        self.ended_at.get_or_insert(now);
         if let Some(last) = self.last_chunk.take() {
             self.widen(now.saturating_duration_since(last));
         }
@@ -267,6 +277,7 @@ impl Drop for RequestLog {
         // also still see the request in flight.
         self._in_flight.end();
         if let Some(reason) = self.end_reason {
+            let ended = self.ended_at.unwrap_or_else(Instant::now);
             let message = format!(
                 "{} {} -> {} | upstream={} reason={} phase=response_body elapsed={:.3}s",
                 self.method,
@@ -274,7 +285,7 @@ impl Drop for RequestLog {
                 self.status,
                 self.upstream,
                 reason.name(),
-                self.ttfb + self.started.elapsed().as_secs_f64(),
+                self.ttfb + ended.saturating_duration_since(self.started).as_secs_f64(),
             );
             if matches!(reason, EndReason::ClientDisconnect) {
                 self.telemetry.info(&message);

@@ -86,6 +86,12 @@ impl Body for TimedBody {
     }
 }
 
+#[derive(Default)]
+struct SlotState {
+    clock: Option<Arc<PhaseClock>>,
+    watcher: Option<tokio::task::AbortHandle>,
+}
+
 /// Which request is currently using a pooled connection.
 ///
 /// HTTP/1.1 is strictly serial, so a connection has at most one clock at a
@@ -94,36 +100,58 @@ impl Body for TimedBody {
 #[derive(Default)]
 pub struct ClockSlot {
     armed: AtomicBool,
-    clock: Mutex<Option<Arc<PhaseClock>>>,
+    state: Mutex<SlotState>,
 }
 
 impl ClockSlot {
     pub fn set(&self, clock: Arc<PhaseClock>) {
-        *self.clock.lock().unwrap() = Some(clock);
+        let mut state = self.state.lock().unwrap();
+        if let Some(watcher) = state.watcher.take() {
+            watcher.abort();
+        }
+        state.clock = Some(clock);
         self.armed.store(true, Ordering::Release);
     }
 
     pub fn clear(&self) {
         self.armed.store(false, Ordering::Release);
-        *self.clock.lock().unwrap() = None;
+        let mut state = self.state.lock().unwrap();
+        state.clock = None;
+        if let Some(watcher) = state.watcher.take() {
+            watcher.abort();
+        }
     }
 
-    /// Called after a write completes: if the body's last frame is already out,
-    /// that write finished the upload.
-    fn on_write_complete(&self) {
+    /// Called once the connection's buffered writes are flushed: if the body's
+    /// last frame was already handed to hyper, the upload has left userspace.
+    fn on_flush_complete(&self) {
         if !self.armed.load(Ordering::Acquire) {
             return;
         }
-        let held = self.clock.lock().unwrap();
-        let Some(clock) = held.as_ref() else { return };
+        let mut state = self.state.lock().unwrap();
+        let Some(clock) = state.clock.as_ref() else {
+            return;
+        };
         if !clock.body_handed() {
             return;
         }
         if clock.mark_upload_finished() {
             let clock = Arc::clone(clock);
-            drop(held);
             self.armed.store(false, Ordering::Release);
-            ack::spawn_watch(clock);
+            if let Some(watcher) = state.watcher.take() {
+                watcher.abort();
+            }
+            state.watcher = ack::spawn_watch_abortable(clock);
+        }
+    }
+}
+
+impl Drop for ClockSlot {
+    fn drop(&mut self) {
+        if let Ok(mut state) = self.state.lock()
+            && let Some(watcher) = state.watcher.take()
+        {
+            watcher.abort();
         }
     }
 }
@@ -173,7 +201,6 @@ impl<S: AsyncWrite + Unpin> AsyncWrite for TimedIo<S> {
         let done = Pin::new(&mut self.inner).poll_write(cx, buf);
         if let Poll::Ready(Ok(written)) = &done {
             self.telemetry.add_socket_up(*written);
-            self.slot.on_write_complete();
         }
         done
     }
@@ -186,7 +213,6 @@ impl<S: AsyncWrite + Unpin> AsyncWrite for TimedIo<S> {
         let done = Pin::new(&mut self.inner).poll_write_vectored(cx, bufs);
         if let Poll::Ready(Ok(written)) = &done {
             self.telemetry.add_socket_up(*written);
-            self.slot.on_write_complete();
         }
         done
     }
@@ -198,7 +224,7 @@ impl<S: AsyncWrite + Unpin> AsyncWrite for TimedIo<S> {
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         let done = Pin::new(&mut self.inner).poll_flush(cx);
         if let Poll::Ready(Ok(())) = &done {
-            self.slot.on_write_complete();
+            self.slot.on_flush_complete();
         }
         done
     }
@@ -380,37 +406,52 @@ impl Encoder {
     /// The best coding in an `Accept-Encoding` header, or `None` when the agent
     /// offered nothing we make: `identity`, `deflate`, `br`, or `q=0`.
     pub fn for_accept(accept: Option<&str>) -> Option<Self> {
-        let (mut zstd, mut gzip) = (false, false);
-        for part in accept?.split(',') {
+        let (mut zstd, mut gzip, mut identity) = (None::<u16>, None::<u16>, None::<u16>);
+        for part in accept?.split(',').map(str::trim).filter(|s| !s.is_empty()) {
             let mut fields = part.split(';');
-            let name = fields.next().unwrap_or("").trim().to_ascii_lowercase();
-            let refused = fields.any(|field| {
-                field
-                    .trim()
-                    .strip_prefix("q=")
-                    .and_then(|q| q.trim().parse::<f32>().ok())
-                    .is_some_and(|q| q <= 0.0)
-            });
-            if refused {
+            let Some(name) = fields.next().map(str::trim).filter(|s| !s.is_empty()) else {
+                continue;
+            };
+            let mut q = 1000u16;
+            if let Some(param) = fields.next() {
+                let Some((key, val)) = param.trim().split_once('=') else {
+                    continue;
+                };
+                if !key.trim().eq_ignore_ascii_case("q") {
+                    continue;
+                }
+                let Some(parsed) = parse_qvalue(val.trim()) else {
+                    continue;
+                };
+                q = parsed;
+            }
+            if fields.next().is_some() {
                 continue;
             }
-            match name.as_str() {
-                "zstd" => zstd = true,
-                "gzip" | "x-gzip" => gzip = true,
-                _ => {}
-            }
+            let slot = match name.to_ascii_lowercase().as_str() {
+                "zstd" => &mut zstd,
+                "gzip" | "x-gzip" => &mut gzip,
+                "identity" => &mut identity,
+                _ => continue,
+            };
+            // Conflicting duplicates: respect the most restrictive weight.
+            *slot = Some(slot.unwrap_or(q).min(q));
         }
-        let kind = if zstd {
+        let zs = zstd.unwrap_or(0);
+        let gz = gzip.unwrap_or(0);
+        let best = zs.max(gz);
+        if best == 0 || identity.is_some_and(|id| id > best) {
+            return None;
+        }
+        let kind = if zs >= gz {
             EncKind::Zstd(Box::new(
                 zstd::stream::write::Encoder::new(Vec::new(), 3).ok()?,
             ))
-        } else if gzip {
+        } else {
             EncKind::Gzip(Box::new(flate2::write::GzEncoder::new(
                 Vec::new(),
                 flate2::Compression::fast(),
             )))
-        } else {
-            return None;
         };
         Some(Encoder { kind })
     }
@@ -463,16 +504,47 @@ fn take(buf: &mut Vec<u8>) -> Bytes {
     out
 }
 
+/// RFC 9110 §12.4.2 quality value in thousandths (`0..=1000`).
+fn parse_qvalue(raw: &str) -> Option<u16> {
+    let (whole, fraction) = raw.split_once('.').unwrap_or((raw, ""));
+    if !matches!(whole, "0" | "1")
+        || fraction.len() > 3
+        || !fraction.bytes().all(|b| b.is_ascii_digit())
+    {
+        return None;
+    }
+    let fractional = if fraction.is_empty() {
+        0
+    } else {
+        fraction.parse::<u16>().ok()? * 10u16.pow(3 - fraction.len() as u32)
+    };
+    match whole {
+        "1" if fractional == 0 => Some(1000),
+        "0" => Some(fractional),
+        _ => None,
+    }
+}
+
 /// Read a whole response body, decoding whatever coding it arrived in.
 pub async fn collect(headers: &HeaderMap, body: Incoming) -> Result<Bytes, hyper::Error> {
     use http_body_util::BodyExt;
     let raw = body.collect().await?.to_bytes();
-    let encoding = headers
-        .get(http::header::CONTENT_ENCODING)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("identity");
+    let mut encodings = headers.get_all(http::header::CONTENT_ENCODING).iter();
+    let encoding = match (encodings.next(), encodings.next()) {
+        (None, _) => "identity",
+        (Some(v), None) => v.to_str().unwrap_or("unsupported"),
+        (Some(_), Some(_)) => return Ok(raw),
+    };
     match Decoder::for_encoding(encoding) {
-        Some(mut decoder) => Ok(decoder.push(raw.clone()).unwrap_or(raw)),
+        Some(mut decoder) => {
+            if let Ok(decoded) = decoder.push(raw.clone())
+                && decoder.finish().is_ok()
+            {
+                Ok(decoded)
+            } else {
+                Ok(raw)
+            }
+        }
         None => Ok(raw),
     }
 }
@@ -602,6 +674,78 @@ mod tests {
                 .name(),
             "gzip"
         );
+        assert!(Encoder::for_accept(Some("gzip;Q=0")).is_none());
+        assert!(Encoder::for_accept(Some("gzip; q = 0")).is_none());
+        assert!(Encoder::for_accept(Some("gzip;q=NaN")).is_none());
+        assert!(Encoder::for_accept(Some("gzip;q=1.5")).is_none());
+        assert!(Encoder::for_accept(Some("gzip, gzip;q=0")).is_none());
+        assert!(Encoder::for_accept(Some("gzip;q=0.5, identity;q=1")).is_none());
+        assert_eq!(
+            Encoder::for_accept(Some("gzip;q=1, zstd;q=0.5"))
+                .expect("higher weight wins")
+                .name(),
+            "gzip"
+        );
+        assert_eq!(
+            Encoder::for_accept(Some("gzip;q=1, identity;q=1"))
+                .expect("equal weight prefers compression")
+                .name(),
+            "gzip"
+        );
+    }
+
+    #[tokio::test]
+    async fn timed_io_only_marks_upload_finished_on_flush() {
+        use tokio::io::AsyncWriteExt;
+
+        struct ChunkedSink {
+            written: Vec<u8>,
+        }
+        impl AsyncWrite for ChunkedSink {
+            fn poll_write(
+                mut self: Pin<&mut Self>,
+                _cx: &mut Context<'_>,
+                buf: &[u8],
+            ) -> Poll<io::Result<usize>> {
+                let take = buf.len().min(4);
+                self.written.extend_from_slice(&buf[..take]);
+                Poll::Ready(Ok(take))
+            }
+            fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+                Poll::Ready(Ok(()))
+            }
+            fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+                Poll::Ready(Ok(()))
+            }
+        }
+
+        let clock = Arc::new(PhaseClock::new());
+        clock.mark_upload_started();
+        clock.mark_body_handed();
+        let slot = Arc::new(ClockSlot::default());
+        slot.set(Arc::clone(&clock));
+        let telemetry = Arc::new(Telemetry::default());
+        let mut io = TimedIo::new(
+            ChunkedSink {
+                written: Vec::new(),
+            },
+            Arc::clone(&slot),
+            Arc::clone(&telemetry),
+        );
+        let n = io.write(b"0123456789").await.unwrap();
+        assert_eq!(n, 4);
+        assert!(
+            clock.upload_wall().is_none(),
+            "partial write must not finish upload"
+        );
+        io.write_all(b"456789").await.unwrap();
+        assert!(
+            clock.upload_wall().is_none(),
+            "unflushed writes must not finish upload"
+        );
+        io.flush().await.unwrap();
+        assert!(clock.upload_wall().is_some());
+        assert_eq!(telemetry.socket_bytes().0, 10);
     }
 }
 

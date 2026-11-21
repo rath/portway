@@ -5,6 +5,7 @@ use crate::{
 };
 use http::{HeaderMap, Method, StatusCode};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::{
     collections::VecDeque,
     sync::{
@@ -111,10 +112,10 @@ impl OriginState {
         eligible: bool,
     ) -> Attempt {
         // Hash request context: never retain URLs, API keys or cookies in the cache.
-        let mut context = Vec::new();
+        let mut hasher = Sha256::new();
         for value in [method.as_str().as_bytes(), target.as_bytes(), &scope.0] {
-            context.extend_from_slice(&(value.len() as u64).to_le_bytes());
-            context.extend_from_slice(value);
+            hasher.update((value.len() as u64).to_le_bytes());
+            hasher.update(value);
         }
         for name in [
             "x-api-key",
@@ -123,12 +124,12 @@ impl OriginState {
             "anthropic-beta",
         ] {
             for value in headers.get_all(name) {
-                context.extend_from_slice(&(value.as_bytes().len() as u64).to_le_bytes());
-                context.extend_from_slice(value.as_bytes());
+                hasher.update((value.as_bytes().len() as u64).to_le_bytes());
+                hasher.update(value.as_bytes());
             }
-            context.extend_from_slice(&u64::MAX.to_le_bytes());
+            hasher.update(u64::MAX.to_le_bytes());
         }
-        self.begin_key(dict::sha256(&context), eligible, Instant::now())
+        self.begin_key(hasher.finalize().into(), eligible, Instant::now())
     }
     fn begin_key(self: &Arc<Self>, key: dict::Hash, eligible: bool, now: Instant) -> Attempt {
         let mut cache = self.cache.lock().expect("origin cache");
@@ -239,10 +240,24 @@ impl Attempt {
             entry.probing = false;
         }
         if let Some(advertisement) = advertisement(headers) {
-            entry.coding = Some(advertisement.coding);
-            entry.expires = now + TTL;
+            let changed = cache.entries[at].coding != Some(advertisement.coding);
+            if changed {
+                cache.generation += 1;
+                let generation = cache.generation;
+                let entry = &mut cache.entries[at];
+                entry.generation = generation;
+                entry.coding = Some(advertisement.coding);
+                entry.expires = now + TTL;
+            } else {
+                let entry = &mut cache.entries[at];
+                entry.coding = Some(advertisement.coding);
+                entry.expires = now + TTL;
+            }
         } else if sent != Coding::None && status.is_success() {
-            entry.coding = Some(sent);
+            let entry = &mut cache.entries[at];
+            if entry.coding.is_none() {
+                entry.coding = Some(sent);
+            }
             entry.expires = now + TTL;
         }
     }
@@ -306,6 +321,9 @@ fn advertisement(headers: &HeaderMap) -> Option<Advertisement> {
         {
             let mut fields = item.split(';');
             let name = fields.next()?.trim();
+            if name.is_empty() {
+                return None;
+            }
             let mut q = 1000;
             if let Some(parameter) = fields.next() {
                 let (name, value) = parameter.trim().split_once('=')?;
@@ -373,9 +391,28 @@ mod tests {
         assert!(!identity_allowed(&headers("gzip, identity;q=0")));
         assert!(!identity_allowed(&headers("*;q=0,gzip")));
         assert!(identity_allowed(&headers("*;q=0,identity;q=0.1")));
-        for value in ["gzip;q=NaN", "gzip;q=1.1", "gzip;q=-1", "gzip;q=0.1234"] {
-            assert!(advertisement(&headers(value)).is_none());
+        for value in [
+            "gzip;q=NaN",
+            "gzip;q=1.1",
+            "gzip;q=-1",
+            "gzip;q=0.1234",
+            ";q=1",
+        ] {
+            assert!(advertisement(&headers(value)).is_none(), "{value}");
         }
+    }
+
+    #[test]
+    fn concurrent_gzip_success_does_not_downgrade_advertised_zstd() {
+        let state = Arc::new(OriginState::default());
+        let now = Instant::now();
+        let trial = state.begin_key([2; 32], true, now);
+        trial.observe_at(StatusCode::OK, &HeaderMap::new(), Coding::Gzip, now);
+        let stale_gzip = state.begin_key([2; 32], true, now);
+        let ad = state.begin_key([2; 32], true, now);
+        ad.observe_at(StatusCode::OK, &headers("zstd"), Coding::Gzip, now);
+        stale_gzip.observe_at(StatusCode::OK, &HeaderMap::new(), Coding::Gzip, now);
+        assert_eq!(state.begin_key([2; 32], true, now).coding, Coding::Zstd);
     }
     #[test]
     fn refusal_survives_concurrent_success_then_only_one_request_retries_after_expiry() {

@@ -71,6 +71,9 @@ struct PooledConn {
 
 impl Drop for PooledConn {
     fn drop(&mut self) {
+        // Abort any ACK watcher before tearing down the driver so its dup'd
+        // descriptor cannot keep the upstream TCP socket open after cancellation.
+        self.slot.clear();
         // Dropping a send future alone need not stop hyper's detached driver.
         // A cancelled request must close its socket, even before headers arrive.
         self.driver.abort();
@@ -203,13 +206,21 @@ impl Upstream {
     }
 
     fn checkout(&self) -> Option<PooledConn> {
-        let mut idle = self.idle.lock().unwrap();
-        while let Some(conn) = idle.pop_front() {
-            if conn.idle_since.elapsed() < IDLE_TIMEOUT && !conn.send.is_closed() {
-                return Some(conn);
+        let mut stale = Vec::new();
+        let found = {
+            let mut idle = self.idle.lock().unwrap();
+            let mut found = None;
+            while let Some(conn) = idle.pop_back() {
+                if conn.idle_since.elapsed() < IDLE_TIMEOUT && !conn.send.is_closed() {
+                    found = Some(conn);
+                    break;
+                }
+                stale.push(conn);
             }
-        }
-        None
+            found
+        };
+        drop(stale);
+        found
     }
 
     fn put(&self, mut conn: PooledConn) {
@@ -218,22 +229,57 @@ impl Upstream {
         }
         conn.slot.clear();
         conn.idle_since = Instant::now();
-        let mut idle = self.idle.lock().unwrap();
-        if idle.len() < MAX_IDLE {
+        let mut evicted = Vec::new();
+        {
+            let mut idle = self.idle.lock().unwrap();
+            let mut kept = VecDeque::with_capacity(idle.len());
+            while let Some(existing) = idle.pop_front() {
+                if existing.idle_since.elapsed() < IDLE_TIMEOUT && !existing.send.is_closed() {
+                    kept.push_back(existing);
+                } else {
+                    evicted.push(existing);
+                }
+            }
+            *idle = kept;
+            if idle.len() >= MAX_IDLE
+                && let Some(oldest) = idle.pop_front()
+            {
+                evicted.push(oldest);
+            }
             idle.push_back(conn);
         }
+        drop(evicted);
     }
 
     pub fn idle_count(&self) -> usize {
-        self.idle.lock().unwrap().len()
+        let mut stale = Vec::new();
+        let count = {
+            let mut idle = self.idle.lock().unwrap();
+            let mut kept = VecDeque::with_capacity(idle.len());
+            while let Some(existing) = idle.pop_front() {
+                if existing.idle_since.elapsed() < IDLE_TIMEOUT && !existing.send.is_closed() {
+                    kept.push_back(existing);
+                } else {
+                    stale.push(existing);
+                }
+            }
+            *idle = kept;
+            idle.len()
+        };
+        drop(stale);
+        count
     }
 
     async fn dial(&self, clock: &PhaseClock) -> Result<PooledConn, UpstreamError> {
         let started = Instant::now();
-        let addrs: Vec<_> = tokio::net::lookup_host((self.host.as_str(), self.port))
-            .await
-            .map_err(|_| UpstreamError::Resolve(self.host.clone()))?
-            .collect();
+        let addrs: Vec<_> = tokio::time::timeout(
+            CONNECT_TIMEOUT,
+            tokio::net::lookup_host((self.host.as_str(), self.port)),
+        )
+        .await
+        .map_err(|_| UpstreamError::Timeout("dns"))?
+        .map_err(|_| UpstreamError::Resolve(self.host.clone()))?
+        .collect();
         clock.set_dns(started.elapsed());
         if addrs.is_empty() {
             return Err(UpstreamError::Resolve(self.host.clone()));
@@ -257,10 +303,13 @@ impl Upstream {
                 let started = Instant::now();
                 let name = rustls::pki_types::ServerName::try_from(self.host.clone())
                     .map_err(|_| UpstreamError::Resolve(self.host.clone()))?;
-                let tls = TlsConnector::from(Arc::clone(config))
-                    .connect(name, tcp)
-                    .await
-                    .map_err(UpstreamError::Connect)?;
+                let tls = tokio::time::timeout(
+                    CONNECT_TIMEOUT,
+                    TlsConnector::from(Arc::clone(config)).connect(name, tcp),
+                )
+                .await
+                .map_err(|_| UpstreamError::Timeout("tls"))?
+                .map_err(UpstreamError::Connect)?;
                 clock.set_tls(started.elapsed());
                 Stream::Tls(Box::new(tls))
             }
@@ -353,12 +402,79 @@ enum Retry {
     Fatal(UpstreamError),
 }
 
+/// RFC 8305-style connection attempt delay so a blackholed address family does
+/// not consume the whole connect budget before the alternate family is tried.
+const HAPPY_EYEBALLS_DELAY: Duration = Duration::from_millis(250);
+
+fn interleave_families(addrs: &[std::net::SocketAddr]) -> Vec<std::net::SocketAddr> {
+    let Some(&first) = addrs.first() else {
+        return Vec::new();
+    };
+    let mut primary = VecDeque::new();
+    let mut secondary = VecDeque::new();
+    for &addr in addrs {
+        if addr.is_ipv6() == first.is_ipv6() {
+            primary.push_back(addr);
+        } else {
+            secondary.push_back(addr);
+        }
+    }
+    let mut ordered = Vec::with_capacity(addrs.len());
+    while !primary.is_empty() || !secondary.is_empty() {
+        if let Some(addr) = primary.pop_front() {
+            ordered.push(addr);
+        }
+        if let Some(addr) = secondary.pop_front() {
+            ordered.push(addr);
+        }
+    }
+    ordered
+}
+
 async fn connect_any(addrs: &[std::net::SocketAddr]) -> io::Result<TcpStream> {
+    let ordered = interleave_families(addrs);
+    let mut iter = ordered.into_iter();
+    let Some(first) = iter.next() else {
+        return Err(io::Error::new(
+            io::ErrorKind::AddrNotAvailable,
+            "no address",
+        ));
+    };
+    let mut pending = tokio::task::JoinSet::new();
+    pending.spawn(async move { TcpStream::connect(first).await });
     let mut last = io::Error::new(io::ErrorKind::AddrNotAvailable, "no address");
-    for addr in addrs {
-        match TcpStream::connect(addr).await {
-            Ok(stream) => return Ok(stream),
-            Err(err) => last = err,
+    let mut next_addr = iter.next();
+
+    while !pending.is_empty() || next_addr.is_some() {
+        if let Some(addr) = next_addr {
+            tokio::select! {
+                joined = pending.join_next(), if !pending.is_empty() => {
+                    match joined {
+                        Some(Ok(Ok(stream))) => return Ok(stream),
+                        Some(Ok(Err(err))) => {
+                            last = err;
+                            next_addr = iter.next();
+                            pending.spawn(async move { TcpStream::connect(addr).await });
+                        }
+                        Some(Err(err)) => {
+                            last = io::Error::other(err);
+                            next_addr = iter.next();
+                            pending.spawn(async move { TcpStream::connect(addr).await });
+                        }
+                        None => {}
+                    }
+                }
+                _ = tokio::time::sleep(HAPPY_EYEBALLS_DELAY) => {
+                    next_addr = iter.next();
+                    pending.spawn(async move { TcpStream::connect(addr).await });
+                }
+            }
+        } else if let Some(joined) = pending.join_next().await {
+            match joined {
+                Ok(Ok(stream)) => return Ok(stream),
+                Ok(Err(err)) => last = err,
+                Err(err) => last = io::Error::other(err),
+            }
         }
     }
     Err(last)
@@ -396,5 +512,18 @@ mod tests {
         assert!(upstream.tls.is_some());
         let standard = Upstream::new("http://[::1]/", None).unwrap();
         assert_eq!(standard.authority, "[::1]");
+    }
+
+    #[test]
+    fn interleave_families_alternates_ipv6_and_ipv4() {
+        let v6_a: std::net::SocketAddr = "[::1]:443".parse().unwrap();
+        let v6_b: std::net::SocketAddr = "[::2]:443".parse().unwrap();
+        let v4_a: std::net::SocketAddr = "127.0.0.1:443".parse().unwrap();
+        let v4_b: std::net::SocketAddr = "127.0.0.2:443".parse().unwrap();
+        assert_eq!(
+            interleave_families(&[v6_a, v6_b, v4_a, v4_b]),
+            vec![v6_a, v4_a, v6_b, v4_b]
+        );
+        assert_eq!(interleave_families(&[v4_a, v6_a]), vec![v4_a, v6_a]);
     }
 }

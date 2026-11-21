@@ -325,3 +325,20 @@ async fn plain_and_unrequested_bodies_are_not_stored_and_origin_errors_stay_orig
     }
     assert_eq!(receiver.snapshot()["dictionary_entries"], 0);
 }
+
+#[tokio::test]
+async fn bodiless_identity_requests_strip_encoding_without_injecting_content_length() {
+    let receiver = Receiver::new(config()).unwrap();
+    for header in [None, Some("identity"), Some("")] {
+        let mut req = Request::builder().method("GET").uri("/v1/models");
+        if let Some(value) = header {
+            req = req.header("content-encoding", value);
+        }
+        let decoded = receiver
+            .decode(req.body(Full::new(Bytes::new())).unwrap())
+            .await
+            .expect("valid bodiless GET");
+        assert!(!decoded.request.headers().contains_key("content-encoding"));
+        assert!(!decoded.request.headers().contains_key("content-length"));
+    }
+}

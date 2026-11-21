@@ -191,11 +191,20 @@ impl Candidate {
     }
 
     fn ends_with_key(&self, key: &str) -> bool {
-        let prefix = String::from_utf8_lossy(&self.kept);
-        prefix
-            .trim_end()
-            .strip_suffix(':')
-            .is_some_and(|prefix| prefix.trim_end().ends_with(&format!("\"{key}\"")))
+        let mut bytes = self.kept.as_slice();
+        while bytes.last().is_some_and(u8::is_ascii_whitespace) {
+            bytes = &bytes[..bytes.len() - 1];
+        }
+        let Some(mut bytes) = bytes.strip_suffix(b":") else {
+            return false;
+        };
+        while bytes.last().is_some_and(u8::is_ascii_whitespace) {
+            bytes = &bytes[..bytes.len() - 1];
+        }
+        bytes
+            .strip_suffix(b"\"")
+            .and_then(|b| b.strip_suffix(key.as_bytes()))
+            .is_some_and(|b| b.ends_with(b"\""))
     }
 
     fn take(&mut self, byte: u8) -> Step {
@@ -332,6 +341,8 @@ fn read(object: &[u8], input: &mut InputCounts) -> Option<Usage> {
             "cache_creation_input_tokens",
             "cache_creation",
             "input_tokens_details",
+            "output_tokens_details",
+            "reasoning_tokens",
             "cache_write_tokens",
         ]
         .iter()
@@ -371,11 +382,11 @@ fn read(object: &[u8], input: &mut InputCounts) -> Option<Usage> {
             ..input.writes.usage()
         });
     }
+    let prompt = count("prompt_tokens")?;
+    let completion = count("completion_tokens")?;
     // Chat Completions supplies complete objects. Do not merge its fields
     // with an input/output schema from another candidate.
     *input = InputCounts::default();
-    let prompt = count("prompt_tokens")?;
-    let completion = count("completion_tokens")?;
     let mut writes = Writes::default();
     writes.update(&map);
     Some(Usage {
@@ -876,5 +887,18 @@ data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"outpu
                 (Some(30), Some(50))
             );
         }
+    }
+
+    #[test]
+    fn bogus_prompt_tokens_does_not_wipe_prior_input_and_reasoning_only_updates_apply() {
+        let mut scanner = Scanner::default();
+        scanner.push(br#"{"usage":{"input_tokens":100,"output_tokens":1}}"#);
+        scanner.push(br#"{"usage":{"prompt_tokens":"not-a-number"}}"#);
+        scanner.push(br#"{"usage":{"output_tokens_details":{"reasoning_tokens":15}}}"#);
+        scanner.push(br#"{"usage":{"output_tokens":42}}"#);
+        let usage = scanner.usage().unwrap();
+        assert_eq!(usage.prompt, 100);
+        assert_eq!(usage.completion, 42);
+        assert_eq!(usage.reasoning, Some(15));
     }
 }

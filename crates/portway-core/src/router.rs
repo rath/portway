@@ -200,6 +200,13 @@ impl Router {
                 None,
             );
         }
+        if has_dot_segment(&path) {
+            return invalid_request(
+                StatusCode::BAD_REQUEST,
+                "Request path must not contain dot segments.",
+                None,
+            );
+        }
         let scope = parts
             .extensions
             .get::<crate::dict::DictionaryScope>()
@@ -288,6 +295,7 @@ impl Router {
             let Ok(fields) = serde_json::from_slice::<NamedFields>(&body) else {
                 return invalid_request(StatusCode::BAD_REQUEST, "Expected a JSON object.", None);
             };
+            // A query parameter never rescues a non-empty body that omits `model`.
             model = fields.model;
             tier = pricing_class(fields.speed, fields.service_tier);
         }
@@ -487,26 +495,67 @@ fn query_model(query: Option<&str>) -> Option<String> {
     })
 }
 
+/// Rejects raw and percent-encoded dot segments (`.` / `..`) so a request
+/// cannot traverse out of a mount or upstream `base_path`, while still
+/// allowing legitimate encoded slashes inside a single identifier (e.g.
+/// `/v1/models/org%2Fmodel`).
+pub(crate) fn has_dot_segment(path: &str) -> bool {
+    let path = path.split('?').next().unwrap_or(path);
+    for segment in path.split('/') {
+        if segment == "." || segment == ".." {
+            return true;
+        }
+        if segment.contains('\\') && segment.split('\\').any(|part| part == "." || part == "..") {
+            return true;
+        }
+        if segment.contains('%') {
+            let decoded = percent_decode_path(segment);
+            if decoded
+                .split(['/', '\\'])
+                .any(|part| part == "." || part == "..")
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn percent_decode_path(raw: &str) -> String {
+    let bytes = raw.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && bytes[i + 1].is_ascii_hexdigit()
+            && bytes[i + 2].is_ascii_hexdigit()
+        {
+            let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).expect("ascii hex");
+            out.push(u8::from_str_radix(hex, 16).expect("valid hex byte"));
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 fn percent_decode(raw: &str) -> String {
     let bytes = raw.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
         match bytes[i] {
-            b'%' if i + 2 < bytes.len() => match std::str::from_utf8(&bytes[i + 1..i + 3])
-                .ok()
-                .and_then(|s| u8::from_str_radix(s, 16).ok())
-                .ok_or(())
+            b'%' if i + 2 < bytes.len()
+                && bytes[i + 1].is_ascii_hexdigit()
+                && bytes[i + 2].is_ascii_hexdigit() =>
             {
-                Ok(byte) => {
-                    out.push(byte);
-                    i += 3;
-                }
-                Err(_) => {
-                    out.push(b'%');
-                    i += 1;
-                }
-            },
+                let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).expect("ascii hex");
+                out.push(u8::from_str_radix(hex, 16).expect("valid hex byte"));
+                i += 3;
+            }
             b'+' => {
                 out.push(b' ');
                 i += 1;
@@ -714,5 +763,39 @@ mod tests {
             Router::single(&ForwarderConfig::default(), "http://example.test", None).unwrap();
         assert_eq!(single.routes()[0].0, SINGLE_ROUTE);
         assert!(single.root.is_some());
+    }
+
+    #[test]
+    fn dot_segment_and_percent_decoding_checks_reject_traversal_and_malformed_hex() {
+        for bad in [
+            "/..",
+            "/.",
+            "/codex/../admin",
+            "/codex/./admin",
+            "/codex/%2e%2e/admin",
+            "/codex/.%2e/admin",
+            "/codex/%2e./admin",
+            "/codex/..%2fadmin",
+            "/codex/..%5cadmin",
+            "/codex/a\\..\\b",
+        ] {
+            assert!(has_dot_segment(bad), "expected rejection for {bad}");
+        }
+        for good in [
+            "/",
+            "/v1/models/meta-llama%2FLlama-3",
+            "/v1.0/chat/completions",
+            "/v1/files/a..b.json",
+            "/upload?q=%2F..%2F&x=a+b",
+            "*",
+        ] {
+            assert!(!has_dot_segment(good), "unexpected rejection for {good}");
+        }
+        assert_eq!(percent_decode("a%+fb"), "a% fb");
+        assert_eq!(percent_decode("a%2Fb+c"), "a/b c");
+        assert_eq!(
+            query_model(Some("model=gpt%2F4+mini")).as_deref(),
+            Some("gpt/4 mini")
+        );
     }
 }

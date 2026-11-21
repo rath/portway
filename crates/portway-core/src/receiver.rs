@@ -171,6 +171,7 @@ pub struct Receiver {
     config: ReceiverConfig,
     store: Mutex<Store>,
     counters: Counters,
+    inflate_slots: tokio::sync::Semaphore,
 }
 /// The uncompressed request and an acknowledgement to attach to its response.
 /// `finish` never changes the application's status or body.
@@ -202,10 +203,15 @@ impl Acknowledgement {
 impl Receiver {
     pub fn new(config: ReceiverConfig) -> Result<Arc<Self>, String> {
         config.validate()?;
+        let slots = std::thread::available_parallelism()
+            .map(usize::from)
+            .unwrap_or(4)
+            .clamp(2, 16);
         Ok(Arc::new(Self {
             config,
             store: Mutex::default(),
             counters: Counters::default(),
+            inflate_slots: tokio::sync::Semaphore::new(slots),
         }))
     }
     pub fn capabilities(&self) -> Response<OutBody> {
@@ -264,6 +270,11 @@ impl Receiver {
             .unwrap_or("identity")
             .trim()
             .to_ascii_lowercase();
+        let coding = if coding.is_empty() {
+            "identity".to_owned()
+        } else {
+            coding
+        };
         if !matches!(
             coding.as_str(),
             "identity" | "zstd" | "gzip" | "x-gzip" | "dcz"
@@ -282,6 +293,11 @@ impl Receiver {
         let encoded = coding != "identity";
         let receiver = Arc::clone(self);
         let (body, acknowledgement) = if encoded {
+            let _permit = self
+                .inflate_slots
+                .acquire()
+                .await
+                .map_err(|_| reject(500, "decompression limiter closed"))?;
             tokio::task::spawn_blocking(move || receiver.inflate(&coding, raw, scope, keep))
                 .await
                 .map_err(|_| reject(500, "decompression worker failed"))??
@@ -294,17 +310,23 @@ impl Receiver {
             self.counters
                 .plain
                 .fetch_add(body.len() as u64, Ordering::Relaxed);
-            parts.headers.remove(http::header::CONTENT_ENCODING);
         }
+        parts.headers.remove(http::header::CONTENT_ENCODING);
         parts.headers.remove(dict::STORE_HEADER);
         parts.headers.remove(dict::STORED_HEADER);
         parts.headers.remove(dict::MISS_HEADER);
         parts.headers.remove(ERROR_HEADER);
+        let had_body_framing = parts.headers.contains_key(http::header::CONTENT_LENGTH)
+            || parts.headers.contains_key(http::header::TRANSFER_ENCODING);
         parts.headers.remove(http::header::TRANSFER_ENCODING);
-        parts.headers.insert(
-            http::header::CONTENT_LENGTH,
-            HeaderValue::from(body.len() as u64),
-        );
+        if !body.is_empty() || encoded || had_body_framing {
+            parts.headers.insert(
+                http::header::CONTENT_LENGTH,
+                HeaderValue::from(body.len() as u64),
+            );
+        } else {
+            parts.headers.remove(http::header::CONTENT_LENGTH);
+        }
         Ok(DecodedRequest {
             request: Request::from_parts(parts, body),
             acknowledgement,

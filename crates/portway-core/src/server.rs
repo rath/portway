@@ -23,6 +23,9 @@ pub async fn serve(listener: TcpListener, router: Arc<Router>) {
     .await;
 }
 
+/// Maximum concurrent inbound HTTP connections accepted by `serve_with`.
+const MAX_CONNECTIONS: usize = 1024;
+
 /// A decompression sidecar in front of an ordinary single-upstream router.
 pub async fn serve_receiver(
     listener: TcpListener,
@@ -37,6 +40,14 @@ pub async fn serve_receiver(
             let router = Arc::clone(&router);
             let receiver = Arc::clone(&receiver);
             async move {
+                if request.method() == http::Method::GET
+                    && request.uri().path() == crate::router::HEALTH_PATH
+                {
+                    return crate::relay::json_response(
+                        http::StatusCode::OK,
+                        serde_json::json!({"status":"ok","mode":"receive"}),
+                    );
+                }
                 if request.method() == http::Method::GET
                     && request.uri().path() == crate::router::STATS_PATH
                 {
@@ -71,21 +82,30 @@ where
     let mut connections = tokio::task::JoinSet::new();
     loop {
         tokio::select! {
-            accepted=listener.accept()=> {
-                let (stream,_peer)=match accepted {
-                    Ok(pair)=>pair,
-                    Err(err)=> {telemetry.error(&format!("accept failed: {err}")); tokio::time::sleep(std::time::Duration::from_millis(100)).await; continue;}
+            accepted = listener.accept(), if connections.len() < MAX_CONNECTIONS => {
+                let (stream, _peer) = match accepted {
+                    Ok(pair) => pair,
+                    Err(err) => {
+                        telemetry.error(&format!("accept failed: {err}"));
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                        continue;
+                    }
                 };
-                let _=stream.set_nodelay(true); let handler=Arc::clone(&handler);
+                let _ = stream.set_nodelay(true);
+                let handler = Arc::clone(&handler);
                 connections.spawn(async move {
-                    let service=service_fn(move |request| {let handler=Arc::clone(&handler); async move {Ok::<_,Infallible>(handler(request).await)}});
-                    let _=hyper::server::conn::http1::Builder::new()
+                    let service = service_fn(move |request| {
+                        let handler = Arc::clone(&handler);
+                        async move { Ok::<_, Infallible>(handler(request).await) }
+                    });
+                    let _ = hyper::server::conn::http1::Builder::new()
                         .timer(TokioTimer::new())
                         .header_read_timeout(std::time::Duration::from_secs(30))
-                        .serve_connection(TokioIo::new(stream),service).await;
+                        .serve_connection(TokioIo::new(stream), service)
+                        .await;
                 });
             }
-            _=connections.join_next(), if !connections.is_empty()=>{}
+            _ = connections.join_next(), if !connections.is_empty() => {}
         }
     }
 }
