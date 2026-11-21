@@ -219,6 +219,12 @@ pub fn spawn(dir: &Path, retention_days: u32) -> Result<Store, String> {
     })
 }
 
+/// Cap WAL file size after checkpoints so bursts or large prunes do not leave
+/// an unbounded `-wal` file on disk.
+const JOURNAL_SIZE_LIMIT: i64 = 64 * 1024 * 1024;
+/// Retry delay when a retention prune hits transient SQLite contention.
+const PRUNE_RETRY: Duration = Duration::from_secs(60);
+
 pub struct Store {
     sender: SyncSender<Event>,
     stop: Arc<AtomicBool>,
@@ -233,6 +239,10 @@ impl Store {
 
     /// Drain what is queued, commit, join the thread.
     pub fn shutdown(mut self) {
+        self.stop_and_join();
+    }
+
+    fn stop_and_join(&mut self) {
         self.stop.store(true, Ordering::Release);
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
@@ -240,15 +250,50 @@ impl Store {
     }
 }
 
+impl Drop for Store {
+    fn drop(&mut self) {
+        self.stop_and_join();
+    }
+}
+
+fn resolve_db_path(db: &Path) -> Result<PathBuf, String> {
+    let directory = db
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    Ok(fs::canonicalize(directory)
+        .map_err(|err| format!("{}: {err}", db.display()))?
+        .join(db.file_name().ok_or("database path has no filename")?))
+}
+
 /// Open the recorded file for reading. Returns `None` when there is nothing
 /// recorded yet — no file, or a file without the schema — and never creates or
 /// migrates what it finds.
 pub fn open_existing(db: &Path) -> Result<Option<Connection>, String> {
-    if !db.is_file() {
-        return Ok(None);
+    match fs::symlink_metadata(db) {
+        Ok(meta) if meta.file_type().is_symlink() => {
+            return Err(format!(
+                "{}: refusing to follow symbolic link",
+                db.display()
+            ));
+        }
+        Ok(meta) if !meta.is_file() => return Ok(None),
+        Ok(_) => {}
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(format!("{}: {err}", db.display())),
     }
-    let connection = Connection::open_with_flags(db, OpenFlags::SQLITE_OPEN_READ_WRITE)
-        .map_err(|err| format!("{}: {err}", db.display()))?;
+    let actual = resolve_db_path(db)?;
+    let connection = Connection::open_with_flags(
+        &actual,
+        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    )
+    .or_else(|_| {
+        Connection::open_with_flags(
+            &actual,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+        )
+    })
+    .map_err(|err| format!("{}: {err}", db.display()))?;
     connection
         .busy_timeout(BUSY_TIMEOUT)
         .map_err(|err| format!("{}: {err}", db.display()))?;
@@ -261,13 +306,7 @@ pub fn open_existing(db: &Path) -> Result<Option<Connection>, String> {
 fn open_create(db: &Path) -> Result<Connection, String> {
     // SQLite's NOFOLLOW rejects links in any component. Resolve the directory
     // first (macOS /var is a link), while leaving the filename untrusted.
-    let directory = db
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or(Path::new("."));
-    let actual = fs::canonicalize(directory)
-        .map_err(|err| format!("{}: {err}", db.display()))?
-        .join(db.file_name().ok_or("database path has no filename")?);
+    let actual = resolve_db_path(db)?;
     restrict(&actual).map_err(|err| format!("{}: {err}", db.display()))?;
     let mut connection = Connection::open_with_flags(
         &actual,
@@ -290,6 +329,7 @@ fn open_create(db: &Path) -> Result<Connection, String> {
     connection
         .pragma_update(None, "synchronous", "NORMAL")
         .map_err(|err| format!("{}: {err}", db.display()))?;
+    let _ = connection.pragma_update(None, "journal_size_limit", JOURNAL_SIZE_LIMIT);
 
     let version = schema_version(&connection)?;
     if version > SCHEMA_VERSION {
@@ -298,29 +338,58 @@ fn open_create(db: &Path) -> Result<Connection, String> {
             db.display()
         ));
     }
+    if version < 0 {
+        return Err(format!(
+            "{}: invalid schema version {version}",
+            db.display()
+        ));
+    }
     if version < SCHEMA_VERSION {
-        // One transaction: the tables and the version that announces them move
-        // together, so a file caught halfway is left at the version it was.
+        // Take the write lock before re-reading `user_version` so two processes
+        // upgrading concurrently cannot both execute the same migration batch.
         let tx = connection
-            .transaction()
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(|err| format!("{}: {err}", db.display()))?;
-        let steps = match version {
-            0 => SCHEMA.to_string(),
-            1 => {
-                format!("{MIGRATE_V1}{MIGRATE_V2}{MIGRATE_V3}{MIGRATE_V4}{MIGRATE_V5}{MIGRATE_V6}")
-            }
-            2 => format!("{MIGRATE_V2}{MIGRATE_V3}{MIGRATE_V4}{MIGRATE_V5}{MIGRATE_V6}"),
-            3 => format!("{MIGRATE_V3}{MIGRATE_V4}{MIGRATE_V5}{MIGRATE_V6}"),
-            4 => format!("{MIGRATE_V4}{MIGRATE_V5}{MIGRATE_V6}"),
-            5 => format!("{MIGRATE_V5}{MIGRATE_V6}"),
-            _ => MIGRATE_V6.to_string(),
-        };
-        tx.execute_batch(&steps)
-            .map_err(|err| format!("{}: {err}", db.display()))?;
-        tx.pragma_update(None, "user_version", SCHEMA_VERSION)
-            .map_err(|err| format!("{}: {err}", db.display()))?;
-        tx.commit()
-            .map_err(|err| format!("{}: {err}", db.display()))?;
+        let version = schema_version(&tx)?;
+        if version > SCHEMA_VERSION {
+            return Err(format!(
+                "{} was written by a newer portway (schema {version}, this build reads {SCHEMA_VERSION})",
+                db.display()
+            ));
+        }
+        if version < 0 {
+            return Err(format!(
+                "{}: invalid schema version {version}",
+                db.display()
+            ));
+        }
+        if version < SCHEMA_VERSION {
+            let steps = match version {
+                0 => SCHEMA.to_string(),
+                1 => {
+                    format!(
+                        "{MIGRATE_V1}{MIGRATE_V2}{MIGRATE_V3}{MIGRATE_V4}{MIGRATE_V5}{MIGRATE_V6}"
+                    )
+                }
+                2 => format!("{MIGRATE_V2}{MIGRATE_V3}{MIGRATE_V4}{MIGRATE_V5}{MIGRATE_V6}"),
+                3 => format!("{MIGRATE_V3}{MIGRATE_V4}{MIGRATE_V5}{MIGRATE_V6}"),
+                4 => format!("{MIGRATE_V4}{MIGRATE_V5}{MIGRATE_V6}"),
+                5 => format!("{MIGRATE_V5}{MIGRATE_V6}"),
+                6 => MIGRATE_V6.to_string(),
+                other => {
+                    return Err(format!(
+                        "{}: unsupported schema version {other}",
+                        db.display()
+                    ));
+                }
+            };
+            tx.execute_batch(&steps)
+                .map_err(|err| format!("{}: {err}", db.display()))?;
+            tx.pragma_update(None, "user_version", SCHEMA_VERSION)
+                .map_err(|err| format!("{}: {err}", db.display()))?;
+            tx.commit()
+                .map_err(|err| format!("{}: {err}", db.display()))?;
+        }
     }
     Ok(connection)
 }
@@ -346,7 +415,7 @@ fn restrict(db: &Path) -> io::Result<()> {
     Ok(())
 }
 
-fn schema_version(connection: &Connection) -> Result<i64, String> {
+pub fn schema_version(connection: &Connection) -> Result<i64, String> {
     connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .map_err(|err| format!("user_version: {err}"))
@@ -404,19 +473,26 @@ fn writer(
 ) {
     // `None` is "not pruned yet", so `--retention-days` applies at startup and
     // every 24h after it.
-    let mut last_prune: Option<Instant> = None;
+    let mut next_prune: Option<Instant> = (retention_days > 0).then(Instant::now);
     loop {
-        let batch = collect(rx, POLL);
+        let (batch, disconnected) = collect(rx, POLL);
         if !batch.is_empty() {
             write_batch(&mut connection, &batch);
         }
-        if retention_days > 0 && last_prune.is_none_or(|at| at.elapsed() >= PRUNE_EVERY) {
-            prune(&connection, retention_days);
-            last_prune = Some(Instant::now());
+        if retention_days > 0 && next_prune.is_some_and(|at| Instant::now() >= at) {
+            let delay = if prune(&mut connection, retention_days) {
+                PRUNE_EVERY
+            } else {
+                PRUNE_RETRY
+            };
+            next_prune = Some(Instant::now() + delay);
         }
-        if stop.load(Ordering::Acquire) {
-            let batch = collect(rx, Duration::ZERO);
-            if !batch.is_empty() {
+        if disconnected || stop.load(Ordering::Acquire) {
+            loop {
+                let (batch, _) = collect(rx, Duration::ZERO);
+                if batch.is_empty() {
+                    break;
+                }
                 write_batch(&mut connection, &batch);
             }
             return;
@@ -426,14 +502,21 @@ fn writer(
 
 /// The first event, waiting up to `timeout`, then whatever else is already
 /// queued, bounded even when producers refill the queue while it is drained.
-fn collect(rx: &Receiver<Event>, timeout: Duration) -> Vec<Event> {
+fn collect(rx: &Receiver<Event>, timeout: Duration) -> (Vec<Event>, bool) {
     let mut batch = Vec::new();
     match rx.recv_timeout(timeout) {
         Ok(event) => batch.push(event),
-        Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => return batch,
+        Err(RecvTimeoutError::Timeout) => return (batch, false),
+        Err(RecvTimeoutError::Disconnected) => return (batch, true),
     }
     batch.extend(rx.try_iter().take(QUEUE - 1));
-    batch
+    (batch, false)
+}
+
+/// Clamp unsigned counters into SQLite's signed `i64` range so an extreme
+/// upstream value never wraps negative and corrupts aggregates.
+fn clamp_i64(value: u64) -> i64 {
+    i64::try_from(value).unwrap_or(i64::MAX)
 }
 
 /// One transaction per batch: a report reading the file sees whole batches,
@@ -463,47 +546,32 @@ fn insert(tx: &Transaction<'_>, batch: &[Event]) -> rusqlite::Result<()> {
                     ms(record.dns),
                     ms(record.tcp),
                     ms(record.tls),
-                    record.body_len as i64,
-                    record.wire_len as i64,
+                    clamp_i64(record.body_len),
+                    clamp_i64(record.wire_len),
                     record.coding.name().unwrap_or("identity"),
                     ms(record.upload),
                     record.ttfb * 1000.0,
-                    record.received as i64,
-                    record.received_wire as i64,
+                    clamp_i64(record.received),
+                    clamp_i64(record.received_wire),
                     record.upstream_encoding,
                     ms(record.download),
                     i64::from(record.complete),
-                    record.usage.map(|usage| usage.prompt as i64),
-                    record
-                        .usage
-                        .and_then(|usage| usage.cached)
-                        .map(|c| c as i64),
-                    record.usage.map(|usage| usage.completion as i64),
+                    record.usage.map(|usage| clamp_i64(usage.prompt)),
+                    record.usage.and_then(|usage| usage.cached).map(clamp_i64),
+                    record.usage.map(|usage| clamp_i64(usage.completion)),
                     record
                         .usage
                         .and_then(|usage| usage.reasoning)
-                        .map(|r| r as i64),
-                    record.received_agent as i64,
+                        .map(clamp_i64),
+                    clamp_i64(record.received_agent),
                     record.upstream,
                     record.tier,
                     ms(record.max_gap),
-                    record.usage.and_then(|u| u.cache_write).map(|n| n as i64),
-                    record
-                        .usage
-                        .and_then(|u| u.cache_write_5m)
-                        .map(|n| n as i64),
-                    record
-                        .usage
-                        .and_then(|u| u.cache_write_1h)
-                        .map(|n| n as i64),
-                    record
-                        .usage
-                        .and_then(|u| u.cache_write_30m)
-                        .map(|n| n as i64),
-                    record
-                        .usage
-                        .and_then(|u| u.cache_write_12h)
-                        .map(|n| n as i64),
+                    record.usage.and_then(|u| u.cache_write).map(clamp_i64),
+                    record.usage.and_then(|u| u.cache_write_5m).map(clamp_i64),
+                    record.usage.and_then(|u| u.cache_write_1h).map(clamp_i64),
+                    record.usage.and_then(|u| u.cache_write_30m).map(clamp_i64),
+                    record.usage.and_then(|u| u.cache_write_12h).map(clamp_i64),
                 ])?;
             }
             Event::Log { level, message, .. } => {
@@ -519,17 +587,31 @@ fn ms(seconds: Option<f64>) -> Option<f64> {
     seconds.map(|value| value * 1000.0)
 }
 
-fn prune(connection: &Connection, retention_days: u32) {
+fn prune(connection: &mut Connection, retention_days: u32) -> bool {
     let cutoff = logfmt::epoch() - f64::from(retention_days) * 86_400.0;
+    let tx = match connection.transaction() {
+        Ok(tx) => tx,
+        Err(err) => {
+            failure(&err);
+            return false;
+        }
+    };
     let mut removed = 0;
     for table in ["requests", "logs"] {
-        match connection.execute(
+        match tx.execute(
             &format!("DELETE FROM {table} WHERE ts_unix < ?1"),
             params![cutoff],
         ) {
             Ok(rows) => removed += rows,
-            Err(err) => failure(&err),
+            Err(err) => {
+                failure(&err);
+                return false;
+            }
         }
+    }
+    if let Err(err) = tx.commit() {
+        failure(&err);
+        return false;
     }
     if removed > 0 {
         logfmt::from_store(
@@ -537,6 +619,7 @@ fn prune(connection: &Connection, retention_days: u32) {
             &format!("retention: deleted {removed} rows older than {retention_days}d"),
         );
     }
+    true
 }
 
 /// A failure here goes back to the dashboard and the console, never into the
@@ -569,8 +652,12 @@ mod tests {
                 })
                 .unwrap();
         }
-        assert_eq!(collect(&receiver, Duration::ZERO).len(), QUEUE);
-        assert_eq!(collect(&receiver, Duration::ZERO).len(), 7);
+        assert_eq!(collect(&receiver, Duration::ZERO).0.len(), QUEUE);
+        assert_eq!(collect(&receiver, Duration::ZERO).0.len(), 7);
+        drop(sender);
+        let (rest, disconnected) = collect(&receiver, Duration::ZERO);
+        assert!(rest.is_empty());
+        assert!(disconnected);
     }
 
     /// One directory per test: the writer thread and the assertions never
@@ -995,5 +1082,30 @@ mod tests {
 
         let err = data_dir_from(None, None, None).unwrap_err();
         assert!(err.contains("--data-dir"), "{err}");
+    }
+
+    #[test]
+    fn dropping_store_drains_events_and_joins_writer_without_shutdown() {
+        let dir = dir("drop");
+        {
+            let store = spawn(&dir, 0).unwrap();
+            store
+                .sender()
+                .send(Event::Log {
+                    stamp: "00:00:00".into(),
+                    level: Level::Info,
+                    message: "flushed on drop".into(),
+                })
+                .unwrap();
+        }
+        let db = open_existing(&dir.join(DB_FILE)).unwrap().unwrap();
+        let count: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM logs WHERE message = 'flushed on drop'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
     }
 }

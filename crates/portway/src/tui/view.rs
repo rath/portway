@@ -3593,6 +3593,7 @@ mod tests {
         }
         state.tick_recorded(&watch::Window {
             traffic: vec![(1024, 512); 3600],
+            end: 3_600,
             coverage: Duration::from_secs(1_830),
         });
 

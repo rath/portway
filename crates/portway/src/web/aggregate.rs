@@ -326,7 +326,7 @@ fn sample(shared: &Shared, feed: &Feed) {
             }
         }
         Feed::Recorded(window) => {
-            let window = window.lock().expect("watch window").clone();
+            let window = window.lock().unwrap_or_else(|e| e.into_inner()).clone();
             shared
                 .inner
                 .lock()

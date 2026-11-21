@@ -410,7 +410,9 @@ fn tick(state: &mut State, feed: &Feed) {
         }
         Feed::Live(router) => state.tick(router),
         Feed::Recorded { window, live } => {
-            state.tick_recorded(&window.lock().unwrap());
+            let guard = window.lock().unwrap_or_else(|e| e.into_inner());
+            state.tick_recorded(&guard);
+            drop(guard);
             let snapshot = live.borrow().clone();
             state.apply_live(snapshot.as_deref());
         }

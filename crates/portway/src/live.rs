@@ -238,6 +238,7 @@ impl Server {
                                 continue;
                             }
                         };
+                        while clients.try_join_next().is_some() {}
                         if clients.len() >= MAX_CLIENTS || same_user(&stream).is_err() {
                             continue;
                         }
@@ -322,9 +323,7 @@ impl Target {
         self.0.iter().any(|address| {
             address.port() == listen.port()
                 && (address.ip() == listen.ip()
-                    || (listen.ip().is_unspecified()
-                        && address.ip().is_loopback()
-                        && address.is_ipv4() == listen.is_ipv4()))
+                    || (listen.ip().is_unspecified() && address.is_ipv4() == listen.is_ipv4()))
         })
     }
 }
@@ -408,7 +407,14 @@ impl Client {
                 let target = match Target::resolve(&host, port).await {
                     Ok(target) => target,
                     Err(_) => {
-                        sender.send_replace(None);
+                        sender.send_if_modified(|current| {
+                            if current.is_some() {
+                                *current = None;
+                                true
+                            } else {
+                                false
+                            }
+                        });
                         tokio::time::sleep(RETRY).await;
                         continue;
                     }
@@ -417,7 +423,13 @@ impl Client {
                     let started = tokio::time::Instant::now();
                     let snapshot = fetch(&dir, &target).await.ok().map(Arc::new);
                     let available = snapshot.is_some();
-                    sender.send_replace(snapshot);
+                    sender.send_if_modified(|current| match (&current, &snapshot) {
+                        (None, None) => false,
+                        _ => {
+                            *current = snapshot;
+                            true
+                        }
+                    });
                     let interval = if available { POLL } else { RETRY };
                     tokio::time::sleep_until(started + interval).await;
                     if !available {
@@ -616,7 +628,11 @@ mod tests {
         fs::remove_file(dir.0.join(SOCKET_FILE)).unwrap();
 
         let good = serde_json::json!({"version": VERSION, "instance": "a".repeat(32),
-            "listen": address(), "total": 0, "models": {}, "flights": []});
+            "listen": address(), "total": 0, "upstreams": {}, "flights": []});
+        let task = reply(&dir.0, serde_json::to_vec(&good).unwrap()).await;
+        assert!(fetch(&dir.0, &target()).await.is_ok(), "{good}");
+        task.await.unwrap();
+        fs::remove_file(dir.0.join(SOCKET_FILE)).unwrap();
         for (field, value) in [
             ("version", serde_json::json!(VERSION + 1)),
             ("instance", serde_json::json!("")),

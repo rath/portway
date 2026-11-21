@@ -92,39 +92,55 @@ const OLDEST: &str = "SELECT MIN(ts_unix) FROM requests WHERE ts_unix >= ?1";
 /// than this can.
 pub fn forwarder_on(host: &str, port: u16) -> bool {
     use std::io::{Read, Write};
+    use std::net::ToSocketAddrs;
 
     let host = match host {
         "0.0.0.0" => "127.0.0.1",
         "::" | "[::]" => "::1",
-        other => other,
+        other => other.trim_start_matches('[').trim_end_matches(']'),
     };
-    let Ok(ip) = host.trim_start_matches('[').trim_end_matches(']').parse() else {
+    let Ok(addresses) = (host, port).to_socket_addrs() else {
         return false;
     };
-    let address = std::net::SocketAddr::new(ip, port);
-    let Ok(mut socket) = std::net::TcpStream::connect_timeout(&address, PROBE) else {
-        return false;
-    };
-    let _ = socket.set_read_timeout(Some(PROBE));
-    let _ = socket.set_write_timeout(Some(PROBE));
-    let request = format!(
-        "GET {stats} HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n\r\n",
-        stats = crate::router::STATS_PATH,
-    );
-    if socket.write_all(request.as_bytes()).is_err() {
-        return false;
-    }
-    // Only enough to see a status line and the start of the JSON body.
-    let mut answer = Vec::new();
-    let mut chunk = [0u8; 512];
-    while answer.len() < 4096 {
-        match socket.read(&mut chunk) {
-            Ok(0) | Err(_) => break,
-            Ok(read) => answer.extend_from_slice(&chunk[..read]),
+    for address in addresses {
+        let Ok(mut socket) = std::net::TcpStream::connect_timeout(&address, PROBE) else {
+            continue;
+        };
+        let deadline = Instant::now() + PROBE;
+        let _ = socket.set_write_timeout(Some(PROBE));
+        let request = format!(
+            "GET {stats} HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n\r\n",
+            stats = crate::router::STATS_PATH,
+        );
+        if socket.write_all(request.as_bytes()).is_err() {
+            continue;
+        }
+        // Only enough to see a status line and the start of the JSON body,
+        // bounded by one overall deadline across reads.
+        let mut answer = Vec::new();
+        let mut chunk = [0u8; 512];
+        while answer.len() < 4096 {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            let _ = socket.set_read_timeout(Some(remaining));
+            match socket.read(&mut chunk) {
+                Ok(0) | Err(_) => break,
+                Ok(read) => answer.extend_from_slice(&chunk[..read]),
+            }
+        }
+        let text = String::from_utf8_lossy(&answer);
+        let status_ok = text.starts_with("HTTP/1.1 200") || text.starts_with("HTTP/1.0 200");
+        if status_ok
+            && text
+                .split_once("\r\n\r\n")
+                .is_some_and(|(_, body)| body.contains("\"upstreams\""))
+        {
+            return true;
         }
     }
-    let text = String::from_utf8_lossy(&answer);
-    text.starts_with("HTTP/1.") && text.contains("\"upstreams\"")
+    false
 }
 
 /// What the dashboard's 250ms tick reads while it is not the one serving: the
@@ -136,14 +152,17 @@ pub fn forwarder_on(host: &str, port: u16) -> bool {
 pub struct Window {
     /// Bytes per second, `(up, down)`, oldest first.
     pub traffic: Vec<(u64, u64)>,
+    /// Epoch second represented by the newest bucket in `traffic`.
+    pub end: u64,
     /// Age of the oldest row still inside the window.
     pub coverage: Duration,
 }
 
 /// The reading side of a database: one connection, the schema's own column
-/// list, and the row ids the tail picks up from.
+/// list, and the file identity used to detect replacement.
 struct Reader {
     connection: Connection,
+    identity: Option<(u64, u64)>,
     tokens: bool,
     agent: bool,
     upstream: bool,
@@ -219,25 +238,28 @@ impl Stored {
     }
 }
 
+fn file_identity(path: &Path) -> Option<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = std::fs::symlink_metadata(path).ok()?;
+    Some((meta.dev(), meta.ino()))
+}
+
 impl Reader {
     fn open(db: &Path) -> Result<Option<Reader>, String> {
+        let identity = file_identity(db);
         let Some(connection) = store::open_existing(db)? else {
             return Ok(None);
         };
-        let tokens = store::has_token_columns(&connection)?;
-        let agent = store::has_agent_column(&connection)?;
-        let upstream = store::has_upstream_column(&connection)?;
-        let tier = store::has_tier_column(&connection)?;
-        let gap = store::has_gap_column(&connection)?;
-        let writes = store::has_write_columns(&connection)?;
+        let version = store::schema_version(&connection)?;
         Ok(Some(Reader {
             connection,
-            tokens,
-            agent,
-            upstream,
-            tier,
-            gap,
-            writes,
+            identity,
+            tokens: version >= 2,
+            agent: version >= 3,
+            upstream: version >= 4,
+            tier: version >= 5,
+            gap: version >= 6,
+            writes: version >= 7,
         }))
     }
 
@@ -249,18 +271,22 @@ impl Reader {
         ))
     }
 
-    /// What arrived since the last poll, by row id.
+    /// What arrived since the last poll, by row id (or within `WINDOW` if the
+    /// cursor row was deleted by retention/rotation).
     fn tail(&self, requests: Cursor, logs: Cursor) -> Result<(Vec<Stored>, Vec<Stored>), String> {
         let snapshot = self.connection.unchecked_transaction().map_err(db_error)?;
-        let rows = (
-            self.requests(Key::After(self.resume("requests", requests)?))?,
-            self.logs(Key::After(self.resume("logs", logs)?))?,
-        );
+        let cutoff = logfmt::epoch() - WINDOW.as_secs_f64();
+        let req_key = self.resume("requests", requests, cutoff)?;
+        let log_key = self.resume("logs", logs, cutoff)?;
+        let rows = (self.requests(req_key)?, self.logs(log_key)?);
         snapshot.commit().map_err(db_error)?;
         Ok(rows)
     }
 
-    fn resume(&self, table: &str, cursor: Cursor) -> Result<i64, String> {
+    fn resume(&self, table: &str, cursor: Cursor, cutoff: f64) -> Result<Key, String> {
+        if cursor.id == 0 {
+            return Ok(Key::Since(cutoff));
+        }
         let exists: bool = self
             .connection
             .query_row(
@@ -269,7 +295,11 @@ impl Reader {
                 |row| row.get(0),
             )
             .map_err(db_error)?;
-        Ok(if exists { cursor.id } else { 0 })
+        Ok(if exists {
+            Key::After(cursor.id)
+        } else {
+            Key::Since(cutoff)
+        })
     }
 
     fn requests(&self, key: Key) -> Result<Vec<Stored>, String> {
@@ -312,14 +342,14 @@ impl Reader {
                         dns: seconds(row.get(6)?),
                         tcp: seconds(row.get(7)?),
                         tls: seconds(row.get(8)?),
-                        body_len: row.get::<_, i64>(9)? as u64,
-                        wire_len: row.get::<_, i64>(10)? as u64,
+                        body_len: row.get::<_, i64>(9)?.max(0) as u64,
+                        wire_len: row.get::<_, i64>(10)?.max(0) as u64,
                         coding: Coding::from_stored(&row.get::<_, String>(11)?),
                         upload: seconds(row.get(12)?),
                         ttfb: row.get::<_, f64>(13)? / 1000.0,
-                        received: row.get::<_, i64>(14)? as u64,
-                        received_wire: row.get::<_, i64>(15)? as u64,
-                        received_agent: row.get::<_, i64>(23)? as u64,
+                        received: row.get::<_, i64>(14)?.max(0) as u64,
+                        received_wire: row.get::<_, i64>(15)?.max(0) as u64,
+                        received_agent: row.get::<_, i64>(23)?.max(0) as u64,
                         upstream_encoding: row.get(16)?,
                         agent_encoding: None,
                         download: seconds(row.get(17)?),
@@ -329,15 +359,25 @@ impl Reader {
                         // applies to what the engine reported.
                         usage: match (prompt, completion) {
                             (Some(prompt), Some(completion)) => Some(Usage {
-                                prompt: prompt as u64,
-                                cached: row.get::<_, Option<i64>>(20)?.map(|n| n as u64),
-                                completion: completion as u64,
-                                reasoning: row.get::<_, Option<i64>>(22)?.map(|n| n as u64),
-                                cache_write: row.get::<_, Option<i64>>(27)?.map(|n| n as u64),
-                                cache_write_5m: row.get::<_, Option<i64>>(28)?.map(|n| n as u64),
-                                cache_write_1h: row.get::<_, Option<i64>>(29)?.map(|n| n as u64),
-                                cache_write_30m: row.get::<_, Option<i64>>(30)?.map(|n| n as u64),
-                                cache_write_12h: row.get::<_, Option<i64>>(31)?.map(|n| n as u64),
+                                prompt: prompt.max(0) as u64,
+                                cached: row.get::<_, Option<i64>>(20)?.map(|n| n.max(0) as u64),
+                                completion: completion.max(0) as u64,
+                                reasoning: row.get::<_, Option<i64>>(22)?.map(|n| n.max(0) as u64),
+                                cache_write: row
+                                    .get::<_, Option<i64>>(27)?
+                                    .map(|n| n.max(0) as u64),
+                                cache_write_5m: row
+                                    .get::<_, Option<i64>>(28)?
+                                    .map(|n| n.max(0) as u64),
+                                cache_write_1h: row
+                                    .get::<_, Option<i64>>(29)?
+                                    .map(|n| n.max(0) as u64),
+                                cache_write_30m: row
+                                    .get::<_, Option<i64>>(30)?
+                                    .map(|n| n.max(0) as u64),
+                                cache_write_12h: row
+                                    .get::<_, Option<i64>>(31)?
+                                    .map(|n| n.max(0) as u64),
                             }),
                             _ => None,
                         },
@@ -371,17 +411,20 @@ impl Reader {
 
     /// The per-second bytes of the window, oldest first, one bucket per second
     /// ending with the one this sample was taken in.
-    fn traffic(&self, cutoff: f64, seconds: usize) -> Result<Vec<(u64, u64)>, String> {
-        let last = logfmt::epoch() as u64;
-        let first = last - (seconds as u64 - 1);
+    fn traffic(&self, cutoff: f64, seconds: usize) -> Result<(Vec<(u64, u64)>, u64), String> {
+        let last = logfmt::epoch().max(0.0) as u64;
+        if seconds == 0 {
+            return Ok((Vec::new(), last));
+        }
+        let first = last.saturating_sub(seconds as u64 - 1);
         let mut buckets = vec![(0u64, 0u64); seconds];
         let mut statement = self.connection.prepare(SECONDS).map_err(db_error)?;
         let rows = statement
             .query_map([cutoff], |row| {
                 Ok((
-                    row.get::<_, i64>(0)? as u64,
-                    row.get::<_, i64>(1)? as u64,
-                    row.get::<_, i64>(2)? as u64,
+                    row.get::<_, i64>(0)?.max(0) as u64,
+                    row.get::<_, i64>(1)?.max(0) as u64,
+                    row.get::<_, i64>(2)?.max(0) as u64,
                 ))
             })
             .map_err(db_error)?;
@@ -392,7 +435,7 @@ impl Reader {
                 _ => {}
             }
         }
-        Ok(buckets)
+        Ok((buckets, last))
     }
 
     /// How far back the window reaches, in seconds.
@@ -467,10 +510,20 @@ impl Watch {
 
     /// Stop polling and join the thread.
     pub fn shutdown(mut self) {
+        self.stop_and_join();
+    }
+
+    fn stop_and_join(&mut self) {
         self.stop.store(true, Ordering::Release);
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
+    }
+}
+
+impl Drop for Watch {
+    fn drop(&mut self) {
+        self.stop_and_join();
     }
 }
 
@@ -483,6 +536,7 @@ impl Watch {
 pub fn spawn(db: &Path, events: Sender<Event>) -> Result<Watch, String> {
     let reader = Reader::open(db)?;
     let start = Instant::now();
+    let window = Arc::new(Mutex::new(Window::default()));
     let (mut requests, mut logs, request_id, log_id) = match &reader {
         Some(reader) => {
             let snapshot = reader
@@ -492,7 +546,14 @@ pub fn spawn(db: &Path, events: Sender<Event>) -> Result<Watch, String> {
             let cutoff = logfmt::epoch() - WINDOW.as_secs_f64();
             let (requests, logs) = reader.since(cutoff)?;
             let (request_id, log_id) = reader.latest()?;
+            let (traffic, end) = reader.traffic(cutoff, WINDOW.as_secs() as usize)?;
+            let coverage = reader.coverage(cutoff)?;
             snapshot.commit().map_err(db_error)?;
+            *window.lock().unwrap_or_else(|e| e.into_inner()) = Window {
+                traffic,
+                end,
+                coverage,
+            };
             (requests, logs, request_id, log_id)
         }
         None => (Vec::new(), Vec::new(), Cursor::default(), Cursor::default()),
@@ -506,14 +567,18 @@ pub fn spawn(db: &Path, events: Sender<Event>) -> Result<Watch, String> {
         }
     }
 
-    let window = Arc::new(Mutex::new(Window::default()));
+    let db_path = db.to_path_buf();
     let stop = Arc::new(AtomicBool::new(false));
     let thread = std::thread::Builder::new()
         .name("watch".to_string())
         .spawn({
             let window = Arc::clone(&window);
             let stop = Arc::clone(&stop);
-            move || poll(reader, events, &window, &stop, start, request_id, log_id)
+            move || {
+                poll(
+                    db_path, reader, events, &window, &stop, start, request_id, log_id,
+                )
+            }
         })
         .map_err(|err| format!("watch thread: {err}"))?;
     Ok(Watch {
@@ -529,19 +594,23 @@ fn sample(reader: &Reader, window: &Mutex<Window>) {
     let cutoff = logfmt::epoch() - WINDOW.as_secs_f64();
     let sample = reader
         .traffic(cutoff, WINDOW.as_secs() as usize)
-        .and_then(|traffic| {
-            reader
-                .coverage(cutoff)
-                .map(|coverage| Window { traffic, coverage })
+        .and_then(|(traffic, end)| {
+            reader.coverage(cutoff).map(|coverage| Window {
+                traffic,
+                end,
+                coverage,
+            })
         });
     match sample {
-        Ok(fresh) => *window.lock().unwrap() = fresh,
+        Ok(fresh) => *window.lock().unwrap_or_else(|e| e.into_inner()) = fresh,
         Err(message) => logfmt::error(&format!("watching: {message}")),
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn poll(
-    reader: Option<Reader>,
+    db: std::path::PathBuf,
+    mut reader: Option<Reader>,
     events: Sender<Event>,
     window: &Mutex<Window>,
     stop: &AtomicBool,
@@ -549,25 +618,59 @@ fn poll(
     mut request_id: Cursor,
     mut log_id: Cursor,
 ) {
-    let Some(reader) = reader else {
-        // Nothing recorded, and a reader may not create what it reads. Said
-        // once, on the screen the caller is about to look at.
+    let mut warned_missing = false;
+    if reader.is_none() {
+        // Nothing recorded yet, and a reader may not create what it reads.
+        // Warn once and keep checking so a freshly initialized DB is picked up.
         logfmt::warn("no database to read yet: is the forwarder using the same --data-dir?");
-        while !stop.load(Ordering::Acquire) {
-            std::thread::sleep(POLL);
-        }
-        return;
-    };
+        warned_missing = true;
+    }
 
-    // Sampled before the first sleep: the dashboard's first frame then has the
-    // hour on it, not an empty chart the poll would fill a second later.
-    sample(&reader, window);
     let mut last = start;
     while !stop.load(Ordering::Acquire) {
         std::thread::sleep(POLL.saturating_sub(last.elapsed()));
         last = Instant::now();
+        if stop.load(Ordering::Acquire) {
+            break;
+        }
 
-        let (mut fresh, mut fresh_logs) = match reader.tail(request_id, log_id) {
+        // Reopen if the database just appeared or was replaced/rotated on disk.
+        let disk_id = file_identity(&db);
+        let replaced = match (&reader, disk_id) {
+            (None, Some(_)) => true,
+            (Some(current), Some(id)) if current.identity != Some(id) => true,
+            (Some(_), None) => true,
+            _ => false,
+        };
+        if replaced {
+            match Reader::open(&db) {
+                Ok(Some(fresh)) => {
+                    reader = Some(fresh);
+                    request_id = Cursor::default();
+                    log_id = Cursor::default();
+                    warned_missing = false;
+                }
+                Ok(None) => {
+                    reader = None;
+                    if !warned_missing {
+                        logfmt::warn(
+                            "no database to read yet: is the forwarder using the same --data-dir?",
+                        );
+                        warned_missing = true;
+                    }
+                    continue;
+                }
+                Err(message) => {
+                    logfmt::error(&format!("watching: {message}"));
+                    continue;
+                }
+            }
+        }
+        let Some(current) = reader.as_ref() else {
+            continue;
+        };
+
+        let (mut fresh, mut fresh_logs) = match current.tail(request_id, log_id) {
             Ok(rows) => rows,
             Err(message) => {
                 // A failed read is a dashboard line, never the end of the
@@ -593,7 +696,7 @@ fn poll(
             }
         }
 
-        sample(&reader, window);
+        sample(current, window);
     }
 }
 
@@ -831,7 +934,7 @@ mod tests {
         recorder.shutdown();
 
         let reader = Reader::open(&dir.join(store::DB_FILE)).unwrap().unwrap();
-        let buckets = reader
+        let (buckets, _end) = reader
             .traffic(logfmt::epoch() - WINDOW.as_secs_f64(), 60)
             .unwrap();
         let lag = (logfmt::epoch() as u64 - start) as usize;

@@ -28,21 +28,21 @@ const AGGREGATE: &str = "SELECT
     SUM(status >= 500),
     SUM(complete = 0),
     SUM(dns_ms IS NULL AND tcp_ms IS NULL AND tls_ms IS NULL),
-    SUM(body_len),
-    SUM(wire_len),
-    SUM(received),
-    SUM(received_wire)
+    TOTAL(body_len),
+    TOTAL(wire_len),
+    TOTAL(received),
+    TOTAL(received_wire)
   FROM requests
-  WHERE ts_unix >= ?1 AND (?2 IS NULL OR model = ?2)
+  WHERE ts_unix >= ?1 AND ts_unix <= ?2 AND (?3 IS NULL OR model = ?3)
   GROUP BY model
   ORDER BY COUNT(*) DESC";
 
 const TTFB_SAMPLES: &str = "SELECT model, ttfb_ms FROM requests
-  WHERE ts_unix >= ?1 AND (?2 IS NULL OR model = ?2) AND ttfb_ms IS NOT NULL
+  WHERE ts_unix >= ?1 AND ts_unix <= ?2 AND (?3 IS NULL OR model = ?3) AND ttfb_ms IS NOT NULL
   ORDER BY model, ttfb_ms";
 
 const UPLOAD_SAMPLES: &str = "SELECT model, upload_ms FROM requests
-  WHERE ts_unix >= ?1 AND (?2 IS NULL OR model = ?2) AND upload_ms IS NOT NULL
+  WHERE ts_unix >= ?1 AND ts_unix <= ?2 AND (?3 IS NULL OR model = ?3) AND upload_ms IS NOT NULL
   ORDER BY model, upload_ms";
 
 /// A fresh dial's handshake, the way the log line adds it up: a phase that
@@ -51,17 +51,17 @@ const UPLOAD_SAMPLES: &str = "SELECT model, upload_ms FROM requests
 const CONNECT_SAMPLES: &str = "SELECT model,
     COALESCE(dns_ms, 0) + COALESCE(tcp_ms, 0) + COALESCE(tls_ms, 0)
   FROM requests
-  WHERE ts_unix >= ?1 AND (?2 IS NULL OR model = ?2)
+  WHERE ts_unix >= ?1 AND ts_unix <= ?2 AND (?3 IS NULL OR model = ?3)
     AND NOT (dns_ms IS NULL AND tcp_ms IS NULL AND tls_ms IS NULL)
   ORDER BY model";
 
 const TROUBLE_REQUESTS: &str = "SELECT ts_unix, status, model, method, path, received, complete
   FROM requests
-  WHERE ts_unix >= ?1 AND (?2 IS NULL OR model = ?2) AND (status >= 400 OR complete = 0)
+  WHERE ts_unix >= ?1 AND ts_unix <= ?2 AND (?3 IS NULL OR model = ?3) AND (status >= 400 OR complete = 0)
   ORDER BY ts_unix DESC LIMIT 20";
 
 const TROUBLE_LOGS: &str = "SELECT ts_unix, level, message FROM logs
-  WHERE ts_unix >= ?1 AND level >= 1
+  WHERE ts_unix >= ?1 AND ts_unix <= ?2 AND level >= 1
   ORDER BY ts_unix DESC LIMIT 20";
 
 /// The recorded window, read once and kept as data so that the text below
@@ -139,10 +139,15 @@ pub fn load(db: &Path, since: Duration, model: Option<&str>) -> Result<Report, S
     let to = logfmt::epoch();
     let from = to - since.as_secs_f64();
 
-    let aggregates = load_aggregates(&connection, from, model)?;
-    let ttfb = Samples::load(&connection, TTFB_SAMPLES, from, model)?;
-    let upload = Samples::load(&connection, UPLOAD_SAMPLES, from, model)?;
-    let connect = Samples::load(&connection, CONNECT_SAMPLES, from, model)?;
+    // One read transaction holds a consistent WAL snapshot across aggregates,
+    // latency samples, and trouble lines.
+    let snapshot = connection.unchecked_transaction().map_err(db_error)?;
+    let aggregates = load_aggregates(&snapshot, from, to, model)?;
+    let ttfb = Samples::load(&snapshot, TTFB_SAMPLES, from, to, model)?;
+    let upload = Samples::load(&snapshot, UPLOAD_SAMPLES, from, to, model)?;
+    let connect = Samples::load(&snapshot, CONNECT_SAMPLES, from, to, model)?;
+    let trouble_lines = trouble(&snapshot, from, to, model)?;
+    snapshot.commit().map_err(db_error)?;
 
     let total = (!aggregates.is_empty()).then(|| {
         Row::new(
@@ -167,7 +172,7 @@ pub fn load(db: &Path, since: Duration, model: Option<&str>) -> Result<Report, S
         to,
         rows,
         total,
-        trouble: trouble(&connection, from, model)?,
+        trouble: trouble_lines,
     })
 }
 
@@ -237,14 +242,26 @@ pub struct Aggregate {
     pub received_wire: i64,
 }
 
+fn total_i64(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<i64> {
+    let value: f64 = row.get(index)?;
+    if !value.is_finite() || value <= 0.0 {
+        Ok(0)
+    } else if value >= i64::MAX as f64 {
+        Ok(i64::MAX)
+    } else {
+        Ok(value as i64)
+    }
+}
+
 fn load_aggregates(
     connection: &Connection,
-    cutoff: f64,
+    from: f64,
+    to: f64,
     model: Option<&str>,
 ) -> Result<Vec<Aggregate>, String> {
     let mut statement = connection.prepare(AGGREGATE).map_err(db_error)?;
     let rows = statement
-        .query_map(params![cutoff, model], |row| {
+        .query_map(params![from, to, model], |row| {
             Ok(Aggregate {
                 model: row.get(0)?,
                 requests: row.get(1)?,
@@ -254,10 +271,10 @@ fn load_aggregates(
                 server: row.get(5)?,
                 truncated: row.get(6)?,
                 reused: row.get(7)?,
-                body: row.get(8)?,
-                wire: row.get(9)?,
-                received: row.get(10)?,
-                received_wire: row.get(11)?,
+                body: total_i64(row, 8)?,
+                wire: total_i64(row, 9)?,
+                received: total_i64(row, 10)?,
+                received_wire: total_i64(row, 11)?,
             })
         })
         .map_err(db_error)?;
@@ -276,18 +293,22 @@ impl Samples {
     fn load(
         connection: &Connection,
         sql: &str,
-        cutoff: f64,
+        from: f64,
+        to: f64,
         model: Option<&str>,
     ) -> Result<Self, String> {
         let mut samples = Samples::default();
         let mut statement = connection.prepare(sql).map_err(db_error)?;
         let rows = statement
-            .query_map(params![cutoff, model], |row| {
+            .query_map(params![from, to, model], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
             })
             .map_err(db_error)?;
         for row in rows {
             let (model, value) = row.map_err(db_error)?;
+            if !value.is_finite() {
+                continue;
+            }
             samples.per_model.entry(model).or_default().push(value);
             samples.pooled.push(value);
         }
@@ -325,9 +346,24 @@ fn volume_table(rows: &[&Row]) -> String {
     table(&header, &rows)
 }
 
+fn sanitize(text: &str) -> String {
+    if !text.chars().any(char::is_control) {
+        return text.to_string();
+    }
+    let mut out = String::with_capacity(text.len());
+    for ch in text.chars() {
+        if ch.is_control() {
+            out.push(' ');
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
 fn volume_row(row: &Aggregate) -> Vec<String> {
     [
-        row.model.clone(),
+        sanitize(&row.model),
         row.requests.to_string(),
         row.ok.to_string(),
         row.redirect.to_string(),
@@ -355,17 +391,17 @@ fn totals(aggregates: &[Aggregate]) -> Aggregate {
         received_wire: 0,
     };
     for row in aggregates {
-        total.requests += row.requests;
-        total.ok += row.ok;
-        total.redirect += row.redirect;
-        total.client += row.client;
-        total.server += row.server;
-        total.truncated += row.truncated;
-        total.reused += row.reused;
-        total.body += row.body;
-        total.wire += row.wire;
-        total.received += row.received;
-        total.received_wire += row.received_wire;
+        total.requests = total.requests.saturating_add(row.requests);
+        total.ok = total.ok.saturating_add(row.ok);
+        total.redirect = total.redirect.saturating_add(row.redirect);
+        total.client = total.client.saturating_add(row.client);
+        total.server = total.server.saturating_add(row.server);
+        total.truncated = total.truncated.saturating_add(row.truncated);
+        total.reused = total.reused.saturating_add(row.reused);
+        total.body = total.body.saturating_add(row.body);
+        total.wire = total.wire.saturating_add(row.wire);
+        total.received = total.received.saturating_add(row.received);
+        total.received_wire = total.received_wire.saturating_add(row.received_wire);
     }
     total
 }
@@ -376,7 +412,8 @@ fn percent_saved(raw: i64, wire: i64) -> String {
     if raw <= 0 {
         "-".to_string()
     } else {
-        format!("{}%", (raw - wire).max(0) * 100 / raw)
+        let saved = (i128::from(raw) - i128::from(wire.max(0))).max(0);
+        format!("{}%", saved * 100 / i128::from(raw))
     }
 }
 
@@ -402,12 +439,12 @@ fn timing_table(rows: &[&Row]) -> String {
 fn timing_row(row: &Row) -> Vec<String> {
     let counts = &row.counts;
     [
-        counts.model.clone(),
-        logfmt::human(counts.body as u64),
-        logfmt::human(counts.wire as u64),
+        sanitize(&counts.model),
+        logfmt::human(counts.body.max(0) as u64),
+        logfmt::human(counts.wire.max(0) as u64),
         row.saved(),
-        logfmt::human(counts.received as u64),
-        logfmt::human(counts.received_wire as u64),
+        logfmt::human(counts.received.max(0) as u64),
+        logfmt::human(counts.received_wire.max(0) as u64),
         row.down_saved(),
         ms(row.ttfb_p50),
         ms(row.ttfb_p95),
@@ -477,17 +514,24 @@ impl Trouble {
                 let cut = if *complete {
                     String::new()
                 } else {
-                    format!("  (truncated after {})", logfmt::human(*received as u64))
+                    format!(
+                        "  (truncated after {})",
+                        logfmt::human((*received).max(0) as u64)
+                    )
                 };
                 format!(
-                    "{}  {status}  {model:<model_width$}  {method} {path}{cut}",
-                    logfmt::datetime(*ts)
+                    "{}  {status}  {:<model_width$}  {} {}{cut}",
+                    logfmt::datetime(*ts),
+                    sanitize(model),
+                    sanitize(method),
+                    sanitize(path),
                 )
             }
             Trouble::Log { ts, level, message } => format!(
-                "{}  {}  {message}",
+                "{}  {}  {}",
                 logfmt::datetime(*ts),
-                logfmt::Level::from_stored(*level).name()
+                logfmt::Level::from_stored(*level).name(),
+                sanitize(message),
             ),
         }
     }
@@ -497,14 +541,15 @@ impl Trouble {
 /// most recent `TROUBLE` lines — the tail is the part that is still news.
 fn trouble(
     connection: &Connection,
-    cutoff: f64,
+    from: f64,
+    to: f64,
     model: Option<&str>,
 ) -> Result<Vec<TroubleLine>, String> {
     let mut entries: Vec<Trouble> = Vec::new();
 
     let mut statement = connection.prepare(TROUBLE_REQUESTS).map_err(db_error)?;
     let rows = statement
-        .query_map(params![cutoff, model], |row| {
+        .query_map(params![from, to, model], |row| {
             Ok(Trouble::Request {
                 ts: row.get(0)?,
                 status: row.get(1)?,
@@ -522,7 +567,7 @@ fn trouble(
 
     let mut statement = connection.prepare(TROUBLE_LOGS).map_err(db_error)?;
     let rows = statement
-        .query_map(params![cutoff], |row| {
+        .query_map(params![from, to], |row| {
             Ok(Trouble::Log {
                 ts: row.get(0)?,
                 level: row.get(1)?,
@@ -564,7 +609,7 @@ fn table(header: &[&str], rows: &[Vec<String>]) -> String {
             if index > 0 {
                 text.push_str("  ");
             }
-            let width = widths[index];
+            let width = widths.get(index).copied().unwrap_or(0);
             if index == 0 {
                 text.push_str(&format!("{cell:<width$}"));
             } else {

@@ -197,9 +197,12 @@ impl Row {
         label(&self.model, self.tier.as_deref())
     }
 
-    /// What was prefilled rather than read from the cache.
+    /// What was prefilled at the base input rate rather than read from or
+    /// written to the cache.
     pub fn uncached(&self) -> u64 {
-        self.prompt.saturating_sub(self.cached)
+        self.prompt
+            .saturating_sub(self.cached)
+            .saturating_sub(self.cache_write)
     }
 
     /// The share the prefix cache served, or `None` when nothing reported one.
@@ -261,22 +264,22 @@ impl Table {
     fn absorb(&mut self, row: &Row) {
         let total = &mut self.total;
         total.model = "total".to_string();
-        total.requests += row.requests;
-        total.prompt += row.prompt;
-        total.cached += row.cached;
-        total.cache_write += row.cache_write;
-        total.cache_write_5m += row.cache_write_5m;
-        total.cache_write_1h += row.cache_write_1h;
-        total.cache_write_30m += row.cache_write_30m;
-        total.cache_write_12h += row.cache_write_12h;
-        total.write_unreported += row.write_unreported;
-        total.write_unknown += row.write_unknown;
-        total.write_fallback += row.write_fallback;
+        total.requests = total.requests.saturating_add(row.requests);
+        total.prompt = total.prompt.saturating_add(row.prompt);
+        total.cached = total.cached.saturating_add(row.cached);
+        total.cache_write = total.cache_write.saturating_add(row.cache_write);
+        total.cache_write_5m = total.cache_write_5m.saturating_add(row.cache_write_5m);
+        total.cache_write_1h = total.cache_write_1h.saturating_add(row.cache_write_1h);
+        total.cache_write_30m = total.cache_write_30m.saturating_add(row.cache_write_30m);
+        total.cache_write_12h = total.cache_write_12h.saturating_add(row.cache_write_12h);
+        total.write_unreported = total.write_unreported.saturating_add(row.write_unreported);
+        total.write_unknown = total.write_unknown.saturating_add(row.write_unknown);
+        total.write_fallback = total.write_fallback.saturating_add(row.write_fallback);
 
-        total.unreported += row.unreported;
-        total.completion += row.completion;
-        total.reasoning += row.reasoning;
-        total.long += row.long;
+        total.unreported = total.unreported.saturating_add(row.unreported);
+        total.completion = total.completion.saturating_add(row.completion);
+        total.reasoning = total.reasoning.saturating_add(row.reasoning);
+        total.long = total.long.saturating_add(row.long);
         match (row.charge, &mut total.charge) {
             (Some(charge), Some(sum)) => {
                 *sum = *sum + charge;
@@ -366,14 +369,37 @@ pub fn notes_named(table: &Table, label: impl Fn(&Row) -> String) -> Vec<String>
     notes
 }
 
+fn safe_rate(rate: f64) -> f64 {
+    if rate.is_finite() && rate >= 0.0 {
+        rate
+    } else {
+        0.0
+    }
+}
+
+fn sum_u64(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<u64> {
+    let value: f64 = row.get(index)?;
+    if !value.is_finite() || value <= 0.0 {
+        Ok(0)
+    } else if value >= u64::MAX as f64 {
+        Ok(u64::MAX)
+    } else {
+        Ok(value as u64)
+    }
+}
+
+fn count_u64(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<u64> {
+    Ok(row.get::<_, i64>(index)?.max(0) as u64)
+}
+
 /// `(prompt - cached) × input + cached × cache_read + completion × output`,
 /// per million tokens. Reasoning tokens are inside `completion` and never
 /// added twice.
 fn charge(uncached: u64, cached: u64, completion: u64, rates: Rates) -> Charge {
     Charge {
-        input: uncached as f64 * rates.input / 1e6,
-        cache_read: cached as f64 * rates.cache_read / 1e6,
-        output: completion as f64 * rates.output / 1e6,
+        input: uncached as f64 * safe_rate(rates.input) / 1e6,
+        cache_read: cached as f64 * safe_rate(rates.cache_read) / 1e6,
+        output: completion as f64 * safe_rate(rates.output) / 1e6,
         ..Charge::default()
     }
 }
@@ -382,8 +408,8 @@ fn charge(uncached: u64, cached: u64, completion: u64, rates: Rates) -> Charge {
 /// `tier` is the column, or `NULL` for a file older than it — a reader may not
 /// migrate a database another build is still writing to.
 ///
-/// A model whose answers all reported no cache detail sums `cached` to zero,
-/// so unclassified tokens retain the input-rate estimate.
+/// Uses SQLite `TOTAL()` for token sums so large upstream token counts cannot
+/// trigger `SQLITE_ERROR: integer overflow`.
 fn aggregate(tier: &str, writes: bool) -> String {
     let write_sums = write_sums(writes);
     format!(
@@ -391,11 +417,11 @@ fn aggregate(tier: &str, writes: bool) -> String {
     model,
     {tier},
     COUNT(*),
-    COALESCE(SUM(prompt_tokens), 0),
-    COALESCE(SUM(cached_tokens), 0),
+    TOTAL(prompt_tokens),
+    TOTAL(cached_tokens),
     SUM(cached_tokens IS NULL),
-    COALESCE(SUM(completion_tokens), 0),
-    COALESCE(SUM(reasoning_tokens), 0),
+    TOTAL(completion_tokens),
+    TOTAL(reasoning_tokens),
     {write_sums}
   FROM requests
   WHERE ts_unix >= ?1 AND ts_unix < ?2 AND prompt_tokens IS NOT NULL
@@ -411,9 +437,9 @@ fn long_part(tier: &str, writes: bool) -> String {
     format!(
         "SELECT
     COUNT(*),
-    COALESCE(SUM(prompt_tokens), 0),
-    COALESCE(SUM(cached_tokens), 0),
-    COALESCE(SUM(completion_tokens), 0),
+    TOTAL(prompt_tokens),
+    TOTAL(cached_tokens),
+    TOTAL(completion_tokens),
     {write_sums}
   FROM requests
   WHERE ts_unix >= ?1 AND ts_unix < ?2 AND prompt_tokens IS NOT NULL
@@ -463,11 +489,12 @@ impl Part {
     fn charge(self, rates: Rates) -> Charge {
         let [total, m5, h1, m30, h12] = self.writes;
         let counts = [m5, h1, m30, h12];
-        let fallback = rates.cache_write.unwrap_or(rates.input);
+        let fallback = safe_rate(rates.cache_write.unwrap_or(rates.input));
         let costs: [f64; 4] = std::array::from_fn(|i| {
-            counts[i] as f64 * write_rates(rates)[i].unwrap_or(fallback) / 1e6
+            counts[i] as f64 * safe_rate(write_rates(rates)[i].unwrap_or(fallback)) / 1e6
         });
-        let unknown = total.saturating_sub(counts.iter().sum());
+        let known = counts.into_iter().fold(0u64, u64::saturating_add);
+        let unknown = total.saturating_sub(known);
         let mut cost = charge(
             self.prompt
                 .saturating_sub(self.cached)
@@ -517,11 +544,11 @@ fn unknown_writes() -> String {
 
 fn write_sums(writes: bool) -> String {
     if !writes {
-        return "0, 0, 0, 0, 0, COUNT(*), 0".into();
+        return "0.0, 0.0, 0.0, 0.0, 0.0, COUNT(*), 0".into();
     }
     let mut columns = WRITE_COLUMNS
         .iter()
-        .map(|c| format!("COALESCE(SUM({c}), 0)"))
+        .map(|c| format!("TOTAL({c})"))
         .collect::<Vec<_>>();
     columns.push("COALESCE(SUM(cache_write_tokens IS NULL), 0)".into());
     columns.push(format!("COALESCE(SUM({}), 0)", unknown_writes()));
@@ -568,7 +595,11 @@ pub fn load(db: &Path, since: f64, until: f64, prices: &Prices) -> Result<Table,
             db.display()
         ));
     };
-    if !store::has_token_columns(&connection)? {
+    // One read transaction holds a single WAL snapshot across aggregate,
+    // long-context, fallback, blind, and first-request queries.
+    let snapshot = connection.unchecked_transaction().map_err(sqlite)?;
+    let version = store::schema_version(&snapshot)?;
+    if version < 2 {
         return Err(format!(
             "{} predates the token counts: nothing to add up",
             db.display()
@@ -578,36 +609,34 @@ pub fn load(db: &Path, since: f64, until: f64, prices: &Prices) -> Result<Table,
     let mut table = Table {
         since,
         until,
+        total: Row {
+            model: "total".to_string(),
+            ..Row::default()
+        },
         ..Table::default()
     };
 
-    let tier = if store::has_tier_column(&connection)? {
-        "tier"
-    } else {
-        "NULL"
-    };
-    let writes = store::has_write_columns(&connection)?;
-    let mut statement = connection
-        .prepare(&aggregate(tier, writes))
-        .map_err(sqlite)?;
+    let tier = if version >= 5 { "tier" } else { "NULL" };
+    let writes = version >= 7;
+    let mut statement = snapshot.prepare(&aggregate(tier, writes)).map_err(sqlite)?;
     let rows = statement
         .query_map(params![since, until], |row| {
             Ok(Row {
                 model: row.get(0)?,
                 tier: row.get(1)?,
-                requests: row.get::<_, i64>(2)? as u64,
-                prompt: row.get::<_, i64>(3)? as u64,
-                cached: row.get::<_, i64>(4)? as u64,
-                unreported: row.get::<_, i64>(5)? as u64,
-                completion: row.get::<_, i64>(6)? as u64,
-                reasoning: row.get::<_, i64>(7)? as u64,
-                cache_write: row.get::<_, i64>(8)? as u64,
-                cache_write_5m: row.get::<_, i64>(9)? as u64,
-                cache_write_1h: row.get::<_, i64>(10)? as u64,
-                cache_write_30m: row.get::<_, i64>(11)? as u64,
-                cache_write_12h: row.get::<_, i64>(12)? as u64,
-                write_unreported: row.get::<_, i64>(13)? as u64,
-                write_unknown: row.get::<_, i64>(14)? as u64,
+                requests: count_u64(row, 2)?,
+                prompt: sum_u64(row, 3)?,
+                cached: sum_u64(row, 4)?,
+                unreported: count_u64(row, 5)?,
+                completion: sum_u64(row, 6)?,
+                reasoning: sum_u64(row, 7)?,
+                cache_write: sum_u64(row, 8)?,
+                cache_write_5m: sum_u64(row, 9)?,
+                cache_write_1h: sum_u64(row, 10)?,
+                cache_write_30m: sum_u64(row, 11)?,
+                cache_write_12h: sum_u64(row, 12)?,
+                write_unreported: count_u64(row, 13)?,
+                write_unknown: count_u64(row, 14)?,
                 write_fallback: 0,
 
                 long: 0,
@@ -617,9 +646,7 @@ pub fn load(db: &Path, since: f64, until: f64, prices: &Prices) -> Result<Table,
         .map_err(sqlite)?
         .collect::<rusqlite::Result<Vec<Row>>>()
         .map_err(sqlite)?;
-    let mut long = connection
-        .prepare(&long_part(tier, writes))
-        .map_err(sqlite)?;
+    let mut long = snapshot.prepare(&long_part(tier, writes)).map_err(sqlite)?;
     for mut row in rows {
         let rates = prices
             .get(&row.model)
@@ -633,16 +660,16 @@ pub fn load(db: &Path, since: f64, until: f64, prices: &Prices) -> Result<Table,
                     let past = long
                         .query_row(params![since, until, row.model, row.tier, above], |sums| {
                             Ok(Part {
-                                requests: sums.get::<_, i64>(0)? as u64,
-                                prompt: sums.get::<_, i64>(1)? as u64,
-                                cached: sums.get::<_, i64>(2)? as u64,
-                                completion: sums.get::<_, i64>(3)? as u64,
+                                requests: count_u64(sums, 0)?,
+                                prompt: sum_u64(sums, 1)?,
+                                cached: sum_u64(sums, 2)?,
+                                completion: sum_u64(sums, 3)?,
                                 writes: [
-                                    sums.get::<_, i64>(4)? as u64,
-                                    sums.get::<_, i64>(5)? as u64,
-                                    sums.get::<_, i64>(6)? as u64,
-                                    sums.get::<_, i64>(7)? as u64,
-                                    sums.get::<_, i64>(8)? as u64,
+                                    sum_u64(sums, 4)?,
+                                    sum_u64(sums, 5)?,
+                                    sum_u64(sums, 6)?,
+                                    sum_u64(sums, 7)?,
+                                    sum_u64(sums, 8)?,
                                 ],
                             })
                         })
@@ -653,38 +680,54 @@ pub fn load(db: &Path, since: f64, until: f64, prices: &Prices) -> Result<Table,
             }),
         };
         if writes && let Some(rates) = rates {
+            let short_cond = fallback_condition(rates);
             let condition = if let Some(line) = rates.long_context {
-                format!(
-                    "CASE WHEN prompt_tokens > {} THEN ({}) ELSE ({}) END",
-                    line.above.min(i64::MAX as u64),
-                    fallback_condition(line.rates()),
-                    fallback_condition(rates)
-                )
+                let long_cond = fallback_condition(line.rates());
+                if short_cond == "0" && long_cond == "0" {
+                    None
+                } else {
+                    Some(format!(
+                        "CASE WHEN prompt_tokens > {} THEN ({long_cond}) ELSE ({short_cond}) END",
+                        line.above.min(i64::MAX as u64),
+                    ))
+                }
+            } else if short_cond == "0" {
+                None
             } else {
-                fallback_condition(rates)
+                Some(short_cond)
             };
-            row.write_fallback = connection.query_row(
-                &format!("SELECT COUNT(*) FROM requests WHERE ts_unix >= ?1 AND ts_unix < ?2
-                    AND prompt_tokens IS NOT NULL AND model = ?3 AND {tier} IS ?4 AND ({condition})"),
-                params![since, until, row.model, row.tier], |r| r.get::<_, i64>(0)
-            ).map_err(sqlite)? as u64;
+            if let Some(condition) = condition {
+                row.write_fallback = snapshot
+                    .query_row(
+                        &format!(
+                            "SELECT COUNT(*) FROM requests WHERE ts_unix >= ?1 AND ts_unix < ?2
+                    AND prompt_tokens IS NOT NULL AND model = ?3 AND {tier} IS ?4 AND ({condition})"
+                        ),
+                        params![since, until, row.model, row.tier],
+                        |r| count_u64(r, 0),
+                    )
+                    .map_err(sqlite)?;
+            }
         }
         table.absorb(&row);
         table.rows.push(row);
     }
 
-    let (blind, cut) = connection
+    let (blind, cut) = snapshot
         .query_row(BLIND, params![since, until], |row| {
-            Ok((row.get::<_, i64>(0)? as u64, row.get::<_, i64>(1)? as u64))
+            Ok((count_u64(row, 0)?, count_u64(row, 1)?))
         })
         .map_err(sqlite)?;
     table.blind = blind;
     table.cut = cut;
-    table.first = connection
+    table.first = snapshot
         .query_row(FIRST, params![since, until], |row| {
             row.get::<_, Option<f64>>(0)
         })
         .map_err(sqlite)?;
+    drop(statement);
+    drop(long);
+    snapshot.commit().map_err(sqlite)?;
 
     // Most expensive first, which is the one question the screen is opened to
     // answer. A model that could not be priced goes last: its tokens are still
@@ -1504,6 +1547,44 @@ mod tests {
             (0, 1, 0)
         );
         assert!((fast.cost().unwrap() - 0.000654).abs() < 1e-12);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn uncached_excludes_cache_writes_and_large_token_sums_do_not_overflow() {
+        let row = Row {
+            prompt: 1_000,
+            cached: 200,
+            cache_write: 300,
+            ..Row::default()
+        };
+        assert_eq!(row.uncached(), 500);
+
+        let dir =
+            std::env::temp_dir().join(format!("portway-spend-overflow-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = store::spawn(&dir, 0).unwrap();
+        store.shutdown();
+        let db = dir.join(store::DB_FILE);
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        let huge = i64::MAX / 2 + 1_000;
+        for _ in 0..2 {
+            conn.execute(
+                "INSERT INTO requests (ts_unix, upstream, model, method, path, status, \
+                 body_len, wire_len, coding, ttfb_ms, received, received_wire, received_agent, \
+                 upstream_encoding, complete, prompt_tokens, cached_tokens, completion_tokens) \
+                 VALUES (1000.0, 'model-alpha', 'model-alpha', 'POST', '/v1/messages', \
+                 200, 10, 10, 'zstd', 1.0, 10, 10, 10, 'identity', 1, ?1, 0, 10)",
+                [huge],
+            )
+            .unwrap();
+        }
+        drop(conn);
+
+        let table = load(&db, 0.0, f64::MAX).unwrap();
+        assert_eq!(table.rows.len(), 1);
+        assert_eq!(table.total.model, "total");
+        assert!(table.rows[0].prompt > huge as u64);
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

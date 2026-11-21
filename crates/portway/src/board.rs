@@ -91,10 +91,21 @@ impl Traffic {
     /// Fold the counters' growth into the bucket for `elapsed`, opening empty
     /// buckets for any second that went by without a sample.
     fn sample(&mut self, elapsed: u64, totals: (u64, u64)) {
-        while self.second < elapsed {
-            push_capped(&mut self.up, 0, TRAFFIC_SECONDS);
-            push_capped(&mut self.down, 0, TRAFFIC_SECONDS);
-            self.second += 1;
+        if elapsed > self.second {
+            let gap = elapsed - self.second;
+            if gap >= TRAFFIC_SECONDS as u64 {
+                self.up.clear();
+                self.down.clear();
+                self.up.resize(TRAFFIC_SECONDS, 0);
+                self.down.resize(TRAFFIC_SECONDS, 0);
+                self.second = elapsed;
+            } else {
+                while self.second < elapsed {
+                    push_capped(&mut self.up, 0, TRAFFIC_SECONDS);
+                    push_capped(&mut self.down, 0, TRAFFIC_SECONDS);
+                    self.second += 1;
+                }
+            }
         }
         let grew = (
             totals.0.saturating_sub(self.last.0),
@@ -102,10 +113,10 @@ impl Traffic {
         );
         self.last = totals;
         if let Some(slot) = self.up.back_mut() {
-            *slot += grew.0;
+            *slot = slot.saturating_add(grew.0);
         }
         if let Some(slot) = self.down.back_mut() {
-            *slot += grew.1;
+            *slot = slot.saturating_add(grew.1);
         }
     }
 
@@ -309,8 +320,10 @@ impl Board {
         totals.retried_identity = self.retried_identity;
         totals.aborts = self.aborted;
         self.totals = totals;
-        self.traffic.load(&window.traffic);
-        self.traffic.second = self.started.elapsed().as_secs();
+        if !window.traffic.is_empty() {
+            self.traffic.load(&window.traffic);
+            self.traffic.second = window.end;
+        }
         self.coverage = Some(window.coverage);
     }
 
@@ -322,22 +335,27 @@ impl Board {
             .upstreams_tally
             .entry(record.upstream.clone())
             .or_default();
-        view.requests += 1;
+        view.requests = view.requests.saturating_add(1);
         // The same test as `Forwarder::account_upload`: a coding chosen for a
         // request that failed before its body went out encoded nothing.
         if record.coding != Coding::None && record.wire_len > 0 {
-            view.encoded_requests += 1;
+            view.encoded_requests = view.encoded_requests.saturating_add(1);
         }
-        view.body_bytes += record.body_len;
-        view.wire_bytes += record.wire_len;
-        view.down_bytes += record.received;
-        view.down_wire_bytes += record.received_wire;
-        view.agent_bytes += record.received_agent;
+        view.body_bytes = view.body_bytes.saturating_add(record.body_len);
+        view.wire_bytes = view.wire_bytes.saturating_add(record.wire_len);
+        view.down_bytes = view.down_bytes.saturating_add(record.received);
+        view.down_wire_bytes = view.down_wire_bytes.saturating_add(record.received_wire);
+        view.agent_bytes = view.agent_bytes.saturating_add(record.received_agent);
         if record.status >= 500 {
-            view.upstream_errors += 1;
+            view.upstream_errors = view.upstream_errors.saturating_add(1);
         }
         // What the model is doing now, which is what the column is for.
-        view.coding = record.coding;
+        if record.body_len > 0 || view.coding == Coding::None {
+            view.coding = record.coding;
+            if record.coding == Coding::Dcz {
+                view.dict = true;
+            }
+        }
     }
 
     /// The two counters the request path only ever wrote to the log, read back
@@ -345,9 +363,11 @@ impl Board {
     /// `forwarder.rs` and `relay.rs`.
     fn tally_line(&mut self, message: &str) {
         if message.ends_with("agent left before the first byte") {
-            self.aborted += 1;
-        } else if message.ends_with("resending identity") {
-            self.retried_identity += 1;
+            self.aborted = self.aborted.saturating_add(1);
+        } else if message.contains("resending identity")
+            || message.contains("retrying identity once")
+        {
+            self.retried_identity = self.retried_identity.saturating_add(1);
         }
     }
 }
@@ -357,18 +377,24 @@ impl Board {
 fn absorb(models: &[ModelRow]) -> Totals {
     let mut totals = Totals::default();
     for row in models {
-        totals.requests += row.view.requests;
-        totals.encoded += row.view.encoded_requests;
-        totals.in_flight += row.view.in_flight;
-        totals.body_bytes += row.view.body_bytes;
-        totals.wire_bytes += row.view.wire_bytes;
-        totals.down_bytes += row.view.down_bytes;
-        totals.down_wire_bytes += row.view.down_wire_bytes;
-        totals.agent_bytes += row.view.agent_bytes;
-        totals.retried_identity += row.view.retried_identity;
-        totals.aborts += row.view.client_aborts;
-        totals.upstream_errors += row.view.upstream_errors;
-        totals.idle_conns += row.view.idle_conns;
+        totals.requests = totals.requests.saturating_add(row.view.requests);
+        totals.encoded = totals.encoded.saturating_add(row.view.encoded_requests);
+        totals.in_flight = totals.in_flight.saturating_add(row.view.in_flight);
+        totals.body_bytes = totals.body_bytes.saturating_add(row.view.body_bytes);
+        totals.wire_bytes = totals.wire_bytes.saturating_add(row.view.wire_bytes);
+        totals.down_bytes = totals.down_bytes.saturating_add(row.view.down_bytes);
+        totals.down_wire_bytes = totals
+            .down_wire_bytes
+            .saturating_add(row.view.down_wire_bytes);
+        totals.agent_bytes = totals.agent_bytes.saturating_add(row.view.agent_bytes);
+        totals.retried_identity = totals
+            .retried_identity
+            .saturating_add(row.view.retried_identity);
+        totals.aborts = totals.aborts.saturating_add(row.view.client_aborts);
+        totals.upstream_errors = totals
+            .upstream_errors
+            .saturating_add(row.view.upstream_errors);
+        totals.idle_conns = totals.idle_conns.saturating_add(row.view.idle_conns);
     }
     totals
 }
@@ -383,12 +409,17 @@ pub(crate) fn push_capped<T>(queue: &mut VecDeque<T>, value: T, cap: usize) {
 /// Nearest-rank percentile over a rolling window. Sorting 512 floats four
 /// times a second costs nothing and keeps the window honest.
 pub fn percentile(samples: &VecDeque<f64>, quantile: f64) -> Option<f64> {
-    if samples.is_empty() {
+    let mut sorted: Vec<f64> = samples.iter().copied().filter(|v| v.is_finite()).collect();
+    if sorted.is_empty() {
         return None;
     }
-    let mut sorted: Vec<f64> = samples.iter().copied().collect();
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let at = ((sorted.len() - 1) as f64 * quantile).round() as usize;
+    sorted.sort_by(f64::total_cmp);
+    let q = if quantile.is_finite() {
+        quantile.clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let at = ((sorted.len() - 1) as f64 * q).round() as usize;
     sorted.get(at).copied()
 }
 
@@ -615,5 +646,32 @@ mod tests {
         );
         assert_eq!(coding_label(Coding::Zstd, true), "zstd+dcz");
         assert_eq!(coding_label(Coding::None, true), "identity");
+    }
+
+    #[test]
+    fn tally_line_matches_both_retry_wordings_and_percentile_tolerates_nan() {
+        let mut board = Board::new();
+        board.recorded = true;
+        for msg in [
+            "415 for zstd: resending identity",
+            "model-a: upstream rejected zstd with 415 — retrying identity once",
+        ] {
+            board.observe(&Event::Log {
+                stamp: "00:00:00".into(),
+                level: crate::logfmt::Level::Warning,
+                message: msg.into(),
+            });
+        }
+        board.tick_recorded(&watch::Window::default());
+        assert_eq!(board.totals.retried_identity, 2);
+
+        assert_eq!(
+            percentile(&VecDeque::from([f64::NAN, f64::INFINITY]), 0.5),
+            None
+        );
+        assert_eq!(
+            percentile(&VecDeque::from([3.0, f64::NAN, 1.0, 2.0]), 0.5),
+            Some(2.0)
+        );
     }
 }
