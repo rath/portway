@@ -123,6 +123,10 @@ impl Columns {
         self.0 & (1 << column as u16) != 0
     }
 
+    pub fn insert(&mut self, column: Column) {
+        self.0 |= 1 << column as u16;
+    }
+
     pub fn toggle(&mut self, column: Column) {
         self.0 ^= 1 << column as u16;
     }
@@ -293,7 +297,45 @@ pub struct State {
     pub costs_page_height: Cell<usize>,
     pub usage: Option<spend::Table>,
     pub usage_error: Option<String>,
+    pub usage_loading: bool,
+    pub usage_request_id: u64,
     usage_read: Option<Instant>,
+    usage_worker: Option<UsageWorker>,
+}
+
+/// Offloads local SQLite usage reads off the TUI render thread so large
+/// databases never stall keyboard input.
+pub(crate) struct UsageWorker {
+    request: std::sync::mpsc::Sender<(u64, spend::Range)>,
+    reply: std::sync::mpsc::Receiver<(u64, spend::Range, Result<spend::Table, String>)>,
+}
+
+impl UsageWorker {
+    pub(crate) fn spawn(db: PathBuf, prices: crate::config::Prices) -> Self {
+        let (req_tx, req_rx) = std::sync::mpsc::channel::<(u64, spend::Range)>();
+        let (rep_tx, rep_rx) =
+            std::sync::mpsc::channel::<(u64, spend::Range, Result<spend::Table, String>)>();
+        let _ = std::thread::Builder::new()
+            .name("tui-usage".to_string())
+            .spawn(move || {
+                while let Ok(mut pending) = req_rx.recv() {
+                    // Collapse queued range changes so only the latest request runs.
+                    while let Ok(newer) = req_rx.try_recv() {
+                        pending = newer;
+                    }
+                    let (id, range) = pending;
+                    let (since, until) = range.window(logfmt::epoch());
+                    let result = spend::load(&db, since, until, &prices);
+                    if rep_tx.send((id, range, result)).is_err() {
+                        break;
+                    }
+                }
+            });
+        Self {
+            request: req_tx,
+            reply: rep_rx,
+        }
+    }
 }
 
 impl State {
@@ -338,8 +380,43 @@ impl State {
             costs_page_height: Cell::new(1),
             usage: None,
             usage_error: None,
+            usage_loading: false,
+            usage_request_id: 0,
             usage_read: None,
+            usage_worker: None,
         }
+    }
+
+    pub(crate) fn set_usage_worker(&mut self, worker: UsageWorker) {
+        self.usage_worker = Some(worker);
+    }
+
+    pub(crate) fn poll_usage(&mut self) -> bool {
+        let mut changed = false;
+        let replies: Vec<_> = match &self.usage_worker {
+            Some(worker) => worker.reply.try_iter().collect(),
+            None => return false,
+        };
+        for (id, range, result) in replies {
+            if !self.usage_open || range != self.usage_range || id != self.usage_request_id {
+                continue;
+            }
+            self.usage_loading = false;
+            self.usage_read = Some(Instant::now());
+            match result {
+                Ok(table) => {
+                    self.usage = Some(table);
+                    self.usage_error = None;
+                }
+                Err(message) => {
+                    self.usage = None;
+                    self.usage_rates = false;
+                    self.usage_error = Some(message);
+                }
+            }
+            changed = true;
+        }
+        changed
     }
 
     pub fn push(&mut self, event: Event) {
@@ -377,6 +454,9 @@ impl State {
             }
         }
         self.entries.push_back(Row { seq, entry });
+        if self.detail && self.selected().is_none() {
+            self.detail = false;
+        }
     }
 
     /// Remote events populate the list only; counters and charts are absolute
@@ -390,6 +470,7 @@ impl State {
                 self.filtered.clear();
                 self.next_seq = 0;
                 self.model_recency.clear();
+                self.follow = true;
                 self.cursor = 0;
                 self.top = 0;
                 self.detail = false;
@@ -444,7 +525,11 @@ impl State {
                 if let wire::EventData::Request(record) = &event.data
                     && let Some(id) = record.flight
                 {
+                    let before = remote.original_flights.len();
                     remote.original_flights.retain(|flight| flight.id != id);
+                    if remote.original_flights.len() != before {
+                        self.board.totals.in_flight = self.board.totals.in_flight.saturating_sub(1);
+                    }
                 }
                 self.push(event.into_event());
             }
@@ -465,10 +550,14 @@ impl State {
                 remote.original_flights = self.flights.clone();
                 remote.flights_at = Instant::now();
             }
-            Update::Usage(range, result) => {
-                if !self.usage_open || range != self.usage_range {
+            Update::Usage(request_id, range, result) => {
+                if !self.usage_open
+                    || range != self.usage_range
+                    || request_id != self.usage_request_id
+                {
                     return;
                 }
+                self.usage_loading = false;
                 match result {
                     Ok(usage) => {
                         self.remote.as_mut().expect("remote feed").usage_title = Some(usage.title);
@@ -477,6 +566,7 @@ impl State {
                     }
                     Err(error) => {
                         self.usage = None;
+                        self.usage_rates = false;
                         self.usage_error = Some(error);
                     }
                 }
@@ -665,17 +755,34 @@ impl State {
     /// midnight to now, the day before, or a week of days — rather than the
     /// last N hours, half of which would be a different day's traffic.
     fn read_usage(&mut self) {
+        self.usage_request_id = self.usage_request_id.wrapping_add(1);
         if self.remote.is_some() {
             self.usage = None;
+            self.usage_rates = false;
+            self.usage_loading = true;
             self.usage_error = Some("loading remote usage…".into());
+            return;
+        }
+        if let Some(worker) = &self.usage_worker {
+            if self.usage.is_none() {
+                self.usage_loading = true;
+                self.usage_error = Some("loading usage…".into());
+            }
+            self.usage_read = Some(Instant::now());
+            let _ = worker
+                .request
+                .send((self.usage_request_id, self.usage_range));
             return;
         }
         let Some(db) = self.db.clone() else {
             self.usage = None;
+            self.usage_rates = false;
+            self.usage_loading = false;
             self.usage_error = Some("no database to read: none was passed in".to_string());
             return;
         };
         let (since, until) = self.usage_range.window(logfmt::epoch());
+        self.usage_loading = false;
         match spend::load(&db, since, until, &self.prices) {
             Ok(table) => {
                 self.usage = Some(table);
@@ -683,6 +790,7 @@ impl State {
             }
             Err(message) => {
                 self.usage = None;
+                self.usage_rates = false;
                 self.usage_error = Some(message);
             }
         }
@@ -771,18 +879,22 @@ impl State {
         if len == 0 {
             return;
         }
-        let current = self.cursor_position() as isize;
-        let next = current + delta;
-        if next >= len as isize - 1 && delta > 0 {
+        let was_following = self.follow;
+        let (prev_top, height) = self.window();
+        let current = self.cursor_position();
+        let next = current.saturating_add_signed(delta);
+        if delta > 0 && next >= len - 1 {
             self.follow = true;
             return;
         }
-        let next = next.clamp(0, len as isize - 1) as usize;
+        let next = next.min(len - 1);
         self.follow = false;
         self.cursor = self.filtered[next];
-        let height = self.viewport.max(1);
-        let top = self.position(self.top);
-        let top = top.min(next).max((next + 1).saturating_sub(height));
+        let top = if was_following {
+            (next + 1).saturating_sub(height)
+        } else {
+            prev_top.min(next).max((next + 1).saturating_sub(height))
+        };
         self.top = self.filtered[top.min(len - 1)];
     }
 
@@ -820,6 +932,7 @@ impl State {
             .collect();
         // The old anchor may not be in the new list at all.
         self.follow = true;
+        self.detail = false;
     }
 
     /// `all -> trouble` and then once through the routes.

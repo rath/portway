@@ -18,7 +18,7 @@ pub enum Update {
     Tick(Tick),
     Event(WireEvent),
     Flights(Option<Flights>),
-    Usage(spend::Range, Result<UsageReply, String>),
+    Usage(u64, spend::Range, Result<UsageReply, String>),
     Connection(bool, String),
 }
 
@@ -242,12 +242,12 @@ async fn connected(
 
 async fn usage_loop(
     client: Client,
-    mut requested: watch::Receiver<Option<spend::Range>>,
+    mut requested: watch::Receiver<Option<(u64, spend::Range)>>,
     updates: mpsc::Sender<Update>,
 ) -> Result<(), Error> {
     loop {
-        let range = *requested.borrow_and_update();
-        if let Some(range) = range {
+        let wanted = *requested.borrow_and_update();
+        if let Some((request_id, range)) = wanted {
             let result = client
                 .get::<UsageReply>(&format!("/api/usage?range={}", range.key()))
                 .await;
@@ -256,13 +256,13 @@ async fn usage_loop(
             }
             send(
                 &updates,
-                Update::Usage(range, result.map_err(|error| error.to_string())),
+                Update::Usage(request_id, range, result.map_err(|error| error.to_string())),
             )
             .await?;
         }
         tokio::select! {
             result = requested.changed() => if result.is_err() { return Ok(()); },
-            _ = tokio::time::sleep(tui::state::USAGE_REFRESH), if range.is_some() => {},
+            _ = tokio::time::sleep(tui::state::USAGE_REFRESH), if wanted.is_some() => {},
         }
     }
 }

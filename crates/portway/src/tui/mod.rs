@@ -58,6 +58,9 @@ const THREAD_PREFIX: &str = "tui";
 const RENDER_THREAD: &str = "tui";
 const INPUT_THREAD: &str = "tui-input";
 
+/// True while the terminal is in raw / alternate-screen mode.
+static TUI_ACTIVE: AtomicBool = AtomicBool::new(false);
+
 type Screen = Terminal<CrosstermBackend<Stdout>>;
 
 /// Restores the terminal exactly once, from whichever end gets there first —
@@ -75,7 +78,7 @@ impl Drop for TerminalGuard {
 pub enum Feed {
     Remote {
         updates: Mutex<tokio::sync::mpsc::Receiver<crate::remote::Update>>,
-        usage: tokio::sync::watch::Sender<Option<spend::Range>>,
+        usage: tokio::sync::watch::Sender<Option<(u64, spend::Range)>>,
     },
     Live(Arc<Router>),
     Recorded {
@@ -127,7 +130,7 @@ impl Settings {
             Some(asked) => {
                 let mut columns = Columns::parse("").expect("an empty list parses");
                 for column in asked {
-                    columns.toggle(*column);
+                    columns.insert(*column);
                 }
                 columns
             }
@@ -155,6 +158,14 @@ impl Settings {
         let Some(file) = &self.file else {
             return;
         };
+        if let Some(parent) = file.parent()
+            && let Err(err) = crate::store::ensure_dir(parent)
+        {
+            if crate::telemetry::tui_installed() {
+                crate::logfmt::warn(&format!("{}: {err}", parent.display()));
+            }
+            return;
+        }
         let stored = fs::read_to_string(file).unwrap_or_default();
         let line = format!("{key}={value}");
         let mut lines: Vec<&str> = stored
@@ -162,7 +173,9 @@ impl Settings {
             .filter(|kept| stored_value(kept, key).is_none())
             .collect();
         lines.push(&line);
-        if let Err(err) = fs::write(file, lines.join("\n") + "\n") {
+        if let Err(err) = fs::write(file, lines.join("\n") + "\n")
+            && crate::telemetry::tui_installed()
+        {
             crate::logfmt::warn(&format!("{}: {err}", file.display()));
         }
     }
@@ -176,7 +189,7 @@ fn stored_value<'a>(text: &'a str, key: &str) -> Option<&'a str> {
 }
 
 pub struct Handle {
-    thread: JoinHandle<()>,
+    thread: Option<JoinHandle<()>>,
     stop: Arc<AtomicBool>,
 }
 
@@ -185,9 +198,21 @@ impl Handle {
     /// terminal back. Only the render thread is joined, and it wakes at least
     /// every `NAP`; the reader may be stuck in crossterm forever and is left
     /// to die with the process.
-    pub fn shutdown(self) {
+    pub fn shutdown(mut self) {
+        self.stop_and_join();
+    }
+
+    fn stop_and_join(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
-        let _ = self.thread.join();
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+impl Drop for Handle {
+    fn drop(&mut self) {
+        self.stop_and_join();
     }
 }
 
@@ -201,7 +226,8 @@ pub fn start(
     db: Option<PathBuf>,
 ) -> io::Result<(Handle, tokio::sync::oneshot::Receiver<()>)> {
     install_panic_hook();
-    let terminal = enter()?;
+    // Guard the terminal immediately so a thread-spawn error still restores it.
+    let mut guard = TerminalGuard(enter()?);
     let (quit_tx, quit_rx) = tokio::sync::oneshot::channel();
     let stop = Arc::new(AtomicBool::new(false));
 
@@ -214,10 +240,9 @@ pub fn start(
         .spawn(move || read_input(&keys_tx, &reader_stop))?;
 
     let render_stop = Arc::clone(&stop);
-    let thread = std::thread::Builder::new()
+    let thread = match std::thread::Builder::new()
         .name(RENDER_THREAD.to_string())
         .spawn(move || {
-            let mut guard = TerminalGuard(terminal);
             if let Err(err) = run(
                 &mut guard.0,
                 &feed,
@@ -229,11 +254,23 @@ pub fn start(
                 db.as_deref(),
             ) {
                 drop(guard); // put the terminal back before saying anything
-                crate::logfmt::error(&format!("tui: {err}"));
+                eprintln!("portway: tui: {err}");
             }
             let _ = quit_tx.send(());
-        })?;
-    Ok((Handle { thread, stop }, quit_rx))
+        }) {
+        Ok(thread) => thread,
+        Err(err) => {
+            stop.store(true, Ordering::Relaxed);
+            return Err(err);
+        }
+    };
+    Ok((
+        Handle {
+            thread: Some(thread),
+            stop,
+        },
+        quit_rx,
+    ))
 }
 
 /// Blocks on the terminal and forwards what it sees. Ends when the render loop
@@ -258,6 +295,7 @@ fn read_input(keys: &Sender<TermEvent>, stop: &AtomicBool) {
 
 fn enter() -> io::Result<Screen> {
     enable_raw_mode()?;
+    TUI_ACTIVE.store(true, Ordering::SeqCst);
     let mut stdout = io::stdout();
     if let Err(err) = execute!(stdout, EnterAlternateScreen, EnableMouseCapture) {
         restore();
@@ -282,6 +320,7 @@ fn restore() {
         LeaveAlternateScreen,
         Show
     );
+    TUI_ACTIVE.store(false, Ordering::SeqCst);
 }
 
 /// `ratatui::init`'s hook would restore the terminal on *any* thread's panic
@@ -294,10 +333,15 @@ fn install_panic_hook() {
     ONCE.call_once(|| {
         let previous = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
-            let in_dashboard = std::thread::current()
-                .name()
-                .is_some_and(|name| name.starts_with(THREAD_PREFIX));
-            if in_dashboard {
+            if !TUI_ACTIVE.load(Ordering::SeqCst) {
+                previous(info);
+                return;
+            }
+            let current = std::thread::current();
+            let name = current.name();
+            let fatal_thread =
+                name.is_some_and(|name| name.starts_with(THREAD_PREFIX) || name == "main");
+            if fatal_thread {
                 restore();
                 previous(info);
             } else {
@@ -323,6 +367,14 @@ fn run(
     state.columns = settings.columns;
     state.theme = settings.theme;
     state.db = db.map(Path::to_path_buf);
+    if !matches!(feed, Feed::Remote { .. })
+        && let Some(path) = db
+    {
+        state.set_usage_worker(state::UsageWorker::spawn(
+            path.to_path_buf(),
+            settings.prices.clone(),
+        ));
+    }
     state.recorded = !matches!(feed, Feed::Live(_));
     if matches!(feed, Feed::Remote { .. }) {
         state.remote = Some(Default::default());
@@ -349,8 +401,11 @@ fn run(
             state.push(event);
             dirty = true;
         }
+        if state.poll_usage() {
+            dirty = true;
+        }
         if last_tick.elapsed() >= TICK {
-            if state.remote.is_none() {
+            if matches!(feed, Feed::Live(_)) {
                 state.aliases = settings.aliases.get();
             }
             tick(&mut state, feed);
@@ -370,11 +425,22 @@ fn run(
         // once for a keystroke.
         let nap = TICK.saturating_sub(last_tick.elapsed()).min(NAP);
         match keys.recv_timeout(nap) {
-            Ok(event) => {
-                if apply(event, &mut state, settings) {
-                    return Ok(());
+            Ok(first) => {
+                match apply_action(first, &mut state, settings) {
+                    Action::Quit => return Ok(()),
+                    Action::Changed => dirty = true,
+                    Action::Ignored => {}
                 }
-                dirty = true;
+                for _ in 0..64 {
+                    let Ok(next) = keys.try_recv() else {
+                        break;
+                    };
+                    match apply_action(next, &mut state, settings) {
+                        Action::Quit => return Ok(()),
+                        Action::Changed => dirty = true,
+                        Action::Ignored => {}
+                    }
+                }
             }
             Err(RecvTimeoutError::Timeout) => {}
             // The reader is gone, so there is no input left to wait for; keep
@@ -390,7 +456,7 @@ fn tick(state: &mut State, feed: &Feed) {
     match feed {
         Feed::Remote { updates, usage } => {
             // Bound work per redraw even when the server is very busy.
-            let mut updates = updates.lock().unwrap();
+            let mut updates = updates.lock().unwrap_or_else(|e| e.into_inner());
             for _ in 0..256 {
                 let Ok(update) = updates.try_recv() else {
                     break;
@@ -398,12 +464,14 @@ fn tick(state: &mut State, feed: &Feed) {
                 state.apply_remote(update);
             }
             state.advance_remote();
-            let range = state.usage_open.then_some(state.usage_range);
+            let wanted = state
+                .usage_open
+                .then_some((state.usage_request_id, state.usage_range));
             usage.send_if_modified(|value| {
-                if *value == range {
+                if *value == wanted {
                     false
                 } else {
-                    *value = range;
+                    *value = wanted;
                     true
                 }
             });
@@ -420,49 +488,82 @@ fn tick(state: &mut State, feed: &Feed) {
     state.refresh_usage();
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Action {
+    Ignored,
+    Changed,
+    Quit,
+}
+
 /// Returns true when the user asked to quit.
+#[cfg(test)]
 fn apply(event: TermEvent, state: &mut State, settings: &Settings) -> bool {
+    matches!(apply_action(event, state, settings), Action::Quit)
+}
+
+fn apply_action(event: TermEvent, state: &mut State, settings: &Settings) -> Action {
     match event {
-        TermEvent::Key(key) => return key_press(key, state, settings),
+        TermEvent::Key(key) => key_press_action(key, state, settings),
         TermEvent::Mouse(mouse) => {
+            if state.flights_open || state.picker || state.themes {
+                return Action::Ignored;
+            }
             if state.usage_open {
                 if state.usage_rates {
                     match mouse.kind {
                         MouseEventKind::ScrollUp => state.scroll_costs(-3),
                         MouseEventKind::ScrollDown => state.scroll_costs(3),
-                        _ => {}
+                        _ => return Action::Ignored,
                     }
                 } else {
                     match mouse.kind {
                         MouseEventKind::ScrollUp => state.scroll_usage(-3),
                         MouseEventKind::ScrollDown => state.scroll_usage(3),
-                        _ => {}
+                        _ => return Action::Ignored,
                     }
                 }
-                return false;
+                return Action::Changed;
             }
             match mouse.kind {
-                MouseEventKind::ScrollUp => state.scroll(-3),
-                MouseEventKind::ScrollDown => state.scroll(3),
-                _ => {}
+                MouseEventKind::ScrollUp => {
+                    state.scroll(-3);
+                    Action::Changed
+                }
+                MouseEventKind::ScrollDown => {
+                    state.scroll(3);
+                    Action::Changed
+                }
+                _ => Action::Ignored,
             }
         }
-        // Resize and focus changes just need a redraw.
-        _ => {}
+        TermEvent::Resize(_, _) | TermEvent::FocusGained | TermEvent::FocusLost => Action::Changed,
+        _ => Action::Ignored,
     }
-    false
 }
 
 /// Returns true when the user asked to quit.
+#[cfg(test)]
 fn key_press(key: KeyEvent, state: &mut State, settings: &Settings) -> bool {
+    matches!(key_press_action(key, state, settings), Action::Quit)
+}
+
+fn key_press_action(key: KeyEvent, state: &mut State, settings: &Settings) -> Action {
     // Windows sends a Release for every Press; everywhere else this is a no-op.
     if key.kind != KeyEventKind::Press {
-        return false;
+        return Action::Ignored;
     }
     // Ctrl-C is the escape hatch it is everywhere else: raw mode means no
     // SIGINT, so it is handled here and never confirms.
     if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
-        return true;
+        return Action::Quit;
+    }
+    // Ignore other Ctrl/Alt combinations so terminal shortcuts do not trigger
+    // single-letter dashboard commands.
+    if key
+        .modifiers
+        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+    {
+        return Action::Ignored;
     }
     // The picker has the keyboard while it is open: `q` closes it rather than
     // quitting, and a toggle is written down as it happens.
@@ -479,9 +580,9 @@ fn key_press(key: KeyEvent, state: &mut State, settings: &Settings) -> bool {
                 settings.remember("columns", &state.columns.names());
             }
             KeyCode::Esc | KeyCode::Char('c') | KeyCode::Char('q') => state.picker = false,
-            _ => {}
+            _ => return Action::Ignored,
         }
-        return false;
+        return Action::Changed;
     }
 
     // So does the theme picker. Moving the cursor puts the theme under it on
@@ -494,21 +595,21 @@ fn key_press(key: KeyEvent, state: &mut State, settings: &Settings) -> bool {
             KeyCode::Char(' ') | KeyCode::Enter => {
                 state.themes = false;
                 settings.remember("theme", state.theme.id);
-                return false;
+                return Action::Changed;
             }
             KeyCode::Esc | KeyCode::Char('T') | KeyCode::Char('q') => {
                 state.themes = false;
                 state.theme = state.themes_kept;
-                return false;
+                return Action::Changed;
             }
-            _ => 0,
+            _ => return Action::Ignored,
         };
         state.themes_at = state
             .themes_at
             .saturating_add_signed(step)
             .min(THEMES.len() - 1);
         state.theme = THEMES[state.themes_at];
-        return false;
+        return Action::Changed;
     }
 
     // So does the in-flight dialog: it is watched rather than worked, so the
@@ -519,8 +620,9 @@ fn key_press(key: KeyEvent, state: &mut State, settings: &Settings) -> bool {
             KeyCode::Char('f') | KeyCode::Esc | KeyCode::Char('q')
         ) {
             state.flights_open = false;
+            return Action::Changed;
         }
-        return false;
+        return Action::Ignored;
     }
 
     // While the usage screen is up it holds the keyboard, the way the picker
@@ -545,15 +647,15 @@ fn key_press(key: KeyEvent, state: &mut State, settings: &Settings) -> bool {
                 KeyCode::End | KeyCode::Char('G') => {
                     state.costs_scroll.set(state.costs_scroll_max.get())
                 }
-                _ => {}
+                _ => return Action::Ignored,
             }
-            return false;
+            return Action::Changed;
         }
         match key.code {
             KeyCode::Char('u') | KeyCode::Esc | KeyCode::Char('q') => state.close_usage(),
             KeyCode::Left | KeyCode::Char('h') => state.step_usage_range(-1),
             KeyCode::Right | KeyCode::Char('l') => state.step_usage_range(1),
-            KeyCode::Char('p') => {
+            KeyCode::Char('p') if state.usage.is_some() => {
                 state.usage_rates = true;
                 state.costs_scroll.set(0);
             }
@@ -565,9 +667,9 @@ fn key_press(key: KeyEvent, state: &mut State, settings: &Settings) -> bool {
             KeyCode::End | KeyCode::Char('G') => {
                 state.usage_scroll.set(state.usage_scroll_max.get());
             }
-            _ => {}
+            _ => return Action::Ignored,
         }
-        return false;
+        return Action::Changed;
     }
 
     let confirming = state.confirm_quit;
@@ -577,7 +679,7 @@ fn key_press(key: KeyEvent, state: &mut State, settings: &Settings) -> bool {
         KeyCode::Char('q') => {
             // An attached viewer owns no relays and can always leave.
             if state.recorded || confirming || state.totals.in_flight == 0 {
-                return true;
+                return Action::Quit;
             }
             state.confirm_quit = true;
         }
@@ -641,9 +743,15 @@ fn key_press(key: KeyEvent, state: &mut State, settings: &Settings) -> bool {
                 state.to_newest();
             }
         }
-        _ => {}
+        _ => {
+            return if confirming {
+                Action::Changed
+            } else {
+                Action::Ignored
+            };
+        }
     }
-    false
+    Action::Changed
 }
 
 #[cfg(test)]
@@ -1114,5 +1222,38 @@ mod tests {
             theme::fallback(std::env::var("COLORTERM").ok().as_deref())
         );
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn duplicate_event_columns_and_modal_isolation_behave_deterministically() {
+        let dir = std::env::temp_dir().join(format!("portway-tui-dup-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let asked = Settings::load(
+            &dir,
+            Some(&[Column::Time, Column::Time, Column::Model]),
+            None,
+        );
+        assert!(asked.columns.contains(Column::Time));
+        assert!(asked.columns.contains(Column::Model));
+        let _ = fs::remove_dir_all(&dir);
+
+        let mut state = noisy();
+        state.flights_open = true;
+        let wheel = TermEvent::Mouse(ratatui::crossterm::event::MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        });
+        apply(wheel, &mut state, &Settings::default());
+        assert!(state.follow);
+
+        // `p` on an unloaded usage screen does not arm costs popup.
+        state.flights_open = false;
+        state.usage_open = true;
+        state.usage = None;
+        key(KeyCode::Char('p'), &mut state);
+        assert!(!state.usage_rates);
     }
 }

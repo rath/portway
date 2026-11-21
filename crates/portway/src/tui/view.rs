@@ -5,11 +5,9 @@ use crate::aliases::{ModelAliases, display};
 use std::time::Duration;
 
 use ratatui::Frame;
-use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::Widget;
 use ratatui::widgets::{Block, BorderType, Cell, Clear, Padding, Paragraph, Row, Sparkline, Table};
 
 use crate::board::{self, compression_status};
@@ -75,7 +73,7 @@ pub fn panes(area: Rect, models: usize) -> Option<Panes> {
     }
     let mut spare = area.height - (HUD_HEIGHT + FOOTER_HEIGHT + EVENTS_MIN);
 
-    let table_height = models as u16 + 3;
+    let table_height = models.min(u16::MAX as usize - 3) as u16 + 3;
     let table = models > 0 && spare >= table_height;
     if table {
         spare -= table_height;
@@ -152,7 +150,7 @@ pub fn draw(frame: &mut Frame, state: &State, header: &Header) {
             && area.height > 0
         {
             frame.render_widget(
-                footer(state),
+                footer(state, area.width),
                 Rect::new(area.x, area.bottom() - 1, area.width, 1),
             );
         }
@@ -177,7 +175,7 @@ pub fn draw(frame: &mut Frame, state: &State, header: &Header) {
         draw_charts(frame, state, area, mode);
     }
     frame.render_widget(events(state, panes.events.width), panes.events);
-    frame.render_widget(footer(state), panes.footer);
+    frame.render_widget(footer(state, panes.footer.width), panes.footer);
 
     if state.flights_open {
         // Keep the live dashboard visible, but reserve color and emphasis for
@@ -273,16 +271,42 @@ fn flight_name(flight: &FlightView) -> &str {
     }
 }
 
-/// `text` in `width` columns, ending in an ellipsis when it did not fit: a
-/// route cut short otherwise reads as a different, shorter route.
+fn display_width(text: &str) -> usize {
+    Span::raw(text).width()
+}
+
+/// `text` in `width` terminal columns, ending in an ellipsis when it did not
+/// fit: a route cut short otherwise reads as a different, shorter route.
 fn clipped(text: &str, width: u16) -> String {
-    let width = width as usize;
-    if text.chars().count() <= width {
+    let limit = width as usize;
+    if limit == 0 {
+        return String::new();
+    }
+    if display_width(text) <= limit {
         return text.to_string();
     }
-    let mut cut: String = text.chars().take(width.saturating_sub(1)).collect();
+    if limit == 1 {
+        return "…".to_string();
+    }
+    let mut cut = String::new();
+    let mut used = 0usize;
+    let mut buf = [0u8; 4];
+    for ch in text.chars() {
+        let w = display_width(ch.encode_utf8(&mut buf));
+        if used + w > limit - 1 {
+            break;
+        }
+        cut.push(ch);
+        used += w;
+    }
     cut.push('…');
     cut
+}
+
+fn pad_right(text: &str, width: usize) -> String {
+    let fitted = clipped(text, width.min(u16::MAX as usize) as u16);
+    let pad = width.saturating_sub(display_width(&fitted));
+    format!("{fitted}{}", " ".repeat(pad))
 }
 
 /// The flights that are worth a word in the HUD while the dialog is closed:
@@ -444,16 +468,18 @@ impl FlightColumns {
         let longest = |text: fn(&FlightView) -> String| {
             flights
                 .iter()
-                .map(|flight| text(flight).chars().count())
+                .map(|flight| display_width(&text(flight)))
                 .max()
-                .unwrap_or(0) as u16
+                .unwrap_or(0)
+                .min(u16::MAX as usize) as u16
         };
         let mut spare = room.saturating_sub(columns.width());
         let grow = (flights
             .iter()
-            .map(|flight| display(aliases, flight_name(flight)).chars().count())
+            .map(|flight| display_width(display(aliases, flight_name(flight))))
             .max()
-            .unwrap_or(0) as u16)
+            .unwrap_or(0)
+            .min(u16::MAX as usize) as u16)
             .min(FLIGHTS_MODEL.1)
             .saturating_sub(columns.model)
             .min(spare);
@@ -576,14 +602,17 @@ fn ratio(raw: u64, wire: u64) -> String {
     if raw == 0 || wire == 0 {
         return "-".to_string();
     }
-    format!("-{}%", raw.saturating_sub(wire) * 100 / raw)
+    format!(
+        "-{}%",
+        u128::from(raw.saturating_sub(wire)) * 100 / u128::from(raw)
+    )
 }
 
 /// `part` as a whole percentage of `whole`, `92%`: truncated like `ratio`, so
 /// it never rounds up to a 100% the counts do not reach. `None` when there is
 /// no whole to take a share of.
 fn share(part: u64, whole: u64) -> Option<String> {
-    (whole > 0).then(|| format!("{}%", part.min(whole) * 100 / whole))
+    (whole > 0).then(|| format!("{}%", u128::from(part.min(whole)) * 100 / u128::from(whole)))
 }
 
 fn stat<'a>(t: &Theme, label: &'a str, value: String, shade: Color) -> Vec<Span<'a>> {
@@ -642,9 +671,13 @@ fn hud<'a>(state: &State, header: &'a Header) -> Paragraph<'a> {
     }
     title.extend(stat(t, "upstreams", state.models.len().to_string(), t.text));
 
-    let reuse = match (state.reused * 100).checked_div(state.seen) {
-        Some(share) => format!("{share}%"),
-        None => "-".to_string(),
+    let reuse = if state.seen > 0 {
+        format!(
+            "{}%",
+            u128::from(state.reused.min(state.seen)) * 100 / u128::from(state.seen)
+        )
+    } else {
+        "-".to_string()
     };
     let mut requests = vec![Span::styled(" REQUESTS ", Style::default().fg(t.dim))];
     requests.extend(stat(t, "total", totals.requests.to_string(), t.text));
@@ -889,7 +922,11 @@ fn models_table(state: &State, width: u16) -> Table<'_> {
                 } else {
                     "-".to_string()
                 },
-                Style::default().fg(if view.in_flight > 0 { t.good } else { t.dim }),
+                Style::default().fg(if state.flights_available && view.in_flight > 0 {
+                    t.good
+                } else {
+                    t.dim
+                }),
             )),
             number(Span::styled(
                 human(view.body_bytes),
@@ -946,7 +983,11 @@ fn models_table(state: &State, width: u16) -> Table<'_> {
     });
 
     let mut widths = vec![
-        Constraint::Length(20),
+        if width < 79 {
+            Constraint::Min(10)
+        } else {
+            Constraint::Length(20)
+        },
         Constraint::Length(8),
         Constraint::Length(6),
         Constraint::Length(4),
@@ -983,9 +1024,9 @@ fn models_table(state: &State, width: u16) -> Table<'_> {
 /// Where a model name, the token columns and the money columns all fit.
 const USAGE_ROOMY: u16 = 126;
 /// A border, a header row, one model and the total: below this the screen has
-/// nothing left to say. The compact tier below `USAGE_ROOMY` still carries the
-/// counts and the total, so it wants the same 75 columns they add up to.
-const USAGE_MIN_WIDTH: u16 = 76;
+/// nothing left to say. The compact tier below `USAGE_ROOMY` needs 78 columns
+/// for borders, padding, the 20-column label, and the 6 numeric columns.
+const USAGE_MIN_WIDTH: u16 = 78;
 const USAGE_MIN_HEIGHT: u16 = 6;
 
 /// `u`: the day, per model, out of the database.
@@ -1000,9 +1041,10 @@ fn usage_screen(frame: &mut Frame, state: &State, area: Rect) {
             .usage_error
             .as_deref()
             .unwrap_or("no counts have been read");
+        let shade = if state.usage_loading { t.dim } else { t.bad };
         frame.render_widget(
             Paragraph::new(reason)
-                .style(Style::default().fg(t.bad))
+                .style(Style::default().fg(shade))
                 .alignment(Alignment::Center),
             area,
         );
@@ -1018,7 +1060,6 @@ fn usage_screen(frame: &mut Frame, state: &State, area: Rect) {
         return;
     }
 
-    let notes = usage_notes(t, table, &state.aliases);
     // Both ends carry their date: a window that is over ends at a midnight,
     // and `00:00:00` alone would not say which one. Today begins at its first
     // request rather than at midnight.
@@ -1042,47 +1083,61 @@ fn usage_screen(frame: &mut Frame, state: &State, area: Rect) {
     frame.render_widget(block, area);
 
     // Keep the range selector visible; scroll the table, total and notes as
-    // one document so every line remains reachable in a short terminal.
+    // one document without materializing an unbounded offscreen buffer.
     let selector = Rect::new(inner.x, inner.y, inner.width, 1);
     let viewport = Rect::new(inner.x, inner.y + 1, inner.width, inner.height - 1);
     frame.render_widget(Paragraph::new(usage_ranges(state)), selector);
-    let table_height = (table.rows.len() + 2).min(u16::MAX as usize / 2) as u16;
-    let content_height = table_height + 1 + notes.len() as u16;
-    let max_scroll = content_height.saturating_sub(viewport.height) as usize;
+    let notes = usage_notes(t, table, &state.aliases, viewport.width as usize);
+    let table_height = table.rows.len() + 2;
+    let content_height = table_height + 1 + notes.len();
+    let vh = viewport.height as usize;
+    let max_scroll = content_height.saturating_sub(vh);
     let offset = state.usage_scroll.get().min(max_scroll);
     state.usage_scroll.set(offset);
     state.usage_scroll_max.set(max_scroll);
-    state.usage_page_height.set(viewport.height as usize);
+    state.usage_page_height.set(vh.max(1));
 
-    let mut content = Buffer::empty(Rect::new(0, 0, viewport.width, content_height));
-    content.set_style(content.area, Style::default().fg(t.text).bg(t.surface));
-    let table_area = Rect::new(0, 0, viewport.width, table_height);
-    if table.is_empty() {
-        Paragraph::new(Line::from(Span::styled(
-            " no usage recorded in this window",
-            Style::default().fg(t.dim),
-        )))
-        .render(table_area, &mut content);
-    } else {
-        Widget::render(
-            usage_table(t, table, area.width, viewport.width, &state.aliases),
-            table_area,
-            &mut content,
-        );
+    if offset < table_height {
+        let vis_end = (offset + vh).min(table_height);
+        let vis_h = (vis_end - offset) as u16;
+        let table_area = Rect::new(viewport.x, viewport.y, viewport.width, vis_h);
+        if table.is_empty() {
+            if offset == 0 {
+                frame.render_widget(
+                    Paragraph::new(Line::from(Span::styled(
+                        " no usage recorded in this window",
+                        Style::default().fg(t.dim),
+                    ))),
+                    table_area,
+                );
+            }
+        } else {
+            frame.render_widget(
+                usage_table_slice(
+                    t,
+                    table,
+                    area.width,
+                    viewport.width,
+                    &state.aliases,
+                    offset,
+                    vis_end,
+                ),
+                table_area,
+            );
+        }
     }
-    Paragraph::new(notes).render(
-        Rect::new(
-            0,
-            table_height + 1,
-            viewport.width,
-            content_height - table_height - 1,
-        ),
-        &mut content,
-    );
-    for y in 0..viewport.height.min(content_height) {
-        for x in 0..viewport.width {
-            frame.buffer_mut()[(viewport.x + x, viewport.y + y)] =
-                content[(x, y + offset as u16)].clone();
+    let notes_start = table_height + 1;
+    if offset + vh > notes_start {
+        let skip = offset.saturating_sub(notes_start);
+        let screen_y = notes_start.saturating_sub(offset) as u16;
+        let vis_h = viewport.height.saturating_sub(screen_y);
+        if vis_h > 0 && skip < notes.len() {
+            let visible_notes: Vec<Line<'static>> =
+                notes.into_iter().skip(skip).take(vis_h as usize).collect();
+            frame.render_widget(
+                Paragraph::new(visible_notes),
+                Rect::new(viewport.x, viewport.y + screen_y, viewport.width, vis_h),
+            );
         }
     }
     if max_scroll > 0 {
@@ -1133,14 +1188,19 @@ fn usage_screen(frame: &mut Frame, state: &State, area: Rect) {
 /// a day of cached context can come to less than a cent and `0.00` says
 /// nothing at all.
 fn dollars(amount: f64) -> String {
+    if !amount.is_finite() {
+        return "-".to_string();
+    }
+    let sign = if amount < 0.0 { "-" } else { "" };
+    let amount = amount.abs();
     if amount == 0.0 {
         "$0".to_string()
     } else if amount >= 1.0 {
-        format!("${amount:.2}")
+        format!("{sign}${amount:.2}")
     } else if amount >= 0.01 {
-        format!("${amount:.3}")
+        format!("{sign}${amount:.3}")
     } else {
-        format!("${amount:.4}")
+        format!("{sign}${amount:.4}")
     }
 }
 
@@ -1156,28 +1216,32 @@ fn label_width(table: &spend::Table, most: u16, aliases: &ModelAliases) -> u16 {
         .rows
         .iter()
         .map(|row| {
-            Span::raw(spend::label(
+            display_width(&spend::label(
                 display(aliases, &row.model),
                 row.tier.as_deref(),
             ))
-            .width()
         })
         .max()
-        .unwrap_or(0);
+        .unwrap_or(0)
+        .min(u16::MAX as usize);
     (longest as u16).clamp(USAGE_LABEL, most.max(USAGE_LABEL))
 }
 
 /// `room` is the width the table is drawn in; the numbers keep their columns
-/// and the label takes what they leave, up to what it needs.
-fn usage_table(
+/// and the label takes what they leave, up to what it needs. Only rows in
+/// `start..end` (where `0` is the header and `rows.len() + 1` is the total)
+/// are materialized so scrolling stays O(viewport).
+fn usage_table_slice(
     t: &Theme,
     table: &spend::Table,
     width: u16,
     room: u16,
     aliases: &ModelAliases,
+    start: usize,
+    end: usize,
 ) -> Table<'static> {
     let roomy = width >= USAGE_ROOMY;
-    let show_hit = width >= 84;
+    let show_hit = width >= 85;
     let mut names = vec!["model", "reqs", "prompt", "cached", "written"];
     if show_hit {
         names.push("hit");
@@ -1193,12 +1257,16 @@ fn usage_table(
     let mut header = vec![Cell::from("model")];
     header.extend(names[1..].iter().map(|name| number(*name)));
 
-    let mut rows: Vec<Row> = table
-        .rows
-        .iter()
-        .map(|model| usage_row(t, model, roomy, show_hit, false, aliases))
-        .collect();
-    rows.push(usage_row(t, &table.total, roomy, show_hit, true, aliases));
+    let row_start = start.saturating_sub(1);
+    let row_end = end.saturating_sub(1);
+    let mut rows: Vec<Row> = Vec::with_capacity(row_end.saturating_sub(row_start));
+    for idx in row_start..row_end {
+        if let Some(model) = table.rows.get(idx) {
+            rows.push(usage_row(t, model, roomy, show_hit, false, aliases));
+        } else if idx == table.rows.len() {
+            rows.push(usage_row(t, &table.total, roomy, show_hit, true, aliases));
+        }
+    }
 
     let mut numbers: Vec<u16> = vec![5, 9, 9, 7];
     if show_hit {
@@ -1216,9 +1284,12 @@ fn usage_table(
         .chain(numbers)
         .map(Constraint::Length)
         .collect::<Vec<_>>();
-    Table::new(rows, widths)
-        .header(Row::new(header).style(Style::default().fg(t.dim)))
-        .column_spacing(1)
+    let widget = Table::new(rows, widths).column_spacing(1);
+    if start == 0 {
+        widget.header(Row::new(header).style(Style::default().fg(t.dim)))
+    } else {
+        widget
+    }
 }
 
 /// The window selector, drawn above the table: what is being measured, with
@@ -1281,7 +1352,7 @@ fn cost_lines(
         };
         lines.push(Line::from(vec![
             Span::styled(
-                format!(" {label:<width$.width$}"),
+                format!(" {}", pad_right(&label, width)),
                 Style::default().fg(if total { t.good } else { t.model }),
             ),
             Span::styled(
@@ -1436,11 +1507,18 @@ fn part(amount: Option<f64>) -> String {
 /// What the numbers above are not: written under them, in the order a reader
 /// would ask. A screen full of money has to say whose money, and which part of
 /// it is a floor.
-fn usage_notes(t: &Theme, table: &spend::Table, aliases: &ModelAliases) -> Vec<Line<'static>> {
+fn usage_notes(
+    t: &Theme,
+    table: &spend::Table,
+    aliases: &ModelAliases,
+    width: usize,
+) -> Vec<Line<'static>> {
+    let limit = width.saturating_sub(1).max(20);
     let mut notes: Vec<Line<'static>> = spend::notes_named(table, |row| {
         spend::label(display(aliases, &row.model), row.tier.as_deref())
     })
     .into_iter()
+    .flat_map(|text| wrap_note(&text, limit))
     .map(|text| note(t, text))
     .collect();
     notes.push(Line::from(vec![
@@ -1454,6 +1532,32 @@ fn usage_notes(t: &Theme, table: &spend::Table, aliases: &ModelAliases) -> Vec<L
         ),
     ]));
     notes
+}
+
+fn wrap_note(text: &str, limit: usize) -> Vec<String> {
+    if display_width(text) <= limit {
+        return vec![text.to_string()];
+    }
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    let mut used = 0usize;
+    for word in text.split_whitespace() {
+        let w = display_width(word);
+        if !current.is_empty() && used + 1 + w > limit {
+            lines.push(std::mem::take(&mut current));
+            used = 0;
+        }
+        if !current.is_empty() {
+            current.push(' ');
+            used += 1;
+        }
+        current.push_str(word);
+        used += w;
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    lines
 }
 
 fn note(t: &Theme, text: String) -> Line<'static> {
@@ -1494,9 +1598,9 @@ fn draw_charts(frame: &mut Frame, state: &State, area: Rect, mode: Charts) {
     if let Some(bars_area) = bars_area {
         let shown = bars_area.width.saturating_sub(2) as usize;
         let samples: Vec<(u64, u64)> = state.bars.iter().rev().take(shown).rev().copied().collect();
-        let window: (u64, u64) = samples
-            .iter()
-            .fold((0, 0), |sum, (raw, wire)| (sum.0 + raw, sum.1 + wire));
+        let window: (u64, u64) = samples.iter().fold((0, 0), |sum, (raw, wire)| {
+            (sum.0.saturating_add(*raw), sum.1.saturating_add(*wire))
+        });
         let legend = Line::from(vec![
             Span::styled(" raw ", Style::default().fg(t.dim)),
             Span::styled("█", Style::default().fg(t.raw)),
@@ -1540,11 +1644,11 @@ fn draw_charts(frame: &mut Frame, state: &State, area: Rect, mode: Charts) {
 
     let series = state
         .traffic
-        .series(state.scale, (inner.width - 12) as usize);
+        .series(state.scale, (inner.width - LABEL) as usize);
     let halves =
         Layout::vertical([Constraint::Percentage(50), Constraint::Percentage(50)]).split(inner);
     for (half, data, arrow, shade) in [
-        (halves[0], &series.up, "↑ up", t.wire),
+        (halves[0], &series.up, "↑ up  ", t.wire),
         (halves[1], &series.down, "↓ down", t.raw),
     ] {
         let peak = data.iter().copied().max().unwrap_or(0);
@@ -1868,7 +1972,7 @@ fn events(state: &State, width: u16) -> Paragraph<'static> {
     Paragraph::new(lines).block(block)
 }
 
-fn footer(state: &State) -> Paragraph<'static> {
+fn footer(state: &State, width: u16) -> Paragraph<'static> {
     let t = state.theme;
     if let Some(remote) = &state.remote
         && !remote.connected
@@ -1897,16 +2001,29 @@ fn footer(state: &State) -> Paragraph<'static> {
         ("t", "buckets"),
         ("c", "columns"),
         ("T", "theme"),
-        ("?", "keys"),
     ];
+    let help = ("?", "keys");
+    let chip_width = |(k, w): (&str, &str)| 1 + display_width(k) + 2 + 1 + display_width(w);
+    let budget = (width as usize).saturating_sub(chip_width(help));
     // Each key a chip with its word after it, one space to the next: the
-    // chip's own padding is what tells one hint from the next.
+    // chip's own padding is what tells one hint from the next. Reserve room
+    // for `? keys` so the help hint stays visible on narrow terminals.
     let mut spans = Vec::new();
-    for (key, what) in keys {
+    let mut used = 0usize;
+    let push_chip = |spans: &mut Vec<Span<'static>>, key: &str, what: &str| {
         spans.push(Span::raw(" "));
         spans.push(Span::styled(format!(" {key} "), t.key()));
         spans.push(Span::styled(format!(" {what}"), Style::default().fg(t.dim)));
+    };
+    for (key, what) in keys {
+        let need = chip_width((key, what));
+        if used + need > budget {
+            break;
+        }
+        push_chip(&mut spans, key, what);
+        used += need;
     }
+    push_chip(&mut spans, help.0, help.1);
     Paragraph::new(Line::from(spans))
 }
 
@@ -1992,8 +2109,8 @@ fn theme_lines(state: &State) -> Vec<Line<'static>> {
 
 fn popup(t: &Theme, frame: &mut Frame, area: Rect, title: &str, lines: Vec<Line<'static>>) {
     let limit = if title.starts_with("costs") { 92 } else { 72 };
-    let width = area.width.clamp(MIN_WIDTH, limit.max(MIN_WIDTH));
-    let height = (lines.len() as u16 + 2).min(area.height);
+    let width = area.width.min(limit.max(MIN_WIDTH));
+    let height = (lines.len().min(u16::MAX as usize - 2) as u16 + 2).min(area.height);
     let box_area = Rect {
         x: area.x + (area.width - width) / 2,
         y: area.y + (area.height - height) / 2,
@@ -2139,8 +2256,8 @@ fn help_lines(t: &Theme) -> Vec<Line<'static>> {
     [
         ("q / ctrl-c", "quit (confirms while a stream is live)"),
         ("j / ↓ / k / ↑", "move the cursor, wheel scrolls too"),
-        ("PgDn / PgUp", "move by a page"),
-        ("g / G", "oldest line / back to following"),
+        ("PgDn / Space / PgUp", "move by a page"),
+        ("g / Home / G / End", "oldest line / back to following"),
         ("Enter", "details of the highlighted request"),
         ("f", "requests in flight, live"),
         ("e", "only 4xx/5xx, cut streams and warnings"),
@@ -2149,12 +2266,12 @@ fn help_lines(t: &Theme) -> Vec<Line<'static>> {
         ("t", "1s / 10s / 60s traffic buckets"),
         ("c", "choose what a request line shows"),
         ("T", "pick a color theme, kept for the next run"),
-        ("?", "close this"),
+        ("Esc / ?", "close popup or return to following"),
     ]
     .into_iter()
     .map(|(key, what)| {
         Line::from(vec![
-            Span::styled(format!(" {key:<16}"), Style::default().fg(t.accent)),
+            Span::styled(format!(" {key:<20}"), Style::default().fg(t.accent)),
             Span::raw(what),
         ])
     })
@@ -3963,5 +4080,34 @@ mod tests {
         assert!(screen(160, 50, &state).contains("friendly-usage"));
         assert_eq!(state.usage.as_ref().unwrap().cost(), cost);
         assert_eq!(state.usage.as_ref().unwrap().rows[0].model, id);
+    }
+
+    #[test]
+    fn clipped_respects_wide_unicode_zero_width_and_sparkline_shows_newest_bucket() {
+        assert_eq!(clipped("abcdef", 0), "");
+        assert_eq!(clipped("abcdef", 1), "…");
+        assert_eq!(clipped("한글모델", 5), "한글…");
+        assert!(display_width(&clipped("한글모델", 5)) <= 5);
+        assert_eq!(dollars(f64::NAN), "-");
+        assert_eq!(dollars(-1.25), "-$1.25");
+
+        // A single spike in the newest bucket must actually be visible on the
+        // sparkline, not clipped off the right edge by an off-by-2 width bug.
+        let mut state = State::new();
+        state.recorded = true;
+        let mut traffic = vec![(0u64, 0u64); 120];
+        *traffic.last_mut().unwrap() = (8_192, 0);
+        state.tick_recorded(&crate::watch::Window {
+            traffic,
+            end: 120,
+            coverage: Duration::from_secs(120),
+        });
+        let out = screen(120, 30, &state);
+        let up_line = out.lines().find(|line| line.contains("↑ up")).unwrap();
+        assert!(up_line.contains("8KB"), "{up_line}");
+        assert!(
+            up_line.chars().any(|c| ('▁'..='█').contains(&c)),
+            "newest bucket must draw a sparkline bar:\n{out}"
+        );
     }
 }

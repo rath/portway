@@ -399,7 +399,11 @@ async fn remote_data_uses_server_totals_and_costs_without_recounting_events() {
     state.open_usage();
     let usage: wire::UsageReply = client.get("/api/usage?range=today").await.unwrap();
     assert!(usage.table.cost().is_some_and(|cost| cost > 0.0));
-    state.apply_remote(Update::Usage(portway::spend::Range::Today, Ok(usage)));
+    state.apply_remote(Update::Usage(
+        state.usage_request_id,
+        portway::spend::Range::Today,
+        Ok(usage),
+    ));
     assert!(state.usage.as_ref().unwrap().cost().unwrap() > 0.0);
     state.apply_remote(Update::Connection(false, "reconnecting".into()));
     assert_eq!(state.totals.requests, 1);
