@@ -560,7 +560,7 @@ raise both body limits if you intend to accept larger decoded bodies.
 Dictionaries are memory-only. They are isolated by the receiving instance and
 authentication context. Application middleware can supply a `DictionaryScope`
 extension after authenticating its caller. Standalone sender and receiver derive
-that context from the exact `Authorization`, `Cookie`, and `X-API-Key` headers; changing any of them
+that context from the exact `Authorization`, `Cookie`, `X-API-Key`, and `x-goog-api-key` headers; changing any of them
 starts a different context. A gateway that strips identity headers must isolate
 receiver instances per trust context or use middleware with an explicit scope.
 A scope partitions storage; it is not authentication.
@@ -611,7 +611,7 @@ Refusals suspend compression for 600 seconds. After expiry, one request trials
 gzip while concurrent requests use identity. The same single-trial rule applies
 when support is initially unknown. Origin capability entries expire after 600
 seconds without refresh. State is isolated by upstream, method, request target
-(including query), authentication context (including `X-API-Key`), content type,
+(including query), authentication context (including `X-API-Key` and `x-goog-api-key`), content type,
 and Anthropic version/beta headers. At most 1024 hashed contexts are kept per
 upstream; neither bodies nor credentials are retained in this cache.
 

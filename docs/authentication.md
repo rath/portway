@@ -111,8 +111,8 @@ the receiver's read-only capability endpoint through your gateway.
 
 A receiving Portway must sit behind authentication so unauthenticated callers
 cannot read or use an application's dictionary context. By default, sender and
-receiver partition dictionaries using the exact Authorization, Cookie, and
-X-API-Key header values. A different key or cookie creates a separate context; rotating a key may
+receiver partition dictionaries using the exact Authorization, Cookie,
+X-API-Key, and x-goog-api-key header values. A different key or cookie creates a separate context; rotating a key may
 therefore require new dictionary warm-up.
 
 A gateway that removes or replaces caller credentials with one shared value can

@@ -126,36 +126,40 @@ async fn explicit_scope_overrides_credential_partition() {
 
 #[tokio::test]
 async fn api_keys_isolate_receiver_dictionaries_and_sender_bases() {
-    let receiver = Receiver::new(config()).unwrap();
-    let first = body();
-    let keyed = |coding, data, key: &'static str, keep| {
-        let mut req = request(coding, data, "unused", keep);
-        req.headers_mut().remove("authorization");
-        req.headers_mut().insert("x-api-key", key.parse().unwrap());
-        req
-    };
-    let seed = keyed("zstd", Bytes::from(zstd(&first)), "alice", true);
-    let alice = DictionaryScope::from_headers(seed.headers());
-    assert!(receiver.decode(seed).await.is_ok());
-    let wire = Bytes::from(dcz(&first, &first));
-    let bob_request = keyed("dcz", wire.clone(), "bob", false);
-    let bob = DictionaryScope::from_headers(bob_request.headers());
-    assert_ne!(alice, bob);
-    assert_eq!(
-        receiver.decode(bob_request).await.err().unwrap().status(),
-        412
-    );
-    assert!(
-        receiver
-            .decode(keyed("dcz", wire, "alice", false))
-            .await
-            .is_ok()
-    );
+    for header in ["x-api-key", "x-goog-api-key"] {
+        let receiver = Receiver::new(config()).unwrap();
+        let first = body();
+        let keyed = |coding, data, key: &'static str, keep| {
+            let mut req = request(coding, data, "unused", keep);
+            req.headers_mut().remove("authorization");
+            req.headers_mut().insert(header, key.parse().unwrap());
+            req
+        };
+        let seed = keyed("zstd", Bytes::from(zstd(&first)), "alice", true);
+        let alice = DictionaryScope::from_headers(seed.headers());
+        assert!(receiver.decode(seed).await.is_ok(), "{header}");
+        let wire = Bytes::from(dcz(&first, &first));
+        let bob_request = keyed("dcz", wire.clone(), "bob", false);
+        let bob = DictionaryScope::from_headers(bob_request.headers());
+        assert_ne!(alice, bob, "{header}");
+        assert_eq!(
+            receiver.decode(bob_request).await.err().unwrap().status(),
+            412,
+            "{header}"
+        );
+        assert!(
+            receiver
+                .decode(keyed("dcz", wire, "alice", false))
+                .await
+                .is_ok(),
+            "{header}"
+        );
 
-    let ring = dict::Ring::default();
-    ring.confirm_scoped(dict::sha256(&first), first.clone(), alice.clone());
-    assert!(ring.pick_scoped(&first, &alice).is_some());
-    assert!(ring.pick_scoped(&first, &bob).is_none());
+        let ring = dict::Ring::default();
+        ring.confirm_scoped(dict::sha256(&first), first.clone(), alice.clone());
+        assert!(ring.pick_scoped(&first, &alice).is_some(), "{header}");
+        assert!(ring.pick_scoped(&first, &bob).is_none(), "{header}");
+    }
 }
 
 #[tokio::test]

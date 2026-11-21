@@ -119,6 +119,7 @@ impl OriginState {
         }
         for name in [
             "x-api-key",
+            "x-goog-api-key",
             "content-type",
             "anthropic-version",
             "anthropic-beta",

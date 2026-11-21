@@ -313,7 +313,7 @@ impl DictionaryScope {
     }
     pub fn from_headers(headers: &http::HeaderMap) -> Self {
         let mut hash = Sha256::new();
-        for name in ["authorization", "cookie", "x-api-key"] {
+        for name in ["authorization", "cookie", "x-api-key", "x-goog-api-key"] {
             for value in headers.get_all(name) {
                 hash.update((value.as_bytes().len() as u64).to_le_bytes());
                 hash.update(value.as_bytes());
