@@ -887,3 +887,48 @@ async fn traversal_oversized_uri_expect_stripping_and_receiver_health() {
     assert_eq!(json["mode"], "receive");
     task.abort();
 }
+
+#[tokio::test]
+async fn gemini_mount_records_model_from_path_but_leaves_catalog_empty() {
+    let origin = origin().await;
+    let (telemetry, events) = Telemetry::channel(16);
+    let router = Router::build(
+        &ForwarderConfig {
+            telemetry,
+            ..config()
+        },
+        &[("gemini".to_owned(), origin.url.clone())],
+        &[],
+        None,
+    )
+    .unwrap();
+
+    let (status, _) = send(
+        &router,
+        "POST",
+        "/gemini/v1beta/models/gemini-2.5-pro:streamGenerateContent?alt=sse",
+        &[("x-goog-api-key", "test-key")],
+        Bytes::from_static(br#"{"contents":[{"parts":[{"text":"hi"}]}]}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, _) = send(&router, "GET", "/gemini/v1beta/models", &[], Bytes::new()).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let records: Vec<_> = events
+        .try_iter()
+        .filter_map(|e| match e {
+            Event::Request(r) => Some(r),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[0].upstream, "gemini");
+    assert_eq!(records[0].model, "gemini-2.5-pro");
+    assert_eq!(
+        records[0].path,
+        "/v1beta/models/gemini-2.5-pro:streamGenerateContent"
+    );
+    assert_eq!(records[1].model, "");
+}

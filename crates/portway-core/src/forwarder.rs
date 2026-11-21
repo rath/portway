@@ -873,7 +873,7 @@ impl Forwarder {
             .get::<dict::DictionaryScope>()
             .cloned()
             .unwrap_or_else(|| dict::DictionaryScope::from_headers(&parts.headers));
-        let named = crate::router::named(&parts.headers, &body);
+        let named = crate::router::named_for_path(&parts.headers, &path, &body);
         self.handle_scoped(
             parts.method,
             path_and_query,
@@ -895,7 +895,7 @@ impl Forwarder {
         body: Bytes,
     ) -> Response<OutBody> {
         let scope = dict::DictionaryScope::from_headers(&client_headers);
-        let named = crate::router::named(&client_headers, &body);
+        let named = crate::router::named_for_path(&client_headers, &path, &body);
         self.handle_scoped(
             method,
             path_and_query,

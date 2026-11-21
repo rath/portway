@@ -220,7 +220,7 @@ impl Router {
                 Ok(body) => body,
                 Err(err) => return invalid_request(err.status(), &err.to_string(), None),
             };
-            let named = named(&parts.headers, &body);
+            let named = named_for_path(&parts.headers, &rest, &body);
             return forwarder
                 .handle_scoped(
                     parts.method,
@@ -238,7 +238,7 @@ impl Router {
                 Ok(body) => body,
                 Err(err) => return invalid_request(err.status(), &err.to_string(), None),
             };
-            let named = named(&parts.headers, &body);
+            let named = named_for_path(&parts.headers, &path, &body);
             return root
                 .handle_scoped(
                     parts.method,
@@ -463,6 +463,39 @@ pub fn named(headers: &HeaderMap, body: &[u8]) -> Named {
         model: fields.model,
         tier: pricing_class(fields.speed, fields.service_tier),
     }
+}
+
+/// Model name carried in a Gemini/Vertex custom-method path such as
+/// `/v1beta/models/gemini-2.5-pro:streamGenerateContent` or
+/// `/v1/projects/p/locations/l/publishers/google/models/gemini-2.5-pro:generateContent`.
+pub fn path_model(path: &str) -> Option<String> {
+    let path = path.split('?').next().unwrap_or(path);
+    let mut segments = path.rsplit('/');
+    let last = segments.next()?;
+    let parent = segments.next()?;
+    if parent != "models" {
+        return None;
+    }
+    let (model, action) = last.rsplit_once(':')?;
+    if model.is_empty()
+        || action.is_empty()
+        || !action
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+    {
+        return None;
+    }
+    Some(model.to_owned())
+}
+
+/// Like [`named`], falling back to [`path_model`] when the request body does
+/// not name a model (for example, Gemini REST requests or pre-encoded bodies).
+pub fn named_for_path(headers: &HeaderMap, path: &str, body: &[u8]) -> Named {
+    let mut found = named(headers, body);
+    if found.model.is_none() {
+        found.model = path_model(path);
+    }
+    found
 }
 
 /// A mount is one path segment, so a client's base URL can end in it and
@@ -796,6 +829,66 @@ mod tests {
         assert_eq!(
             query_model(Some("model=gpt%2F4+mini")).as_deref(),
             Some("gpt/4 mini")
+        );
+    }
+
+    #[test]
+    fn gemini_and_vertex_paths_extract_the_model_without_matching_catalogs() {
+        for (path, expected) in [
+            (
+                "/v1beta/models/gemini-2.5-pro:streamGenerateContent",
+                Some("gemini-2.5-pro"),
+            ),
+            (
+                "/v1/models/gemini-2.5-flash:generateContent?alt=sse",
+                Some("gemini-2.5-flash"),
+            ),
+            (
+                "/v1alpha/models/gemini-3-pro-preview:countTokens",
+                Some("gemini-3-pro-preview"),
+            ),
+            (
+                "/v1/projects/p/locations/us-central1/publishers/google/models/gemini-2.5-pro:streamGenerateContent",
+                Some("gemini-2.5-pro"),
+            ),
+            (
+                "/models/gemini-2.5-pro:generateContent",
+                Some("gemini-2.5-pro"),
+            ),
+            ("/v1/models", None),
+            ("/v1beta/models", None),
+            ("/v1beta/models/", None),
+            ("/v1beta/models/gemini-2.5-pro", None),
+            ("/v1beta/models/:generateContent", None),
+            ("/v1beta/models/gemini-2.5-pro:", None),
+            ("/v1beta/models/gemini-2.5-pro:bad-action", None),
+            ("/v1/chat/completions", None),
+            ("/v1/messages", None),
+        ] {
+            assert_eq!(path_model(path).as_deref(), expected, "{path}");
+        }
+
+        let plain = HeaderMap::new();
+        let mut encoded = HeaderMap::new();
+        encoded.insert("content-encoding", "zstd".parse().unwrap());
+        let path = "/v1beta/models/gemini-2.5-pro:streamGenerateContent";
+        assert_eq!(
+            named_for_path(&plain, path, br#"{"contents":[]}"#)
+                .model
+                .as_deref(),
+            Some("gemini-2.5-pro")
+        );
+        assert_eq!(
+            named_for_path(&encoded, path, b"compressed")
+                .model
+                .as_deref(),
+            Some("gemini-2.5-pro")
+        );
+        assert_eq!(
+            named_for_path(&plain, path, br#"{"model":"body-wins"}"#)
+                .model
+                .as_deref(),
+            Some("body-wins")
         );
     }
 }
