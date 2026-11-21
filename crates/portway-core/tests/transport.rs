@@ -903,12 +903,17 @@ async fn gemini_mount_records_model_from_path_but_leaves_catalog_empty() {
     )
     .unwrap();
 
+    let sse_reply = concat!(
+        "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"hi\"}]}}],",
+        "\"usageMetadata\":{\"promptTokenCount\":1000,\"cachedContentTokenCount\":800,",
+        "\"candidatesTokenCount\":40,\"thoughtsTokenCount\":60,\"totalTokenCount\":1100}}\n\n"
+    );
     let (status, _) = send(
         &router,
         "POST",
         "/gemini/v1beta/models/gemini-2.5-pro:streamGenerateContent?alt=sse",
         &[("x-goog-api-key", "test-key")],
-        Bytes::from_static(br#"{"contents":[{"parts":[{"text":"hi"}]}]}"#),
+        Bytes::from_static(sse_reply.as_bytes()),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -930,5 +935,11 @@ async fn gemini_mount_records_model_from_path_but_leaves_catalog_empty() {
         records[0].path,
         "/v1beta/models/gemini-2.5-pro:streamGenerateContent"
     );
+    let usage = records[0].usage.expect("gemini usageMetadata scanned");
+    assert_eq!(usage.prompt, 1000);
+    assert_eq!(usage.cached, Some(800));
+    assert_eq!(usage.completion, 100);
+    assert_eq!(usage.reasoning, Some(60));
     assert_eq!(records[1].model, "");
+    assert_eq!(records[1].usage, None);
 }

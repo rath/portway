@@ -102,8 +102,16 @@ impl Usage {
 pub const WRITE_5M_HEADER: &str = "msh-usage-cache-write-tokens-5m";
 pub const WRITE_1H_HEADER: &str = "msh-usage-cache-write-tokens-1h";
 
-/// The field the counts live under, quotes included.
-const KEY: &[u8] = b"\"usage\"";
+/// The fields the counts live under, quotes included. Both share the `"usage`
+/// prefix, so one byte-by-byte matcher finds either without backtracking.
+const KEY_USAGE_LEN: usize = 6; // b"\"usage"
+const KEY_GEMINI: &[u8] = b"\"usageMetadata\"";
+
+#[derive(Clone, Copy)]
+enum KeyKind {
+    Usage,
+    UsageMetadata,
+}
 
 /// How deep inside the usage object a byte may sit and still be kept: its own
 /// fields are at depth 1, the fields of a `…_details` object at depth 2.
@@ -148,11 +156,11 @@ enum State {
     /// Looking for the key, this many of its bytes just seen.
     Search(usize),
     /// After the key: whitespace, then the colon.
-    Colon,
+    Colon(KeyKind),
     /// After the colon: whitespace, then the object.
-    Open,
+    Open(KeyKind),
     /// Inside the object.
-    Object(Candidate),
+    Object(KeyKind, Candidate),
 }
 
 impl Default for State {
@@ -291,31 +299,41 @@ impl Scanner {
     fn step(&mut self, byte: u8, before: Option<u8>) {
         match &mut self.state {
             State::Search(seen) => {
-                // `\"usage\"` is generated content, not a field: an escaped
-                // quote never opens the key.
+                // `\"usage\"` and `\"usageMetadata\"` are generated content, not
+                // fields: an escaped quote never opens the key.
                 let opens = byte == b'"' && before != Some(b'\\');
-                *seen = if *seen > 0 && byte == KEY[*seen] {
-                    *seen + 1
+                if *seen == KEY_USAGE_LEN && byte == b'"' {
+                    self.state = State::Colon(KeyKind::Usage);
+                } else if *seen > 0 && byte == KEY_GEMINI[*seen] {
+                    *seen += 1;
+                    if *seen == KEY_GEMINI.len() {
+                        self.state = State::Colon(KeyKind::UsageMetadata);
+                    }
                 } else {
-                    usize::from(opens)
-                };
-                if *seen == KEY.len() {
-                    self.state = State::Colon;
+                    *seen = usize::from(opens);
                 }
             }
-            State::Colon | State::Open if byte.is_ascii_whitespace() => {}
-            State::Colon if byte == b':' => self.state = State::Open,
-            State::Open if byte == b'{' => self.state = State::Object(Candidate::new()),
+            State::Colon(_) | State::Open(_) if byte.is_ascii_whitespace() => {}
+            State::Colon(kind) if byte == b':' => self.state = State::Open(*kind),
+            State::Open(kind) if byte == b'{' => {
+                self.state = State::Object(*kind, Candidate::new())
+            }
             // `null`, a string, or another field: this byte may itself start
             // the next key.
-            State::Colon | State::Open => {
+            State::Colon(_) | State::Open(_) => {
                 self.state = State::Search(0);
                 self.step(byte, before);
             }
-            State::Object(candidate) => match candidate.take(byte) {
+            State::Object(kind, candidate) => match candidate.take(byte) {
                 Step::More => {}
                 Step::Closed => {
-                    if let Some(usage) = read(&candidate.kept, &mut self.input_counts) {
+                    let parsed = match *kind {
+                        KeyKind::Usage => read(&candidate.kept, &mut self.input_counts),
+                        KeyKind::UsageMetadata => {
+                            read_gemini(&candidate.kept, &mut self.input_counts)
+                        }
+                    };
+                    if let Some(usage) = parsed {
                         self.last = Some(usage.normalized());
                     }
                     self.state = State::Search(0);
@@ -403,6 +421,37 @@ fn read(object: &[u8], input: &mut InputCounts) -> Option<Usage> {
             .or_else(|| nested(&map, "output_tokens_details", "reasoning_tokens"))
             .or_else(|| count("reasoning_tokens")),
         ..writes.usage()
+    })
+}
+
+/// Read the counts out of a Gemini `usageMetadata` object.
+///
+/// Gemini reports `thoughtsTokenCount` beside `candidatesTokenCount` (rather
+/// than inside it) and bills output pricing on their sum, while
+/// `promptTokenCount` already includes `cachedContentTokenCount` and sits
+/// beside optional `toolUsePromptTokenCount`.
+fn read_gemini(object: &[u8], input: &mut InputCounts) -> Option<Usage> {
+    let Value::Object(map) = serde_json::from_slice::<Value>(object).ok()? else {
+        return None;
+    };
+    let count = |name: &str| map.get(name).and_then(Value::as_u64);
+    let prompt =
+        count("promptTokenCount")?.checked_add(count("toolUsePromptTokenCount").unwrap_or(0))?;
+    let candidates = count("candidatesTokenCount");
+    let thoughts = count("thoughtsTokenCount");
+    if candidates.is_none() && thoughts.is_none() {
+        return None;
+    }
+    let completion = candidates.unwrap_or(0).checked_add(thoughts.unwrap_or(0))?;
+    // Gemini supplies complete cumulative objects; do not merge with
+    // partial input/output counts from another candidate.
+    *input = InputCounts::default();
+    Some(Usage {
+        prompt,
+        cached: count("cachedContentTokenCount"),
+        completion,
+        reasoning: thoughts,
+        ..Usage::default()
     })
 }
 
@@ -894,11 +943,91 @@ data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"outpu
         let mut scanner = Scanner::default();
         scanner.push(br#"{"usage":{"input_tokens":100,"output_tokens":1}}"#);
         scanner.push(br#"{"usage":{"prompt_tokens":"not-a-number"}}"#);
+        scanner.push(br#"{"usageMetadata":{"promptTokenCount":"bad"}}"#);
         scanner.push(br#"{"usage":{"output_tokens_details":{"reasoning_tokens":15}}}"#);
         scanner.push(br#"{"usage":{"output_tokens":42}}"#);
         let usage = scanner.usage().unwrap();
         assert_eq!(usage.prompt, 100);
         assert_eq!(usage.completion, 42);
         assert_eq!(usage.reasoning, Some(15));
+    }
+
+    #[test]
+    fn gemini_usage_metadata_reads_buffered_sse_and_json_array_streams_across_any_cut() {
+        let buffered = br#"{"candidates":[{"content":{"parts":[{"text":"hello"}]}}],"usageMetadata":{"promptTokenCount":18234,"cachedContentTokenCount":16000,"candidatesTokenCount":149,"thoughtsTokenCount":742,"toolUsePromptTokenCount":50,"totalTokenCount":19175,"promptTokensDetails":[{"modality":"TEXT","tokenCount":18234}],"candidatesTokensDetails":[{"modality":"TEXT","tokenCount":149}]}}"#;
+        let expected = Usage {
+            prompt: 18_284,
+            cached: Some(16_000),
+            completion: 891,
+            reasoning: Some(742),
+            ..Usage::default()
+        };
+        for cut in 0..=buffered.len() {
+            assert_eq!(
+                scan_all(&[&buffered[..cut], &buffered[cut..]]),
+                Some(expected),
+                "cut at {cut}"
+            );
+        }
+
+        // SSE stream: early chunk has only promptTokenCount, middle has thoughts only,
+        // final has cumulative candidates + thoughts.
+        let sse = [
+            &b"data: {\"candidates\":[],\"usageMetadata\":{\"promptTokenCount\":500,\"totalTokenCount\":500}}\n\n"[..],
+            &b"data: {\"candidates\":[],\"usageMetadata\":{\"promptTokenCount\":500,\"thoughtsTokenCount\":120,\"totalTokenCount\":620}}\n\n"[..],
+            &b"data: {\"candidates\":[{\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":500,\"cachedContentTokenCount\":400,\"candidatesTokenCount\":30,\"thoughtsTokenCount\":120,\"totalTokenCount\":650}}\n\n"[..],
+        ];
+        assert_eq!(
+            scan_all(&sse),
+            Some(Usage {
+                prompt: 500,
+                cached: Some(400),
+                completion: 150,
+                reasoning: Some(120),
+                ..Usage::default()
+            })
+        );
+
+        // JSON array stream (default streamGenerateContent without ?alt=sse) and thoughts-only turn.
+        let array = br#"[{"candidates":[],"usageMetadata":null},{"candidates":[],"usageMetadata":{"promptTokenCount":100,"thoughtsTokenCount":64,"totalTokenCount":164}}]"#;
+        assert_eq!(
+            scan_all(&[array]),
+            Some(Usage {
+                prompt: 100,
+                cached: None,
+                completion: 64,
+                reasoning: Some(64),
+                ..Usage::default()
+            })
+        );
+
+        // Escaped text, incomplete metadata, inconsistent cache, and overflow are rejected or normalized.
+        assert_eq!(
+            scan_all(&[
+                br#"{"text":"{\"usageMetadata\":{\"promptTokenCount\":99,\"candidatesTokenCount\":1}}"}"#
+            ]),
+            None
+        );
+        assert_eq!(
+            scan_all(&[br#"{"usageMetadata":{"promptTokenCount":100,"totalTokenCount":100}}"#]),
+            None
+        );
+        assert_eq!(
+            scan_all(&[
+                br#"{"usageMetadata":{"promptTokenCount":100,"cachedContentTokenCount":200,"candidatesTokenCount":10}}"#
+            ]),
+            Some(Usage {
+                prompt: 100,
+                cached: None,
+                completion: 10,
+                ..Usage::default()
+            })
+        );
+        assert_eq!(
+            scan_all(&[
+                br#"{"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":18446744073709551615,"thoughtsTokenCount":1}}"#
+            ]),
+            None
+        );
     }
 }
