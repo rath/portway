@@ -560,7 +560,7 @@ raise both body limits if you intend to accept larger decoded bodies.
 Dictionaries are memory-only. They are isolated by the receiving instance and
 authentication context. Application middleware can supply a `DictionaryScope`
 extension after authenticating its caller. Standalone sender and receiver derive
-that context from the exact Authorization and Cookie headers; changing either
+that context from the exact `Authorization`, `Cookie`, and `X-API-Key` headers; changing any of them
 starts a different context. A gateway that strips identity headers must isolate
 receiver instances per trust context or use middleware with an explicit scope.
 A scope partitions storage; it is not authentication.
@@ -650,9 +650,12 @@ Choose mode and operations with CLI arguments:
 | `--tui` | Start a dashboard or attach to an existing local instance; optional build feature |
 | `--tui --attach URL` | View a remote web console over HTTP/HTTPS; prompts for its token once and remembers the session |
 | `--client-cert PATH` | With `--attach`: PEM certificate and unencrypted key for a console behind mutual TLS; `PORTWAY_CLIENT_CERT` when absent |
+| `--event-columns LIST` | With `--tui`: comma-separated request-line columns for one run |
+| `--theme ID` | With `--tui`: theme ID for one run without overwriting `portway.tui` |
 | `--web` | Serve the dashboard in a browser, or attach to an existing local instance; combines with `--daemon`; optional build feature |
 | `--web-host HOST`, `--web-port PORT` | Where the console listens; default `127.0.0.1` and `8790`, `0` for a free port |
 | `--web-allow-host NAME` | A name the console answers to besides `localhost` and IP addresses; repeat or separate with commas. `--web-host` counts when it is a name |
+| `--web-base-path PATH` | With `--web`: serve the console under a reverse-proxy subpath such as `/portway` |
 | `--no-open` | Print the console's link without opening it in the default browser |
 | `--report --since SPAN` | Read a report; default window is 24h |
 | `--model NAME` | Filter a report by the model requests named |

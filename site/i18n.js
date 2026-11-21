@@ -50,5 +50,6 @@ export const STRINGS = {
 // browser reporting "ko-KR" for a Korean page still lands on Korean.
 export function strings(lang) {
   const tag = String(lang || "");
+  if (tag.toLowerCase().startsWith("zh")) return STRINGS["zh-Hans"];
   return STRINGS[tag] ?? STRINGS[tag.split("-")[0]] ?? STRINGS.en;
 }

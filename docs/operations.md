@@ -314,9 +314,13 @@ emits its assets and API calls under that prefix and answers 404 outside it,
 so the proxy forwards the path unchanged instead of stripping it. The `Host`
 the proxy forwards must be one the console answers to: rewrite it, or name the
 public host with `--web-allow-host`. The console accepts a request only from
-its own origin, `http://` plus that `Host`, so the proxy must also rewrite
-`Origin` to that value, even when the browser reached the proxy over HTTPS.
-Without the `Origin` rewrite every page loads but signing in fails with 403.
+its own origin, `http://` plus that `Host`, so when the browser reached the
+proxy over HTTPS, configure the proxy to rewrite `Origin` **only when the
+incoming `Origin` matches the public origin** (never unconditionally rewrite
+arbitrary `Origin` headers, which would bypass the cross-origin check). Without
+that conditional rewrite every page loads but signing in fails with 403. When
+terminating TLS, also consider appending `; Secure` to `Set-Cookie` and sending
+`Strict-Transport-Security`.
 
 `--daemon --web` hosts the console in the daemon without opening a browser. The
 launcher prints the links next to the log path, `--status` prints them again while the console runs, and they
@@ -509,7 +513,7 @@ to ordinary compression according to the [retry protocol](protocol.md#errors-and
 | `--tui` is an unrecognized argument | Rebuild or install with `--features tui`, and check which executable your shell finds. |
 | Dashboard needs a terminal | Run `--tui` directly in a terminal; use `--report` for redirected output. |
 | `--web` is an unrecognized argument | Rebuild or install with `--features web`. |
-| The console asks for the printed address | The session belongs to one run: open the link the current run printed, or `portway --status --data-dir …` for a daemon's. |
+| The console asks for the printed address | The browser has no valid session cookie (or it was opened with a one-time launch code, or `web-auth.json` was reset): open the link the current run printed, or `portway --status --data-dir …` for a daemon's. |
 | The web console shows no requests in flight | Web attach reads another instance's database; use an attached TUI or the serving process's own console for live flights. |
 | TUI says `in flight unavailable` | Check the same data directory, host/port and user; restart an older server with the new binary and check its log for socket setup warnings. Recorded history remains available. |
 | Dashboard has no prices or an empty history | Pass its price-bearing config and the serving instance's data directory; also check the selected date window. |

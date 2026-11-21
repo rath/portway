@@ -8,7 +8,8 @@ for features in tui web tui,web; do
     cargo test --locked --workspace --all-targets --features "$features"
     cargo clippy --locked --workspace --all-targets --features "$features" -- -D warnings
 done
-cargo test --locked --workspace --doc
+cargo test --locked --workspace --doc --no-default-features
+cargo test --locked --workspace --doc --all-features
 core_tree="$(cargo tree --locked -p portway-core --edges normal --prefix none)"
 if grep -Eq '^(clap|rusqlite|ratatui|crossterm) ' <<< "$core_tree"; then
     echo 'portway-core acquired an application dependency' >&2

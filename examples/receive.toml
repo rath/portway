@@ -27,7 +27,7 @@ max_body_bytes = 268435456         # 256MiB limit for encoded and decoded bodies
 max_window_bytes = 134217728       # 128MiB zstd window limit
 
 # Optional receiver-to-origin compression. Enable for adaptive gzip/zstd uploads.
-# A 415 retries identity once and suspends compression for 10 minutes.
-# A 400 suspends compression without replay. Other errors are not replayed.
+# A 400 or 415 retries identity once and suspends compression for 10 minutes.
+# Other errors are not replayed.
 # [receiver.origin_compression]
 # mode = "auto" # default: "off"

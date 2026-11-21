@@ -135,21 +135,23 @@ request and stop or reload the forwarder, so it is guarded even on loopback:
   unsafe or corrupt files are refused rather than silently regenerated.
 - **A launch code for the browser it opens.** A command line is visible to
   other local users, so the browser a foreground `--web` opens is handed a
-  separate code, not the token. It opens one session and expires after two
+  separate code, not the token. It opens one ephemeral in-memory session (not
+  backed by the persistent secret in `web-auth.json`) and expires after two
   minutes; if someone else uses it first, the page asks for the printed link.
 - **Requests from other sites are refused.** The `Host` header must name the
   console's port on `localhost`, an IP literal, or a name the operator allowed
   with `--web-allow-host` (or gave as `--web-host`), which defeats DNS
-  rebinding as long as those names resolve only where you expect; a present `Origin` must be the console's own; every `POST` must carry an
+  rebinding as long as those names resolve only where you expect; a present `Origin` must be the console's own; every non-GET/HEAD request must carry an
   `x-portway-console` header, which a cross-site form cannot send.
 - **The page cannot be turned against itself.** It is served with a
   Content-Security-Policy that allows only its own embedded files, no framing,
-  no inline script, and no inline styles. Every text it shows is set as text,
+  no objects, no inline script, and no inline styles. Every text it shows is set as text,
   never parsed as markup.
 - **No TLS.** The console speaks plain HTTP. Binding `--web-host` to a
   non-loopback address prints a warning: the token keeps strangers out, but
   anyone on the path can read the traffic. Put it behind a TLS-terminating
-  proxy that preserves `Host`, or use an SSH tunnel instead.
+  proxy that preserves `Host` (and only rewrites `Origin` when it matches the
+  public origin), or use an SSH tunnel instead.
 
 ## Replay safety
 

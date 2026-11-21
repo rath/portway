@@ -333,11 +333,15 @@ class Portway:
         argv += ["--upstream", upstream, "--host", "127.0.0.1", "--port", str(port),
                  "--data-dir", str(workdir / name)] + extra
         log_file = open(log, "wb")
-        # cwd is the temporary directory, so a portway.toml in the caller's
-        # directory cannot change the configuration being measured.
-        process = subprocess.Popen(argv, cwd=workdir, env={**os.environ, "NO_COLOR": "1"},
-                                   stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                   stderr=log_file)
+        try:
+            # cwd is the temporary directory, so a portway.toml in the caller's
+            # directory cannot change the configuration being measured.
+            process = subprocess.Popen(argv, cwd=workdir, env={**os.environ, "NO_COLOR": "1"},
+                                       stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                       stderr=log_file)
+        except Exception:
+            log_file.close()
+            raise
         return cls(name, port, log, process, log_file)
 
     def wait_ready(self) -> None:
@@ -616,6 +620,10 @@ def main(argv: list[str]) -> int:
         keep = True
         print(f"bench: {err}", file=sys.stderr)
         return err.code
+    except (OSError, http.client.HTTPException, ValueError) as err:
+        keep = True
+        print(f"bench: transport error: {err}", file=sys.stderr)
+        return 1
     except KeyboardInterrupt:
         return 130
     finally:

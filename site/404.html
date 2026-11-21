@@ -95,8 +95,8 @@
   const wanted = (navigator.languages?.length ? navigator.languages : [navigator.language || "en"])
     .map((tag) => String(tag).toLowerCase())
     .map((tag) => (tag.startsWith("zh") ? "zh-Hans" : tag.split("-")[0]));
-  const tag = wanted.find((candidate) => candidate in STRINGS);
-  if (!tag) return;
+  const tag = wanted.find((candidate) => candidate === "en" || candidate in STRINGS);
+  if (!tag || tag === "en") return;
 
   const strings = STRINGS[tag];
   document.documentElement.lang = tag;
