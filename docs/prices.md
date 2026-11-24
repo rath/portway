@@ -667,6 +667,8 @@ If the config already contains a `[prices]` header, place these rows under it.
 "gemini-4-hydrogen-medium" = { input = 1.50, output = 7.50, cache_read = 0.075 }
 "gemini-4-hydrogen-high" = { input = 1.50, output = 7.50, cache_read = 0.075 }
 "gemini-4-hydrogen-xhigh" = { input = 1.50, output = 7.50, cache_read = 0.075 }
+# Estimate for Sonar using the standard Gemini 4 Hydrogen rates.
+"gemini-4-hydrogen-sonar" = { input = 1.50, output = 7.50, cache_read = 0.075 }
 
 # Introductory rates through December 31, 2026.
 "gemini-3.8-flash-low" = { input = 0.75, output = 3.75, cache_read = 0.075 }
