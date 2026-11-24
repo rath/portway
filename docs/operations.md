@@ -247,6 +247,7 @@ adds `--config` automatically must omit it for remote attach.
 | `Enter` | Request details |
 | `f` | Requests in flight |
 | `e` / `m` | Trouble-only filter / upstream filter |
+| `v` | Show or hide the request body and socket throughput charts |
 | `t` | Throughput bucket width |
 | `u` | Usage and cost view |
 | `←` / `→` in usage | Change the date window |
