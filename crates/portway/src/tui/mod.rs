@@ -415,7 +415,8 @@ fn run(
         if dirty {
             let size = terminal.size()?;
             let area = Rect::new(0, 0, size.width, size.height);
-            state.viewport = view::events_height(area, state.recent_models().len());
+            state.viewport =
+                view::events_height(area, state.recent_models().len(), state.show_charts);
             // The write that notices a terminal that went away.
             terminal.draw(|frame| view::draw(frame, &state, header))?;
             dirty = false;
@@ -426,18 +427,15 @@ fn run(
         let nap = TICK.saturating_sub(last_tick.elapsed()).min(NAP);
         match keys.recv_timeout(nap) {
             Ok(first) => {
-                match apply_action(first, &mut state, settings) {
-                    Action::Quit => return Ok(()),
-                    Action::Changed => dirty = true,
-                    Action::Ignored => {}
-                }
-                for _ in 0..64 {
-                    let Ok(next) = keys.try_recv() else {
-                        break;
-                    };
-                    match apply_action(next, &mut state, settings) {
+                for event in std::iter::once(first).chain(keys.try_iter()).take(65) {
+                    match apply_action(event, &mut state, settings) {
                         Action::Quit => return Ok(()),
                         Action::Changed => dirty = true,
+                        Action::LayoutChanged => {
+                            // Recompute the viewport before the next scroll key.
+                            dirty = true;
+                            break;
+                        }
                         Action::Ignored => {}
                     }
                 }
@@ -492,6 +490,7 @@ fn tick(state: &mut State, feed: &Feed) {
 enum Action {
     Ignored,
     Changed,
+    LayoutChanged,
     Quit,
 }
 
@@ -712,6 +711,10 @@ fn key_press_action(key: KeyEvent, state: &mut State, settings: &Settings) -> Ac
             state.help = false;
             state.picker = false;
             state.detail = false;
+        }
+        KeyCode::Char('v') => {
+            state.show_charts = !state.show_charts;
+            return Action::LayoutChanged;
         }
         KeyCode::Char('t') => state.cycle_scale(),
         KeyCode::Char('c') => {

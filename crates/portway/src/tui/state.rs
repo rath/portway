@@ -291,6 +291,7 @@ pub struct State {
     pub themes_kept: &'static Theme,
     /// Set by the first quit keystroke while requests are still in flight.
     pub confirm_quit: bool,
+    pub show_charts: bool,
     pub scale: usize,
     /// The numbers: counters, samples and charts, shared with the web console.
     pub board: Board,
@@ -386,6 +387,7 @@ impl State {
             themes_at: 0,
             themes_kept: &TERMINAL,
             confirm_quit: false,
+            show_charts: true,
             scale: SCALES[0],
             board: Board::new(),
             flights: Vec::new(),

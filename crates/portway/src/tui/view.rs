@@ -67,7 +67,7 @@ pub struct Panes {
 /// Requests in flight take no part: they come and go several times a turn,
 /// and a pane sized by them pushed everything under it up and down with every
 /// one. They live in the `f` dialog, over a layout that holds still.
-pub fn panes(area: Rect, models: usize) -> Option<Panes> {
+pub fn panes(area: Rect, models: usize, show_charts: bool) -> Option<Panes> {
     if area.width < MIN_WIDTH || area.height < HUD_HEIGHT + FOOTER_HEIGHT + EVENTS_MIN {
         return None;
     }
@@ -79,7 +79,7 @@ pub fn panes(area: Rect, models: usize) -> Option<Panes> {
         spare -= table_height;
     }
 
-    let charts = if area.height < CHARTS_MIN_HEIGHT {
+    let charts = if !show_charts || area.height < CHARTS_MIN_HEIGHT {
         None
     } else if area.width >= WIDE && spare >= CHART_HEIGHT {
         Some(Charts::SideBySide)
@@ -126,8 +126,8 @@ pub fn panes(area: Rect, models: usize) -> Option<Panes> {
 }
 
 /// Rows the event pane can show, which is what a page of scrolling moves by.
-pub fn events_height(area: Rect, models: usize) -> usize {
-    panes(area, models)
+pub fn events_height(area: Rect, models: usize, show_charts: bool) -> usize {
+    panes(area, models, show_charts)
         .map(|panes| panes.events.height.saturating_sub(2) as usize)
         .unwrap_or(1)
         .max(1)
@@ -156,7 +156,7 @@ pub fn draw(frame: &mut Frame, state: &State, header: &Header) {
         }
         return;
     }
-    let Some(panes) = panes(area, state.recent_models().len()) else {
+    let Some(panes) = panes(area, state.recent_models().len(), state.show_charts) else {
         frame.render_widget(
             // Short enough to survive the truncation it is warning about.
             Paragraph::new("too small")
@@ -1998,6 +1998,7 @@ fn footer(state: &State, width: u16) -> Paragraph<'static> {
         ("e", "trouble"),
         ("m", "upstream"),
         ("u", "usage"),
+        ("v", "charts"),
         ("t", "buckets"),
         ("c", "columns"),
         ("T", "theme"),
@@ -2263,6 +2264,7 @@ fn help_lines(t: &Theme) -> Vec<Line<'static>> {
         ("e", "only 4xx/5xx, cut streams and warnings"),
         ("m", "cycle the upstream filter"),
         ("u", "tokens and cost per model, by window"),
+        ("v", "show or hide the charts"),
         ("t", "1s / 10s / 60s traffic buckets"),
         ("c", "choose what a request line shows"),
         ("T", "pick a color theme, kept for the next run"),
@@ -3092,7 +3094,12 @@ mod tests {
             let out = screen(width, 24, &state);
             assert!(out.contains("recent upstreams · 3/11"), "{out}");
             assert!(out.contains("socket bytes/s"), "{out}");
-            let panes = panes(Rect::new(0, 0, width, 24), state.recent_models().len()).unwrap();
+            let panes = panes(
+                Rect::new(0, 0, width, 24),
+                state.recent_models().len(),
+                true,
+            )
+            .unwrap();
             assert_eq!(panes.models.unwrap().height, 6);
             assert!(panes.events.height >= 6);
             let table = out.lines().skip(5).take(6).collect::<Vec<_>>().join("\n");
@@ -3204,6 +3211,39 @@ mod tests {
     }
 
     #[test]
+    fn toggling_charts_gives_their_rows_to_events() {
+        use crate::tui::{Action, Settings, key_press_action};
+        use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        let key = KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE);
+        let settings = Settings::default();
+        for (width, chart_rows) in [(140, CHART_HEIGHT), (78, 2 * CHART_HEIGHT)] {
+            let mut state = populated();
+            // Freeze the HUD's uptime for the frame comparison.
+            state.coverage = Some(Duration::ZERO);
+            let area = Rect::new(0, 0, width, 40);
+            let models = state.recent_models().len();
+            let original = screen(width, area.height, &state);
+            assert!(original.contains("request body / turn"), "{original}");
+            assert!(original.contains("socket bytes/s"), "{original}");
+            let event_rows = events_height(area, models, state.show_charts);
+
+            assert!(key_press_action(key, &mut state, &settings) == Action::LayoutChanged);
+            let hidden = screen(width, area.height, &state);
+            assert!(!hidden.contains("request body / turn"), "{hidden}");
+            assert!(!hidden.contains("socket bytes/s"), "{hidden}");
+            assert!(hidden.contains("events"), "{hidden}");
+            assert_eq!(
+                events_height(area, models, state.show_charts),
+                event_rows + usize::from(chart_rows)
+            );
+
+            assert!(key_press_action(key, &mut state, &settings) == Action::LayoutChanged);
+            assert_eq!(screen(width, area.height, &state), original);
+        }
+    }
+
+    #[test]
     fn short_terminals_give_chart_space_to_events() {
         for width in [78, 140] {
             for height in [22, 23] {
@@ -3213,12 +3253,12 @@ mod tests {
                 assert!(out.contains("events"), "{out}");
                 for models in [0, 1, 3] {
                     let area = Rect::new(0, 0, width, height);
-                    let layout = panes(area, models).unwrap();
+                    let layout = panes(area, models, true).unwrap();
                     assert!(layout.charts.is_none());
                     let table_height = layout.models.map_or(0, |table| table.height);
                     assert_eq!(layout.events.height, height - 6 - table_height);
                     assert_eq!(
-                        events_height(area, models),
+                        events_height(area, models, true),
                         (height - 8 - table_height) as usize
                     );
                 }
@@ -3298,6 +3338,7 @@ mod tests {
         let out = screen(140, 44, &state);
         assert!(out.contains("cycle the upstream filter"), "{out}");
         assert!(out.contains("requests in flight, live"), "{out}");
+        assert!(out.contains("show or hide the charts"), "{out}");
 
         state.help = false;
         state.detail = true;
