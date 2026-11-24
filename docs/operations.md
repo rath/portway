@@ -120,6 +120,13 @@ throughput, latency, and recent events. Live counters are per running instance;
 a viewer reconstructs its window from recorded rows. Usage and costs are read
 from the database for today, yesterday, seven days, or thirty days.
 
+The event list hides successful model catalog fetches and Antigravity CLI
+(`agy`) startup checks, such as account, quota, and available-model lookups.
+An Antigravity check is hidden only when it finishes with a 2xx status and has
+no model or reported token usage. These requests still appear in the request
+log and SQLite history and count toward traffic totals. Redirects, errors, and
+interrupted responses appear in the event list.
+
 The model table shows at most three recently used models, prioritizing models
 with requests in flight, then the latest completed requests. Unused configured
 models are hidden. The title shows the displayed and total model counts; HUD

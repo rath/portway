@@ -16,6 +16,8 @@ use std::time::{Duration, Instant};
 
 use std::ops::{Deref, DerefMut};
 
+use http::Method;
+
 use crate::board::{self, Board, push_capped};
 pub use crate::board::{
     BARS, ModelRow, SAMPLES, SCALES, Series, TRAFFIC_SECONDS, Totals, Traffic, mean, percentile,
@@ -182,17 +184,38 @@ impl Entry {
         }
     }
 
-    /// A model catalog fetch answered with a 2xx in full: counted, but not a
-    /// line. One that failed, was cut or was redirected stays.
+    /// Successful catalog and client startup checks still count toward traffic totals.
     fn is_quiet(&self) -> bool {
         match self {
             Entry::Request(record) => {
-                board::catalog(&record.method, &record.path)
+                record.complete
                     && (200..300).contains(&record.status)
-                    && record.complete
+                    && (board::catalog(&record.method, &record.path) || antigravity_startup(record))
             }
             Entry::Log { .. } => false,
         }
+    }
+}
+
+fn antigravity_startup(record: &RequestRecord) -> bool {
+    if !record.model.is_empty() || record.usage.is_some() {
+        return false;
+    }
+    let path = record.path.split('?').next().unwrap_or(&record.path);
+    match record.method {
+        Method::GET => path.ends_with("/v1internal/cascadeNuxes"),
+        Method::POST => matches!(
+            path.rsplit('/').next(),
+            Some(
+                "v1internal:loadCodeAssist"
+                    | "v1internal:fetchUserInfo"
+                    | "v1internal:fetchAdminControls"
+                    | "v1internal:retrieveUserQuotaSummary"
+                    | "v1internal:fetchAvailableModels"
+                    | "v1internal:listExperiments"
+            )
+        ),
+        _ => false,
     }
 }
 

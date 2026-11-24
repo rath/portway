@@ -4001,6 +4001,61 @@ mod tests {
         assert!(screen(140, 30, &state).contains("GET /codex/models"));
     }
 
+    #[test]
+    fn antigravity_startup_checks_count_without_crowding_the_event_list() {
+        use crate::tui::state::Filter;
+        use http::Method;
+
+        let mut state = State::new();
+        let request = |method, path: &str| RequestRecord {
+            upstream: "google".into(),
+            method,
+            path: path.into(),
+            ..record("", 200)
+        };
+        let checks = [
+            (Method::POST, "/v1internal:loadCodeAssist"),
+            (Method::POST, "/v1internal:fetchUserInfo"),
+            (Method::POST, "/v1internal:fetchAdminControls"),
+            (Method::POST, "/google/v1internal:retrieveUserQuotaSummary"),
+            (Method::POST, "/v1internal:fetchAvailableModels?alt=json"),
+            (Method::POST, "/v1internal:listExperiments"),
+            (Method::GET, "/google/v1internal/cascadeNuxes?alt=json"),
+        ];
+        for (method, path) in checks {
+            state.push(Event::Request(Arc::new(request(method, path))));
+        }
+        assert_eq!(state.seen, 7);
+        assert!(state.is_empty());
+        state.set_filter(Filter::Upstream("google".into()));
+        assert!(state.is_empty());
+
+        let check = request(Method::POST, "/v1internal:loadCodeAssist");
+        for (status, complete) in [(302, true), (403, true), (200, false)] {
+            let mut problem = check.clone();
+            problem.status = status;
+            problem.complete = complete;
+            state.push(Event::Request(Arc::new(problem)));
+        }
+        for visible in [
+            request(Method::POST, "/v1internal:streamGenerateContent?alt=sse"),
+            request(Method::GET, "/v1internal:fetchUserInfo"),
+            RequestRecord {
+                model: "model-a".into(),
+                ..check.clone()
+            },
+            RequestRecord {
+                usage: Some(Usage::default()),
+                ..check
+            },
+        ] {
+            state.push(Event::Request(Arc::new(visible)));
+        }
+        assert_eq!(state.len(), 7);
+        state.set_filter(Filter::Trouble);
+        assert_eq!(state.len(), 2);
+    }
+
     /// A theme that paints its own ground paints all of it. A cell left at
     /// `Reset` is the terminal's own color showing through: a dark hole in a
     /// light theme, with whatever text it holds drawn for the other one.

@@ -7,6 +7,11 @@ version may contain breaking changes.
 
 ## [Unreleased]
 
+### Changed
+
+- Hide successful Antigravity CLI startup checks from the TUI event list.
+  They still count toward traffic totals and appear in the request log.
+
 ## [0.4.2] - 2026-11-22
 
 ### Added
