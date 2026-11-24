@@ -11,6 +11,7 @@ version may contain breaking changes.
 
 - Hide successful Antigravity CLI startup checks from the TUI event list.
   They still count toward traffic totals and appear in the request log.
+- Document reference API prices for the model IDs used by the Antigravity CLI.
 
 ## [0.4.2] - 2026-11-22
 

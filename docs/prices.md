@@ -8,9 +8,10 @@ other OpenAI models,
 [Anthropic's pricing](https://platform.claude.com/docs/en/about-claude/pricing)
 on 2026-11-10 and
 [Kimi's API pricing](https://platform.kimi.ai/docs/pricing/chat) on
-2026-10-23. Prices change, so check those pages before relying on a
-figure. Portway's costs are estimates, not a bill; behind a ChatGPT, Claude or
-Kimi Code subscription they are what the same tokens would cost on the API.
+2026-10-23. The Google Antigravity rates were checked on 2026-11-24.
+Prices change, so check the source for each table before relying on a figure.
+For ChatGPT, Claude, Kimi Code and Google AI subscriptions, Portway estimates
+what the same tokens would cost on the API.
 
 Rates are USD per million tokens. Each table is keyed by the model name the
 client sends, and each tier by the value its request names; see
@@ -618,4 +619,70 @@ cache_read = 0.2
 cache_write = 4.0
 cache_write_5m = 4.0
 cache_write_1h = 8.0
+```
+
+## Google Antigravity
+
+The Antigravity CLI (`agy` 1.5.15) includes the thinking level in model IDs
+such as `gemini-4-neon-high`. Each ID gets a base price. The per-token rate is
+the same across levels, and thinking tokens count as output. Portway 0.4.2
+and later reads Gemini's `usageMetadata` from these responses. The separate
+`gemini-3.5-flash-lite` entry covers background requests that name it.
+Orchestrator pairs a planner and an executor. Price their individual model
+IDs when reported. A combined Orchestrator ID has no single token rate.
+[Antigravity models](https://antigravity.google/docs/models)
+
+These estimates use Standard Gemini Developer API rates and Google Cloud's
+global on-demand partner-model rates, checked on 2026-11-24. For GPT-OSS
+120B, Google Cloud publishes one input rate, so the estimate uses it for
+cache reads too. Antigravity subscriptions and AI-credit overages have their
+own billing terms. [Gemini API pricing](https://aistudio.google.com/docs/pricing) ·
+[Google Cloud partner model pricing](https://cloud.google.com/model-garden/partner-models/pricing) ·
+[Antigravity plans](https://antigravity.google/docs/plans)
+
+On 2026-12-01 Carbon and Argon move to $4.00 input, $20.00 output and $0.20
+cache read per million tokens. On 2027-01-01 Gemini 3.8 Flash moves to $1.50,
+$7.50 and $0.15 respectively. Portway uses the configured rates when reading
+stored usage, including earlier requests. Update the table when a comparison
+should use the new rates.
+
+If the config already contains a `[prices]` header, place these rows under it.
+
+```toml
+[prices]
+"gemini-4-neon-low" = { input = 3.00, output = 15.00, cache_read = 0.15 }
+"gemini-4-neon-medium" = { input = 3.00, output = 15.00, cache_read = 0.15 }
+"gemini-4-neon-high" = { input = 3.00, output = 15.00, cache_read = 0.15 }
+"gemini-4-neon-xhigh" = { input = 3.00, output = 15.00, cache_read = 0.15 }
+
+# Introductory rates through November 30, 2026.
+"gemini-4-carbon-low" = { input = 2.00, output = 10.00, cache_read = 0.10 }
+"gemini-4-carbon-medium" = { input = 2.00, output = 10.00, cache_read = 0.10 }
+"gemini-4-carbon-high" = { input = 2.00, output = 10.00, cache_read = 0.10 }
+"gemini-4-argon-low" = { input = 2.00, output = 10.00, cache_read = 0.10 }
+"gemini-4-argon-medium" = { input = 2.00, output = 10.00, cache_read = 0.10 }
+"gemini-4-argon-high" = { input = 2.00, output = 10.00, cache_read = 0.10 }
+
+"gemini-4-hydrogen-low" = { input = 1.50, output = 7.50, cache_read = 0.075 }
+"gemini-4-hydrogen-medium" = { input = 1.50, output = 7.50, cache_read = 0.075 }
+"gemini-4-hydrogen-high" = { input = 1.50, output = 7.50, cache_read = 0.075 }
+"gemini-4-hydrogen-xhigh" = { input = 1.50, output = 7.50, cache_read = 0.075 }
+
+# Introductory rates through December 31, 2026.
+"gemini-3.8-flash-low" = { input = 0.75, output = 3.75, cache_read = 0.075 }
+"gemini-3.8-flash-medium" = { input = 0.75, output = 3.75, cache_read = 0.075 }
+"gemini-3.8-flash-high" = { input = 0.75, output = 3.75, cache_read = 0.075 }
+
+"gemini-3.5-flash-lite" = { input = 0.30, output = 2.50, cache_read = 0.03 }
+
+"claude-opus-5-5-low" = { input = 4.00, output = 20.00, cache_read = 0.20, cache_write = 5.00, cache_write_5m = 5.00, cache_write_1h = 8.00 }
+"claude-opus-5-5-medium" = { input = 4.00, output = 20.00, cache_read = 0.20, cache_write = 5.00, cache_write_5m = 5.00, cache_write_1h = 8.00 }
+"claude-opus-5-5-high" = { input = 4.00, output = 20.00, cache_read = 0.20, cache_write = 5.00, cache_write_5m = 5.00, cache_write_1h = 8.00 }
+
+"claude-sonnet-5-5-low" = { input = 2.00, output = 10.00, cache_read = 0.10, cache_write = 2.50, cache_write_5m = 2.50, cache_write_1h = 4.00 }
+"claude-sonnet-5-5-medium" = { input = 2.00, output = 10.00, cache_read = 0.10, cache_write = 2.50, cache_write_5m = 2.50, cache_write_1h = 4.00 }
+"claude-sonnet-5-5-high" = { input = 2.00, output = 10.00, cache_read = 0.10, cache_write = 2.50, cache_write_5m = 2.50, cache_write_1h = 4.00 }
+
+# Google Cloud lists a single input rate for gpt-oss-120b.
+"gpt-oss-120b-medium" = { input = 0.09, output = 0.36, cache_read = 0.09 }
 ```
