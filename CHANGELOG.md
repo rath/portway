@@ -7,11 +7,26 @@ version may contain breaking changes.
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-11-24
+
+### Added
+
+- Press `v` in the TUI dashboard to show or hide the request body and socket
+  throughput charts.
+
 ### Changed
 
 - Hide successful Antigravity CLI startup checks from the TUI event list.
   They still count toward traffic totals and appear in the request log.
 - Document reference API prices for the model IDs used by the Antigravity CLI.
+  Include an estimate for Gemini 4 Hydrogen Sonar.
+- Update rusqlite to 0.43.0, clap to 4.6.9, bytes to 1.12.2, and regex to 1.13.2.
+- Update the plugin security scanner to 1.2.818.
+
+### Fixed
+
+- Give the web console base-path test its own port so it can run alongside an
+  active forwarder.
 
 ## [0.4.2] - 2026-11-22
 
@@ -514,7 +529,8 @@ The first public release.
   FAQ; the request compression protocol; a security policy; and contribution
   guidelines.
 
-[Unreleased]: https://github.com/rath/portway/compare/v0.4.2...HEAD
+[Unreleased]: https://github.com/rath/portway/compare/v0.4.3...HEAD
+[0.4.3]: https://github.com/rath/portway/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/rath/portway/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/rath/portway/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/rath/portway/compare/v0.3.0...v0.4.0
