@@ -817,6 +817,9 @@ async fn a_base_path_keeps_the_console_inside_its_prefix() {
         .arg(config(&dir, &upstream.base))
         .arg("--data-dir")
         .arg(&dir)
+        // A port of its own: on the default one, a forwarder already running on
+        // this machine would be watched instead, and the console reads `attached`.
+        .args(["--port", &free_port().to_string()])
         .args(["--web", "--web-port", "0", "--web-base-path", "portway/"])
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
